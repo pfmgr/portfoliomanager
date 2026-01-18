@@ -231,8 +231,27 @@ public class KnowledgeBaseBackupService {
 		if (needsSupersedesUpdate) {
 			supersedesUpdates = collectSupersedesUpdates(rows);
 		}
-		List<String> columns = new ArrayList<>(rows.get(0).keySet());
+		// Validate and normalize table name against actual schema information
 		Map<String, ColumnInfo> columnInfos = getColumnInfos(tableName);
+		String normalizedTableName = findTableIgnoreCase(columnInfos.keySet(), tableName);
+		if (normalizedTableName == null) {
+			// Fall back to original name if schema information does not provide a canonical one
+			normalizedTableName = tableName;
+		}
+		// Determine and validate the list of columns based on the actual table schema
+		List<String> columns = new ArrayList<>();
+		for (String columnName : rows.get(0).keySet()) {
+			String key = columnName.toLowerCase(Locale.ROOT);
+			ColumnInfo info = columnInfos.get(key);
+			if (info == null) {
+				throw new IllegalArgumentException("Unknown column '" + columnName + "' for table: " + tableName);
+			}
+			// Use the canonical column name from schema information
+			columns.add(info.name());
+		}
+		if (columns.isEmpty()) {
+			throw new IllegalArgumentException("No valid columns found for table: " + tableName);
+		}
 		String columnList = columns.stream()
 				.map(this::quoteIdentifier)
 				.reduce((left, right) -> left + ", " + right)
@@ -241,7 +260,7 @@ public class KnowledgeBaseBackupService {
 				.map(column -> ":" + column)
 				.reduce((left, right) -> left + ", " + right)
 				.orElse("");
-		String sql = "INSERT INTO " + quoteIdentifier(tableName) + " (" + columnList + ") VALUES (" + values + ")";
+		String sql = "INSERT INTO " + quoteIdentifier(normalizedTableName) + " (" + columnList + ") VALUES (" + values + ")";
 		for (Map<String, Object> row : rows) {
 			MapSqlParameterSource params = new MapSqlParameterSource();
 			for (String column : columns) {
@@ -283,6 +302,21 @@ public class KnowledgeBaseBackupService {
 				jdbcTemplate.queryForObject("SELECT setval(?, ?, true)", new Object[]{seqName, lastValue}, Long.class);
 			}
 		}
+	}
+
+	/**
+	 * Safely quote a SQL identifier (table or column name).
+	 * Only allows simple identifiers consisting of letters, digits and underscores,
+	 * starting with a letter or underscore.
+	 */
+	private String quoteIdentifier(String identifier) {
+		if (identifier == null || identifier.isEmpty()) {
+			throw new IllegalArgumentException("Identifier must not be null or empty");
+		}
+		if (!identifier.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+			throw new IllegalArgumentException("Invalid SQL identifier: " + identifier);
+		}
+		return "\"" + identifier + "\"";
 	}
 
 	private String findTableIgnoreCase(Collection<String> tables, String candidate) {
