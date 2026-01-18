@@ -247,7 +247,7 @@ public class KnowledgeBaseBackupService {
 				throw new IllegalArgumentException("Unknown column '" + columnName + "' for table: " + tableName);
 			}
 			// Use the canonical column name from schema information
-			columns.add(info.name());
+			columns.add(info.columnName());
 		}
 		if (columns.isEmpty()) {
 			throw new IllegalArgumentException("No valid columns found for table: " + tableName);
@@ -532,11 +532,6 @@ public class KnowledgeBaseBackupService {
 		} catch (SQLException e) {
 			throw new IllegalStateException("Unable to determine database product name.", e);
 		}
-	}
-
-	private String quoteIdentifier(String input) {
-		String escaped = input.replace("\"", "\"\"");
-		return "\"" + escaped + "\"";
 	}
 
 	private String sha256(byte[] data) {

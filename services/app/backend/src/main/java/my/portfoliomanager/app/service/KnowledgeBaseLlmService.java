@@ -3,10 +3,11 @@ package my.portfoliomanager.app.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.networknt.schema.JsonSchema;
-import com.networknt.schema.JsonSchemaFactory;
-import com.networknt.schema.SpecVersion;
-import com.networknt.schema.ValidationMessage;
+import com.networknt.schema.Error;
+import com.networknt.schema.InputFormat;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SpecificationVersion;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmAlternativeItem;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmAlternativesDraft;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;
@@ -142,7 +143,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 	private final KnowledgeBaseLlmProvider llmProvider;
 	private final KnowledgeBaseConfigService configService;
 	private final ObjectMapper objectMapper;
-	private final JsonSchema extractionSchema;
+	private final Schema extractionSchema;
 	private final Map<String, Object> dossierResponseSchema;
 	private final Map<String, Object> alternativesResponseSchema;
 	private final Map<String, Object> extractionResponseSchema;
@@ -154,7 +155,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		this.llmProvider = llmProvider;
 		this.configService = configService;
 		this.objectMapper = objectMapper;
-		this.extractionSchema = buildExtractionSchema(objectMapper);
+		this.extractionSchema = buildExtractionSchema();
 		this.dossierResponseSchema = buildDossierResponseSchema(objectMapper);
 		this.alternativesResponseSchema = buildAlternativesResponseSchema(objectMapper);
 		this.extractionResponseSchema = buildExtractionResponseSchema(objectMapper);
@@ -213,7 +214,8 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		));
 		JsonNode root = parseJson(response.output());
 		JsonNode payload = unwrapPayload(root);
-		Set<ValidationMessage> errors = extractionSchema.validate(payload);
+		String payloadJson = payload == null ? "null" : payload.toString();
+		List<Error> errors = extractionSchema.validate(payloadJson, InputFormat.JSON);
 		if (!errors.isEmpty()) {
 			throw new KnowledgeBaseLlmOutputException("Extraction JSON did not match schema", INVALID_OUTPUT);
 		}
@@ -452,10 +454,10 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		return root;
 	}
 
-	private JsonSchema buildExtractionSchema(ObjectMapper mapper) {
+	private Schema buildExtractionSchema() {
 		try {
-			JsonNode schemaNode = mapper.readTree(EXTRACTION_SCHEMA_JSON);
-			return JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(schemaNode);
+			SchemaRegistry registry = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12);
+			return registry.getSchema(EXTRACTION_SCHEMA_JSON, InputFormat.JSON);
 		} catch (Exception ex) {
 			logger.error("Failed to load extraction JSON schema", ex);
 			throw new IllegalStateException("Failed to load extraction schema");

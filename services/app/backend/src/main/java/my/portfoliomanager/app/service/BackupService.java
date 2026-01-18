@@ -322,14 +322,14 @@ public class BackupService {
 			}
 			namedParameterJdbcTemplate.update(sql, params);
 		}
-	private boolean isValidIdentifier(String name) {
-		return name != null && name.matches("[A-Za-z_][A-Za-z0-9_]*");
-	}
-
 		if (needsSupersedesUpdate && !supersedesUpdates.isEmpty()) {
 			applySupersedesUpdates(supersedesUpdates);
 		}
 		return rows.size();
+	}
+
+	private boolean isValidIdentifier(String name) {
+		return name != null && name.matches("[A-Za-z_][A-Za-z0-9_]*");
 	}
 
 	private List<Map<String, Object>> deserializeRows(byte[] jsonData) throws IOException {
