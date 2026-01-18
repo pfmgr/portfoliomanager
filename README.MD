@@ -66,6 +66,7 @@ A self-hosted admin tool for importing Trade Republic PDFs and Deka CSVs, classi
 
 ## Tests
 
+- Frontend tooling expects Node `v25.3.0`; keep local runtimes, CI, and Docker builds aligned.
 - **Backend (Spring Boot, PostgreSQL int-test env, Liquibase, JaCoCo)**
   - Start test DB once per session:
     ```bash

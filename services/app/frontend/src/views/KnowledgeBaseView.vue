@@ -2342,7 +2342,13 @@ function formatActionStatus(status) {
 }
 
 function canUseStorage() {
-  return typeof window !== 'undefined' && !!window.localStorage
+  if (typeof window === 'undefined') return false
+  if (import.meta.env?.MODE === 'test') return false
+  try {
+    return !!window.localStorage
+  } catch (err) {
+    return false
+  }
 }
 
 function readSortState() {
