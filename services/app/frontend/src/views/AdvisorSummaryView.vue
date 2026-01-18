@@ -30,6 +30,12 @@
     </div>
 
     <div class="card">
+      <h3>No financal advice</h3>
+      <p>These suggestions do not constitute financial advice!</p>
+      <p>Examine the suggestions critically and use them with due caution!</p>
+    </div>
+
+    <div class="card">
       <h3>Layer Allocations</h3>
       <div class="table-wrap">
         <table class="table">

@@ -63,6 +63,12 @@
       <div v-if="error" class="toast error">{{ error }}</div>
     </div>
 
+    <div v-if="assessment && !loading" class="card">
+      <h3>No financal advice</h3>
+      <p>These suggestions do not constitute financial advice!</p>
+      <p>Examine the suggestions critically and use them with due caution!</p>
+    </div>
+
     <div v-if="assessment" :class="['assessment-results', { 'is-loading': loading }]">
       <div v-if="assessmentType === 'saving_plan'" class="card">
         <h3>Monthly Distribution</h3>
