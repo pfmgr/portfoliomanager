@@ -4,13 +4,8 @@ on:
   push:
     tags-ignore:
       - "*"
-    paths:
-      - "services/app/frontend/**"
-      - ".github/workflows/frontend.yml"
-  pull_request:
-    paths:
-      - "services/app/frontend/**"
-      - ".github/workflows/frontend.yml"
+    branches:
+      - "**"
 
 jobs:
   frontend:

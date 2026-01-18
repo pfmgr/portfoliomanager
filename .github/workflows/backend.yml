@@ -4,13 +4,8 @@ on:
   push:
     tags-ignore:
       - "*"
-    paths:
-      - "services/app/backend/**"
-      - ".github/workflows/backend.yml"
-  pull_request:
-    paths:
-      - "services/app/backend/**"
-      - ".github/workflows/backend.yml"
+    branches:
+      - "**"
 
 jobs:
   backend:
