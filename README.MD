@@ -1,0 +1,113 @@
+# Portfolio Manager Admin (Trade Republic + Deka)
+
+A self-hosted admin tool for importing Trade Republic PDFs and Deka CSVs, classifying instruments, and managing savings plans with a deterministic advisor workflow that can optionally explain its recommendations via an LLM.
+
+## Architecture
+
+- **PostgreSQL (`db_portfolio`)** stores imported snapshots, instruments, savings plans (`sparplans`), advisor history, and layer target configuration.
+- **Spring Boot Admin API (`admin_spring`)** exposes the `/api/` surface, runs Liquibase migrations, applies classification rules, manages savings plans, and evaluates the advisor.
+- **Vue 3 UI (`admin_frontend`)** uses the JWT login flow and lets you upload depot statements, manage reclassification rules, edit savings plans, adjust layer targets, and inspect advisor summaries.
+- **Assessor** (new) runs a separate assessment view/API to propose saving-plan adjustments and optional one-time allocations based on the active profile configuration.
+- **Metabase (optional)** exposes dashboards; remove or rebind the service in `docker-compose.yml` if you do not need it.
+
+## Getting started
+
+1. Copy `.env.sample` to `.env` and provide secrets such as:
+   ```bash
+   PORTFOLIO_DB_PASSWORD=<secure>
+   METABASE_DB_PASSWORD=<secure>
+   ADMIN_USER=admin
+   ADMIN_PASS=secret
+   JWT_ISSUER=portfolio-manager
+   # LLM/KB (optional)
+   LLM_PROVIDER=none
+   KB_ENABLED=true
+   KB_LLM_ENABLED=false
+   ADMIN_SPRING_BIND=127.0.0.1
+   ADMIN_FRONTEND_BIND=127.0.0.1
+   ```
+2. Build and start everything:
+   ```bash
+   docker compose up -d --build
+   ```
+3. Sign in at `/login` with `ADMIN_USER` / `ADMIN_PASS` (JWT login; Basic Auth is not used by the frontend).
+4. Liquibase applies migrations automatically. To reset the database entirely, run:
+   ```bash
+   docker compose down -v
+   docker compose up -d --build
+   ```
+
+## Layer targets & advisor profiles
+
+- Layer identities are fixed: 1 = Global Core, 2 = Core-Plus, 3 = Themes, 4 = Individual Stocks, 5 = Unclassified.
+- The backend seeds five advisor profiles (`Classic`, `Balanced`, `Growth`, `Aggressive`, `Opportunity`) from `layer_targets.json`. Each profile defines target weights, an acceptable variance (default 3%), and constraint thresholds (core minimum, layer 4/5 caps).
+- Active profile state, layer names, custom overrides, and acceptable variance are stored in the `layer_target_config` table as JSONB (Postgres). Liquibase guarantees a single row with `id = 1` and migrates legacy configs into the new shape.
+- The advisor compares actual savings plan contributions (`instruments_effective.layer`) to the active profile. If targets are within tolerance and constraints are satisfied, the proposed distribution mirrors the current distribution and the narrative simply confirms the fit. When tolerances are exceeded, the advisor proposes rebalancing toward the profile, reports per-layer deltas, and includes constraint warnings.
+- The optional LLM is only used for generating a narrative. The numeric proposal remains fully deterministic and rule-based.
+
+## Knowledge Base (optional)
+
+- Enable KB endpoints: set `KB_ENABLED=true` (default) and configure an LLM provider (e.g. `LLM_PROVIDER=openai` + `LLM_PROVIDER_API_KEY`).
+- Enable LLM-based dossier extraction: set `KB_LLM_ENABLED=true` (false uses the stub extractor).
+- The Knowledge Base view lets you review dossiers, run bulk research by ISIN, find alternatives, and monitor auto-refresh runs.
+- KB settings live in `/api/kb/config` and are stored in `kb_config` (refresh interval, auto-approve, batch sizing, allowed domains, apply-to-overrides).
+- Auto-approve and auto-refresh can introduce mistakes; spot-check results and use `docs/KB.md` for workflows and API details.
+
+## Savings plan management
+
+- Savings plans live in `/api/sparplans` (still backed by the existing `sparplans` table). Java structures and DTOs now refer to `SavingPlan`. The UI displays each plan’s layer ID and layer name (via the layer-target config) so you can see where contributions land.
+- Import, export, create, update, and delete actions are available from the **Savings plans** page. Each plan records depot, ISIN, name, monthly amount, frequency, day, active flag, and last-changed date.
+
+## Assessor (saving plan + one-time allocation)
+
+- Open the **Assessor** view in the Admin UI and choose an assessment type (Saving Plan or One-Time Invest).
+- Saving Plan assessments compare the current monthly savings plan distribution to the active profile and propose actions that respect minimum saving-plan size and minimum rebalancing thresholds.
+- One-Time Invest assessments allocate the entered amount delta across layers (and instruments when KB data is complete) using current holdings gaps by default. Instrument buckets respect the minimum per-instrument amount.
+
+## Tests
+
+- **Backend (Spring Boot, PostgreSQL int-test env, Liquibase, JaCoCo)**
+  - Start test DB once per session:
+    ```bash
+    docker compose -f services/app/backend/int-test-env/compose.yaml up -d
+    ```
+  - Then run tests:
+  ```bash
+  cd services/app/backend
+  GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test
+  ```
+  - Stop test DB when done:
+    ```bash
+    docker compose -f services/app/backend/int-test-env/compose.yaml down
+    ```
+- **Frontend unit tests (Vitest)**
+  ```bash
+  cd services/app/frontend
+  npm test
+  ```
+- **Frontend e2e tests (Playwright)**
+  Preferred runner:
+  ```bash
+  services/app/frontend/scripts/run-e2e.sh
+  ```
+  The script builds an isolated stack, runs the tests, and tears the stack down.
+  Alternatively:
+  ```bash
+  docker compose -f services/app/frontend/docker-compose.yml -p portfoliomanager_e2e up -d --build
+  E2E_BASE_URL=http://127.0.0.1:18090 npm run test:e2e
+  ```
+
+## API highlights
+
+- `GET /api/layer-targets` returns the active profile key, display metadata, effective targets, layer names, and override status.
+- `PUT /api/layer-targets` persists profile selection, overrides, and variance expectations.
+- `POST /api/layer-targets/reset` restores the seeded profile configuration.
+- `GET /api/advisor/summary` returns layer allocations, savings plan summaries, profile-aware proposals, constraint warnings, and LLM narrative (if enabled).
+- `POST /api/advisor/runs` saves a summary snapshot and narrative for auditing.
+- `POST /api/assessor/run` returns deterministic saving-plan suggestions and optional one-time allocations (payload: `{ oneTimeAmountEur?, minimumInstrumentAmountEur?, depotScope? }`, profile is derived from the active config).
+
+## Troubleshooting
+
+- **Liquibase complaints**: stop the stack, tear down volumes (`docker compose down -v`), and restart so migrations reapply.
+- **Imported file skipped**: the SHA hash already exists; use the force option to re-import.
+- **Ruleset errors**: inspect the Spring Boot logs and verify that the ruleset name/version in the UI matches what is persisted in the database.

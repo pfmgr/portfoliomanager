@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: app
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/portfolio}
+    username: ${DB_USER:portfolio}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_POOL_CONN_TIMEOUT_MS:30000}
+      validation-timeout: ${DB_POOL_VALIDATION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_POOL_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_POOL_MAX_LIFETIME_MS:1800000}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+    enabled: true
+
+server:
+  port: ${APP_PORT:8080}
+
+app:
+  security:
+    admin-user: ${ADMIN_USER:admin}
+    admin-pass: ${ADMIN_PASS:}
+  jwt:
+    issuer: ${JWT_ISSUER:portfolio-manager}
+  llm:
+    provider: ${LLM_PROVIDER:none}
+    openai:
+      api-key: ${LLM_PROVIDER_API_KEY:${OPENAI_API_KEY:}}
+      base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}
+      model: ${LLM_PROVIDER_MODEL:gpt-5-mini}
+      connect-timeout-seconds: ${LLM_PROVIDER_CONNECT_TIMEOUT_SECONDS:10}
+      read-timeout-seconds: ${LLM_PROVIDER_READ_TIMEOUT_SECONDS:120}
+  kb:
+    enabled: ${KB_ENABLED:true}
+    llm-enabled: ${KB_LLM_ENABLED:false}

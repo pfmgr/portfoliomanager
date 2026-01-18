@@ -1,0 +1,8 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/portfolio}
+    username: ${DB_USER:myuser}
+    password: ${DB_PASSWORD:secret}
+    hikari:
+      maximum-pool-size: 4
+      minimum-idle: 1

@@ -1,0 +1,44 @@
+services:
+  e2e_db_portfolio:
+    build:
+      context: ../../..
+      dockerfile: postgres/Dockerfile
+    image: portfoliomanager-postgres:16
+    environment:
+      POSTGRES_DB: portfolio
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: portfolio_e2e
+    restart: no
+
+  e2e_admin_spring:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://e2e_db_portfolio:5432/portfolio
+      DB_USER: portfolio
+      DB_PASSWORD: portfolio_e2e
+      ADMIN_USER: admin
+      ADMIN_PASS: admin
+      JWT_ISSUER: portfolio-manager-e2e
+      LLM_PROVIDER: none
+      LLM_PROVIDER_API_KEY: ""
+    depends_on:
+      - e2e_db_portfolio
+    networks:
+      default:
+        aliases:
+          - admin_spring
+    ports:
+      - "127.0.0.1:18089:8080"
+    restart: no
+
+  e2e_admin_frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - e2e_admin_spring
+    ports:
+      - "127.0.0.1:18090:80"
+    restart: no

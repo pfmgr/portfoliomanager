@@ -1,0 +1,1546 @@
+databaseChangeLog:
+  - property:
+      name: text_type
+      value: TEXT
+      dbms: postgresql
+  - changeSet:
+      id: 000-core-schema
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: depots
+      changes:
+        - createTable:
+            tableName: depots
+            columns:
+              - column:
+                  name: depot_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: depot_code
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+                    unique: true
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: provider
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: active_snapshot_id
+                  type: BIGINT
+        - createTable:
+            tableName: instruments
+            columns:
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: depot_code
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: instrument_type
+                  type: VARCHAR(128)
+              - column:
+                  name: asset_class
+                  type: VARCHAR(128)
+              - column:
+                  name: sub_class
+                  type: VARCHAR(128)
+              - column:
+                  name: layer
+                  type: INT
+                  defaultValueNumeric: 5
+                  constraints:
+                    nullable: false
+              - column:
+                  name: layer_last_changed
+                  type: DATE
+              - column:
+                  name: layer_notes
+                  type: VARCHAR(512)
+              - column:
+                  name: is_deleted
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+        - createTable:
+            tableName: sparplans
+            columns:
+              - column:
+                  name: sparplan_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: depot_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+              - column:
+                  name: amount_eur
+                  type: NUMERIC(18,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: frequency
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: day_of_month
+                  type: INT
+              - column:
+                  name: active
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+                  constraints:
+                    nullable: false
+              - column:
+                  name: last_changed
+                  type: DATE
+        - createTable:
+            tableName: import_files
+            columns:
+              - column:
+                  name: file_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: depot_code
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: filename
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: file_hash
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: as_of_date
+                  type: DATE
+              - column:
+                  name: imported_at
+                  type: TIMESTAMP
+              - column:
+                  name: status
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: error
+                  type: VARCHAR(512)
+        - addUniqueConstraint:
+            tableName: import_files
+            columnNames: depot_code, file_hash
+            constraintName: ux_import_files_depot_hash
+        - createTable:
+            tableName: snapshots
+            columns:
+              - column:
+                  name: snapshot_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: depot_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: as_of_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: file_hash
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: imported_at
+                  type: TIMESTAMP
+        - addUniqueConstraint:
+            tableName: snapshots
+            columnNames: depot_id, as_of_date, source, file_hash
+            constraintName: ux_snapshots_unique
+        - createTable:
+            tableName: snapshot_positions
+            columns:
+              - column:
+                  name: snapshot_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+              - column:
+                  name: shares
+                  type: NUMERIC(24,8)
+              - column:
+                  name: value_eur
+                  type: NUMERIC(18,2)
+              - column:
+                  name: currency
+                  type: VARCHAR(8)
+                  defaultValue: EUR
+        - addPrimaryKey:
+            tableName: snapshot_positions
+            columnNames: snapshot_id, isin
+            constraintName: pk_snapshot_positions
+        - addForeignKeyConstraint:
+            baseTableName: instruments
+            baseColumnNames: depot_code
+            referencedTableName: depots
+            referencedColumnNames: depot_code
+            constraintName: fk_instruments_depot
+        - addForeignKeyConstraint:
+            baseTableName: sparplans
+            baseColumnNames: depot_id
+            referencedTableName: depots
+            referencedColumnNames: depot_id
+            constraintName: fk_sparplans_depot
+        - addForeignKeyConstraint:
+            baseTableName: sparplans
+            baseColumnNames: isin
+            referencedTableName: instruments
+            referencedColumnNames: isin
+            constraintName: fk_sparplans_isin
+        - addForeignKeyConstraint:
+            baseTableName: snapshots
+            baseColumnNames: depot_id
+            referencedTableName: depots
+            referencedColumnNames: depot_id
+            constraintName: fk_snapshots_depot
+        - addForeignKeyConstraint:
+            baseTableName: snapshot_positions
+            baseColumnNames: snapshot_id
+            referencedTableName: snapshots
+            referencedColumnNames: snapshot_id
+            constraintName: fk_snapshot_positions_snapshot
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: snapshot_positions
+            baseColumnNames: isin
+            referencedTableName: instruments
+            referencedColumnNames: isin
+            constraintName: fk_snapshot_positions_instrument
+        - addForeignKeyConstraint:
+            baseTableName: depots
+            baseColumnNames: active_snapshot_id
+            referencedTableName: snapshots
+            referencedColumnNames: snapshot_id
+            constraintName: fk_depots_active_snapshot
+  - changeSet:
+      id: 001-create-rulesets
+      author: codex
+      changes:
+        - createTable:
+            tableName: rulesets
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: version
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: content_yaml
+                  type: ${text_type}
+                  constraints:
+                    nullable: false
+              - column:
+                  name: active
+                  type: BOOLEAN
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: rulesets
+            columnNames: name, version
+            constraintName: ux_rulesets_name_version
+  - changeSet:
+      id: 002-create-instrument-edits
+      author: codex
+      changes:
+        - createTable:
+            tableName: instrument_edits
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: field
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: old_value
+                  type: VARCHAR(512)
+              - column:
+                  name: new_value
+                  type: VARCHAR(512)
+              - column:
+                  name: edited_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: edited_by
+                  type: VARCHAR(128)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+  - changeSet:
+      id: 003-layer-constraint
+      author: codex
+      changes:
+        - sql:
+            splitStatements: true
+            sql: |
+              ALTER TABLE instruments DROP CONSTRAINT IF EXISTS instruments_layer_check;
+              ALTER TABLE instruments ADD CONSTRAINT instruments_layer_check CHECK (layer BETWEEN 1 AND 5);
+              ALTER TABLE instruments ALTER COLUMN layer SET DEFAULT 5;
+  - changeSet:
+      id: 005-instrument-classifications
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: instrument_classifications
+      changes:
+        - createTable:
+            tableName: instrument_classifications
+            columns:
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: rule_id
+                  type: BIGINT
+              - column:
+                  name: instrument_type
+                  type: ${text_type}
+              - column:
+                  name: asset_class
+                  type: ${text_type}
+              - column:
+                  name: sub_class
+                  type: ${text_type}
+              - column:
+                  name: layer
+                  type: INT
+              - column:
+                  name: layer_last_changed
+                  type: DATE
+              - column:
+                  name: layer_notes
+                  type: ${text_type}
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - sql:
+            splitStatements: true
+            sql: |
+              ALTER TABLE instrument_classifications
+              ADD CONSTRAINT instrument_classifications_layer_check CHECK (layer BETWEEN 1 AND 5);
+        - addForeignKeyConstraint:
+            baseTableName: instrument_classifications
+            baseColumnNames: isin
+            referencedTableName: instruments
+            referencedColumnNames: isin
+            constraintName: fk_classifications_instrument
+            onDelete: CASCADE
+        - createIndex:
+            tableName: instrument_classifications
+            indexName: ix_classifications_layer
+            columns:
+              - column:
+                  name: layer
+  - changeSet:
+      id: 006-instrument-overrides
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: instrument_overrides
+      changes:
+        - createTable:
+            tableName: instrument_overrides
+            columns:
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: ${text_type}
+              - column:
+                  name: instrument_type
+                  type: ${text_type}
+              - column:
+                  name: asset_class
+                  type: ${text_type}
+              - column:
+                  name: sub_class
+                  type: ${text_type}
+              - column:
+                  name: layer
+                  type: INT
+              - column:
+                  name: layer_last_changed
+                  type: DATE
+              - column:
+                  name: layer_notes
+                  type: ${text_type}
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - sql:
+            splitStatements: true
+            sql: |
+              ALTER TABLE instrument_overrides
+              ADD CONSTRAINT instrument_overrides_layer_check CHECK (layer BETWEEN 1 AND 5);
+        - addForeignKeyConstraint:
+            baseTableName: instrument_overrides
+            baseColumnNames: isin
+            referencedTableName: instruments
+            referencedColumnNames: isin
+            constraintName: fk_overrides_instrument
+            onDelete: CASCADE
+  - changeSet:
+      id: 007-sparplans-unique
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          uniqueConstraintExists:
+            tableName: sparplans
+            constraintName: ux_sparplans_depot_isin
+      changes:
+        - addUniqueConstraint:
+            tableName: sparplans
+            columnNames: depot_id, isin
+            constraintName: ux_sparplans_depot_isin
+  - changeSet:
+      id: 008-sparplans-history
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: sparplans_history
+      changes:
+        - createTable:
+            tableName: sparplans_history
+            columns:
+              - column:
+                  name: hist_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: depot_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: ${text_type}
+              - column:
+                  name: amount_eur
+                  type: NUMERIC(18,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: frequency
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: day_of_month
+                  type: INT
+              - column:
+                  name: active
+                  type: BOOLEAN
+                  constraints:
+                    nullable: false
+              - column:
+                  name: valid_from
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: valid_to
+                  type: TIMESTAMP
+              - column:
+                  name: change_reason
+                  type: ${text_type}
+        - addForeignKeyConstraint:
+            baseTableName: sparplans_history
+            baseColumnNames: depot_id
+            referencedTableName: depots
+            referencedColumnNames: depot_id
+            constraintName: fk_sph_depot
+        - addForeignKeyConstraint:
+            baseTableName: sparplans_history
+            baseColumnNames: isin
+            referencedTableName: instruments
+            referencedColumnNames: isin
+            constraintName: fk_sph_instrument
+        - sql:
+            splitStatements: false
+            dbms: postgresql
+            sql: |
+              CREATE INDEX IF NOT EXISTS ix_sph_open
+              ON sparplans_history(depot_id, isin)
+              WHERE valid_to IS NULL;
+  - changeSet:
+      id: 009-views-effective
+      author: codex
+      changes:
+        - sql:
+            splitStatements: false
+            dbms: postgresql
+            sql: |
+              CREATE OR REPLACE VIEW instruments_effective AS
+              SELECT
+                i.isin,
+                COALESCE(o.name, i.name) AS name,
+                COALESCE(o.instrument_type, c.instrument_type, i.instrument_type) AS instrument_type,
+                COALESCE(o.asset_class, c.asset_class, i.asset_class) AS asset_class,
+                COALESCE(o.sub_class, c.sub_class, i.sub_class) AS sub_class,
+                COALESCE(o.layer, c.layer, i.layer) AS layer,
+                COALESCE(o.layer_last_changed, c.layer_last_changed, i.layer_last_changed) AS layer_last_changed,
+                COALESCE(o.layer_notes, c.layer_notes, i.layer_notes) AS layer_notes,
+                (c.rule_id IS NOT NULL) AS classified_by_rule,
+                c.rule_id AS applied_rule_id,
+                (o.isin IS NOT NULL) AS has_override,
+                GREATEST(
+                  COALESCE(o.updated_at, 'epoch'::timestamp),
+                  COALESCE(c.updated_at, 'epoch'::timestamp),
+                  'epoch'::timestamp
+                ) AS effective_updated_at
+              FROM instruments i
+              LEFT JOIN instrument_classifications c USING (isin)
+              LEFT JOIN instrument_overrides o USING (isin)
+              WHERE NOT i.is_deleted;
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE OR REPLACE VIEW snapshot_positions_effective AS
+              SELECT
+                s.snapshot_id,
+                d.depot_code,
+                s.as_of_date,
+                s.source,
+                s.file_hash,
+                s.imported_at,
+                sp.isin,
+                sp.name,
+                sp.shares,
+                sp.value_eur,
+                sp.currency
+              FROM depots d
+              JOIN snapshots s ON s.snapshot_id = d.active_snapshot_id
+              JOIN snapshot_positions sp ON sp.snapshot_id = s.snapshot_id
+              JOIN instruments_effective ie ON ie.isin = sp.isin;
+  - changeSet:
+      id: 010a-advisor-runs-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: advisor_runs
+      changes:
+        - createTable:
+            tableName: advisor_runs
+            columns:
+              - column:
+                  name: run_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: as_of_date
+                  type: DATE
+              - column:
+                  name: depot_scope
+                  type: JSONB
+              - column:
+                  name: summary_json
+                  type: JSONB
+                  constraints:
+                    nullable: false
+              - column:
+                  name: narrative_md
+                  type: ${text_type}
+              - column:
+                  name: warnings
+                  type: ${text_type}
+  - changeSet:
+      id: 010c-advisor-runs-index
+      author: codex
+      preConditions:
+        - onFail: MARK_RAN
+        - tableExists:
+            tableName: advisor_runs
+        - not:
+            indexExists:
+              indexName: ix_advisor_runs_created_at
+              tableName: advisor_runs
+      changes:
+        - createIndex:
+            tableName: advisor_runs
+            indexName: ix_advisor_runs_created_at
+            columns:
+              - column:
+                  name: created_at
+  - changeSet:
+      id: 012a-layer-target-config-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: layer_target_config
+      changes:
+        - createTable:
+            tableName: layer_target_config
+            columns:
+              - column:
+                  name: id
+                  type: INTEGER
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: config_json
+                  type: JSONB
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: 013a-layer-target-config-profiles
+      author: codex
+      dbms: postgresql
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$
+              DECLARE
+                default_config jsonb := $cfg$
+              {
+                "active_profile": "BALANCED",
+                "profiles": {
+                  "CLASSIC": {
+                    "display_name": "Classic",
+                    "description": "Highly defensive allocation focused on the global core.",
+                    "layer_targets": {
+                      "1": 0.80,
+                      "2": 0.15,
+                      "3": 0.04,
+                      "4": 0.01,
+                      "5": 0.0
+                    },
+                    "acceptable_variance_pct": 3.0,
+                    "constraints": {
+                      "core_min": 0.70,
+                      "layer5_max": 0.03,
+                      "layer4_max": 0.05
+                    }
+                  },
+                  "BALANCED": {
+                    "display_name": "Balanced",
+                    "description": "Balanced mix of global core and thematic exposures.",
+                    "layer_targets": {
+                      "1": 0.70,
+                      "2": 0.20,
+                      "3": 0.08,
+                      "4": 0.02,
+                      "5": 0.0
+                    },
+                    "acceptable_variance_pct": 3.0,
+                    "constraints": {
+                      "core_min": 0.70,
+                      "layer5_max": 0.03,
+                      "layer4_max": 0.05
+                    }
+                  },
+                  "GROWTH": {
+                    "display_name": "Growth",
+                    "description": "Tilt toward thematic and satellite exposure for growth.",
+                    "layer_targets": {
+                      "1": 0.60,
+                      "2": 0.20,
+                      "3": 0.15,
+                      "4": 0.05,
+                      "5": 0.0
+                    },
+                    "acceptable_variance_pct": 3.0,
+                    "constraints": {
+                      "core_min": 0.70,
+                      "layer5_max": 0.03,
+                      "layer4_max": 0.10
+                    }
+                  },
+                  "AGGRESSIVE": {
+                    "display_name": "Aggressive",
+                    "description": "Maximum thematic and individual stock exposure.",
+                    "layer_targets": {
+                      "1": 0.50,
+                      "2": 0.15,
+                      "3": 0.25,
+                      "4": 0.10,
+                      "5": 0.0
+                    },
+                    "acceptable_variance_pct": 3.0,
+                    "constraints": {
+                      "core_min": 0.60,
+                      "layer5_max": 0.03,
+                      "layer4_max": 0.20
+                    }
+                  },
+                  "OPPORTUNITY": {
+                    "display_name": "Opportunity",
+                    "description": "Opportunity-focused blend with elevated small/individual exposure.",
+                    "layer_targets": {
+                      "1": 0.40,
+                      "2": 0.10,
+                      "3": 0.30,
+                      "4": 0.20,
+                      "5": 0.0
+                    },
+                    "acceptable_variance_pct": 3.0,
+                    "constraints": {
+                      "core_min": 0.60,
+                      "layer5_max": 0.03,
+                      "layer4_max": 0.20
+                    }
+                  }
+                },
+                "custom_overrides": {
+                  "enabled": false
+                },
+                "layer_names": {
+                  "1": "Global Core",
+                  "2": "Core-Plus",
+                  "3": "Themes",
+                  "4": "Individual Stocks",
+                  "5": "Unclassified"
+                }
+              }
+              $cfg$::jsonb;
+                existing_config jsonb;
+              BEGIN
+                SELECT config_json INTO existing_config FROM layer_target_config WHERE id = 1;
+                IF existing_config IS NULL THEN
+                  INSERT INTO layer_target_config (id, config_json, updated_at)
+                  VALUES (1, default_config, CURRENT_TIMESTAMP);
+                  RETURN;
+                END IF;
+                IF existing_config ? 'profiles' THEN
+                  RETURN;
+                END IF;
+                UPDATE layer_target_config
+                SET config_json = default_config || jsonb_build_object(
+                  'active_profile', 'CUSTOM',
+                  'custom_overrides', jsonb_build_object(
+                    'enabled', true,
+                    'layer_targets', COALESCE(existing_config->'layer_targets', existing_config),
+                    'acceptable_variance_pct', COALESCE((existing_config->>'acceptable_variance_pct')::numeric, 3.0),
+                    'legacy_import', existing_config
+                  )
+                ),
+                updated_at = CURRENT_TIMESTAMP
+                WHERE id = 1;
+              END$$;
+
+  - changeSet:
+      id: 014a-knowledge-base-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: instrument_dossiers
+      changes:
+        - createTable:
+            tableName: instrument_dossiers
+            columns:
+              - column:
+                  name: dossier_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_by
+                  type: VARCHAR(128)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: origin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: content_md
+                  type: ${text_type}
+                  constraints:
+                    nullable: false
+              - column:
+                  name: citations_json
+                  type: JSONB
+                  defaultValueComputed: "'[]'::jsonb"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: content_hash
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: instrument_dossiers
+            indexName: ix_instrument_dossiers_isin
+            columns:
+              - column:
+                  name: isin
+        - addForeignKeyConstraint:
+            baseTableName: instrument_dossiers
+            baseColumnNames: isin
+            referencedTableName: instruments
+            referencedColumnNames: isin
+            constraintName: fk_dossiers_instrument
+            onDelete: CASCADE
+        - createTable:
+            tableName: instrument_dossier_extractions
+            columns:
+              - column:
+                  name: extraction_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: dossier_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: model
+                  type: VARCHAR(128)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: extracted_json
+                  type: JSONB
+                  constraints:
+                    nullable: false
+              - column:
+                  name: missing_fields_json
+                  type: JSONB
+                  defaultValueComputed: "'[]'::jsonb"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: warnings_json
+                  type: JSONB
+                  defaultValueComputed: "'[]'::jsonb"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: error
+                  type: ${text_type}
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: approved_by
+                  type: VARCHAR(128)
+              - column:
+                  name: approved_at
+                  type: TIMESTAMP
+              - column:
+                  name: applied_by
+                  type: VARCHAR(128)
+              - column:
+                  name: applied_at
+                  type: TIMESTAMP
+        - createIndex:
+            tableName: instrument_dossier_extractions
+            indexName: ix_dossier_extractions_dossier
+            columns:
+              - column:
+                  name: dossier_id
+        - addForeignKeyConstraint:
+            baseTableName: instrument_dossier_extractions
+            baseColumnNames: dossier_id
+            referencedTableName: instrument_dossiers
+            referencedColumnNames: dossier_id
+            constraintName: fk_extractions_dossier
+            onDelete: CASCADE
+        - createTable:
+            tableName: instrument_facts
+            columns:
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+              - column:
+                  name: fact_key
+                  type: VARCHAR(128)
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+              - column:
+                  name: as_of_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+                    primaryKey: true
+              - column:
+                  name: fact_value_text
+                  type: ${text_type}
+              - column:
+                  name: fact_value_num
+                  type: NUMERIC(18,6)
+              - column:
+                  name: unit
+                  type: VARCHAR(32)
+              - column:
+                  name: source_ref
+                  type: VARCHAR(255)
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: instrument_facts
+            indexName: ix_instrument_facts_isin
+            columns:
+              - column:
+                  name: isin
+        - addForeignKeyConstraint:
+            baseTableName: instrument_facts
+            baseColumnNames: isin
+            referencedTableName: instruments
+            referencedColumnNames: isin
+            constraintName: fk_facts_instrument
+            onDelete: CASCADE
+  - changeSet:
+      id: 015a-dossiers-drop-fk-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        tableExists:
+          tableName: instrument_dossiers
+        foreignKeyConstraintExists:
+          foreignKeyName: fk_dossiers_instrument
+          foreignKeyTableName: instrument_dossiers
+      changes:
+        - dropForeignKeyConstraint:
+            baseTableName: instrument_dossiers
+            constraintName: fk_dossiers_instrument
+  - changeSet:
+      id: 015c-dossiers-display-name-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        tableExists:
+          tableName: instrument_dossiers
+        not:
+          columnExists:
+            tableName: instrument_dossiers
+            columnName: display_name
+      changes:
+        - addColumn:
+            tableName: instrument_dossiers
+            columns:
+              - column:
+                  name: display_name
+                  type: VARCHAR(255)
+  - changeSet:
+      id: 016a-knowledge-base-extractions-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: knowledge_base_extractions
+      changes:
+        - createTable:
+            tableName: knowledge_base_extractions
+            columns:
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: extracted_json
+                  type: JSONB
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: knowledge_base_extractions
+            indexName: ix_kb_extractions_status
+            columns:
+              - column:
+                  name: status
+  - changeSet:
+      id: 016b-knowledge-base-extractions-backfill
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        tableExists:
+          tableName: knowledge_base_extractions
+        tableExists:
+          tableName: instrument_dossier_extractions
+        tableExists:
+          tableName: instrument_dossiers
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              INSERT INTO knowledge_base_extractions (isin, status, extracted_json, updated_at)
+              SELECT t.isin,
+                     CASE
+                       WHEN t.status IN ('APPROVED', 'APPLIED') THEN 'COMPLETE'
+                       WHEN t.status = 'FAILED' THEN 'FAILED'
+                       ELSE 'CREATED'
+                     END AS status,
+                     t.extracted_json,
+                     COALESCE(t.applied_at, t.approved_at, t.created_at, CURRENT_TIMESTAMP) AS updated_at
+              FROM (
+                SELECT d.isin,
+                       e.status,
+                       e.extracted_json,
+                       e.applied_at,
+                       e.approved_at,
+                       e.created_at,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY d.isin
+                         ORDER BY e.applied_at DESC NULLS LAST,
+                                  e.approved_at DESC NULLS LAST,
+                                  e.created_at DESC,
+                                  e.extraction_id DESC
+                       ) AS rn
+                FROM instrument_dossiers d
+                JOIN instrument_dossier_extractions e ON e.dossier_id = d.dossier_id
+              ) t
+              WHERE t.rn = 1
+              ON CONFLICT (isin) DO UPDATE
+                SET status = EXCLUDED.status,
+                    extracted_json = EXCLUDED.extracted_json,
+                    updated_at = EXCLUDED.updated_at;
+  - changeSet:
+      id: 017a-kb-config-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: kb_config
+      changes:
+        - createTable:
+            tableName: kb_config
+            columns:
+              - column:
+                  name: id
+                  type: INTEGER
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: config_json
+                  type: JSONB
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - sql:
+            splitStatements: false
+            sql: |
+              INSERT INTO kb_config (id, config_json, updated_at)
+              VALUES (
+                1,
+                $cfg$
+                {
+                  "enabled": false,
+                  "refresh_interval_days": 30,
+                  "auto_approve": false,
+                  "apply_extractions_to_overrides": false,
+                  "overwrite_existing_overrides": false,
+                  "batch_size_instruments": 10,
+                  "batch_max_input_chars": 120000,
+                  "max_batches_per_run": 5,
+                  "poll_interval_seconds": 300,
+                  "max_instruments_per_run": 100,
+                  "max_retries_per_instrument": 3,
+                  "base_backoff_seconds": 2,
+                  "max_backoff_seconds": 30,
+                  "dossier_max_chars": 15000,
+                  "kb_refresh_min_days_between_runs_per_instrument": 7,
+                  "run_timeout_minutes": 30,
+                  "websearch_allowed_domains": [
+                    "justetf.com",
+                    "ishares.com",
+                    "vanguard.com",
+                    "ssga.com",
+                    "spdrs.com",
+                    "amundietf.com",
+                    "wisdomtree.eu",
+                    "invesco.com",
+                    "vaneck.com",
+                    "xtrackers.com",
+                    "blackrock.com",
+                    "stateStreet.com",
+                    "lyxoretf.com",
+                    "openfigi.com",
+                    "sec.gov",
+                    "companieshouse.gov.uk",
+                    "bundesanzeiger.de",
+                    "nasdaq.com",
+                    "nyse.com",
+                    "londonstockexchange.com",
+                    "euronext.com",
+                    "boerse-frankfurt.de",
+                    "deutsche-boerse.com",
+                    "six-group.com",
+                    "borsaitaliana.it",
+                    "asx.com.au",
+                    "hkex.com.hk",
+                    "tse.or.jp",
+                    "tmx.com",
+                    "nseindia.com",
+                    "bseindia.com",
+                    "sgx.com",
+                    "fondsweb.com",
+                    "deka.de",
+                    "deka-etf.de",
+                    "boerse-hamburg.de"
+                  ]
+                }
+                $cfg$::jsonb,
+                CURRENT_TIMESTAMP
+              )
+              ON CONFLICT (id) DO NOTHING;
+            endDelimiter:
+            stripComments: false
+            dbms:
+            comment:
+  - changeSet:
+      id: 017b-kb-runs-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: kb_runs
+      changes:
+        - createTable:
+            tableName: kb_runs
+            columns:
+              - column:
+                  name: run_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: action
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: started_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: finished_at
+                  type: TIMESTAMP
+              - column:
+                  name: attempts
+                  type: INTEGER
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: error
+                  type: ${text_type}
+              - column:
+                  name: batch_id
+                  type: VARCHAR(64)
+              - column:
+                  name: request_id
+                  type: VARCHAR(64)
+        - createIndex:
+            tableName: kb_runs
+            indexName: ix_kb_runs_isin
+            columns:
+              - column:
+                  name: isin
+        - createIndex:
+            tableName: kb_runs
+            indexName: ix_kb_runs_status
+            columns:
+              - column:
+                  name: status
+        - createIndex:
+            tableName: kb_runs
+            indexName: ix_kb_runs_action
+            columns:
+              - column:
+                  name: action
+        - createIndex:
+            tableName: kb_runs
+            indexName: ix_kb_runs_started
+            columns:
+              - column:
+                  name: started_at
+  - changeSet:
+      id: 017c-kb-alternatives-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: kb_alternatives
+      changes:
+        - createTable:
+            tableName: kb_alternatives
+            columns:
+              - column:
+                  name: alternative_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: base_isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: alt_isin
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: rationale
+                  type: ${text_type}
+              - column:
+                  name: sources_json
+                  type: JSONB
+                  defaultValueComputed: "'[]'::jsonb"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(32)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: kb_alternatives
+            columnNames: base_isin, alt_isin
+            constraintName: ux_kb_alternatives_pair
+        - createIndex:
+            tableName: kb_alternatives
+            indexName: ix_kb_alternatives_base
+            columns:
+              - column:
+                  name: base_isin
+  - changeSet:
+      id: 017d-instrument-dossiers-extend-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        tableExists:
+          tableName: instrument_dossiers
+      changes:
+        - addColumn:
+            tableName: instrument_dossiers
+            columns:
+              - column:
+                  name: version
+                  type: INTEGER
+                  defaultValueNumeric: 1
+                  constraints:
+                    nullable: false
+              - column:
+                  name: authored_by
+                  type: VARCHAR(32)
+                  defaultValue: USER
+                  constraints:
+                    nullable: false
+              - column:
+                  name: approved_by
+                  type: VARCHAR(128)
+              - column:
+                  name: approved_at
+                  type: TIMESTAMP
+              - column:
+                  name: auto_approved
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: supersedes_id
+                  type: BIGINT
+        - createIndex:
+            tableName: instrument_dossiers
+            indexName: ix_instrument_dossiers_status
+            columns:
+              - column:
+                  name: status
+        - createIndex:
+            tableName: instrument_dossiers
+            indexName: ix_instrument_dossiers_updated
+            columns:
+              - column:
+                  name: updated_at
+        - addForeignKeyConstraint:
+            baseTableName: instrument_dossiers
+            baseColumnNames: supersedes_id
+            referencedTableName: instrument_dossiers
+            referencedColumnNames: dossier_id
+            constraintName: fk_dossiers_supersedes
+            onDelete: SET NULL
+  - changeSet:
+      id: 017e-instrument-dossier-extractions-extend-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        tableExists:
+          tableName: instrument_dossier_extractions
+      changes:
+        - addColumn:
+            tableName: instrument_dossier_extractions
+            columns:
+              - column:
+                  name: auto_approved
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: instrument_dossier_extractions
+            indexName: ix_dossier_extractions_status
+            columns:
+              - column:
+                  name: status

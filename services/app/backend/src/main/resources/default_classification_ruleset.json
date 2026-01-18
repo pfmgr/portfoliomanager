@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "name": "default",
+  "mode": "layer scoring",
+  "facts": [
+    "isin",
+    "name",
+    "instrument_type",
+    "asset_class",
+    "sub_class",
+    "layer",
+    "is_savingPlan_active",
+    "name_norm",
+    "is_stock",
+    "is_etf"
+  ],
+  "policies": {
+    "layer1_requires_savingPlan": true
+  },
+  "rules": [
+    {
+      "id": "instrument_type_etf",
+      "priority": 10,
+      "score": 10,
+      "match": {
+        "field": "name_norm",
+        "operator": "CONTAINS",
+        "value": "etf"
+      },
+      "actions": {
+        "instrument_type": "ETF"
+      }
+    },
+    {
+      "id": "layer1_msci_world_example",
+      "priority": 100,
+      "score": 90,
+      "match": {
+        "field": "name_norm",
+        "operator": "CONTAINS",
+        "value": "msci world"
+      },
+      "actions": {
+        "layer": 1,
+        "asset_class": "Equity",
+        "sub_class": "Developed Markets"
+      }
+    },
+    {
+      "id": "layer1_all_etf",
+      "priority": 89,
+      "score": 85,
+      "match": {
+        "field": "name_norm",
+        "operator": "REGEX",
+        "value": "^(?=.*\\ball\\b)(?=.*\\b(etf|uetf)\\b).*$"
+      },
+      "actions": {
+        "layer": 1,
+        "instrument_type": "ETF",
+        "asset_class": "Stock"
+      }
+    },
+    {
+      "id": "layer2_sp500_example",
+      "priority": 90,
+      "score": 80,
+      "match": {
+        "field": "name_norm",
+        "operator": "CONTAINS",
+        "value": "s p 500"
+      },
+      "actions": {
+        "layer": 2,
+        "asset_class": "Equity",
+        "sub_class": "USA Large Cap"
+      }
+    },
+    {
+      "id": "legacy_reits",
+      "priority": 88,
+      "score": 80,
+      "match": {
+        "field": "name_norm",
+        "operator": "REGEX",
+        "value": "\\bREIT\\b"
+      },
+      "actions": {
+        "instrument_type": "REIT",
+        "asset_class": "Real Estate",
+        "sub_class": "REIT",
+        "layer": 4
+      }
+    },
+    {
+      "id": "legacy_immobilien_ag",
+      "priority": 87,
+      "score": 70,
+      "match": {
+        "field": "name_norm",
+        "operator": "REGEX",
+        "value": "\\b(Immobilien SE|Immobilien AG)\\b"
+      },
+      "actions": {
+        "instrument_type": "Stock",
+        "asset_class": "Real Estate",
+        "layer": 4
+      }
+    },
+    {
+      "id": "legacy_ag",
+      "priority": 86,
+      "score": 60,
+      "match": {
+        "field": "name_norm",
+        "operator": "REGEX",
+        "value": "\\b(AG|SE|KGaA)\\b"
+      },
+      "actions": {
+        "instrument_type": "Stock",
+        "asset_class": "Stock",
+        "layer": 4
+      }
+    },
+    {
+      "id": "legacy_etfs_keywords",
+      "priority": 80,
+      "score": 50,
+      "match": {
+        "field": "name_norm",
+        "operator": "REGEX",
+        "value": "\\b(UCITS|ETF|UETF|CF|CFA)\\b"
+      },
+      "actions": {
+        "instrument_type": "ETF",
+        "asset_class": "Stock",
+        "layer": 3
+      }
+    }
+  ]
+}

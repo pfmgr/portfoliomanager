@@ -1,0 +1,117 @@
+{
+  "active_profile": "BALANCED",
+  "profiles": {
+    "CLASSIC": {
+      "display_name": "Classic",
+      "description": "Highly defensive allocation focused on the global core.",
+      "layer_targets": {
+        "1": 0.80,
+        "2": 0.15,
+        "3": 0.04,
+        "4": 0.01,
+        "5": 0.0
+      },
+      "acceptable_variance_pct": 3.0,
+      "minimum_saving_plan_size": 15,
+      "minimum_rebalancing_amount": 10,
+      "constraints": {
+        "core_min": 0.70,
+        "layer5_max": 0.03,
+        "layer4_max": 0.05
+      }
+    },
+    "BALANCED": {
+      "display_name": "Balanced",
+      "description": "Balanced mix of global core and thematic exposures.",
+      "layer_targets": {
+        "1": 0.70,
+        "2": 0.20,
+        "3": 0.08,
+        "4": 0.02,
+        "5": 0.0
+      },
+      "acceptable_variance_pct": 3.0,
+      "minimum_saving_plan_size": 15,
+      "minimum_rebalancing_amount": 10,
+      "constraints": {
+        "core_min": 0.70,
+        "layer5_max": 0.03,
+        "layer4_max": 0.05
+      }
+    },
+    "GROWTH": {
+      "display_name": "Growth",
+      "description": "Tilt toward thematic and satellite exposure for growth.",
+      "layer_targets": {
+        "1": 0.60,
+        "2": 0.20,
+        "3": 0.15,
+        "4": 0.05,
+        "5": 0.0
+      },
+      "acceptable_variance_pct": 3.0,
+      "minimum_saving_plan_size": 15,
+      "minimum_rebalancing_amount": 10,
+      "constraints": {
+        "core_min": 0.70,
+        "layer5_max": 0.03,
+        "layer4_max": 0.10
+      }
+    },
+    "AGGRESSIVE": {
+      "display_name": "Aggressive",
+      "description": "Maximum thematic and individual stock exposure.",
+      "layer_targets": {
+        "1": 0.50,
+        "2": 0.15,
+        "3": 0.25,
+        "4": 0.10,
+        "5": 0.0
+      },
+      "acceptable_variance_pct": 3.0,
+      "minimum_saving_plan_size": 15,
+      "minimum_rebalancing_amount": 10,
+      "constraints": {
+        "core_min": 0.60,
+        "layer5_max": 0.03,
+        "layer4_max": 0.20
+      }
+    },
+    "OPPORTUNITY": {
+      "display_name": "Opportunity",
+      "description": "Opportunity-focused blend with elevated small/individual exposure.",
+      "layer_targets": {
+        "1": 0.40,
+        "2": 0.10,
+        "3": 0.30,
+        "4": 0.20,
+        "5": 0.0
+      },
+      "acceptable_variance_pct": 3.0,
+      "minimum_saving_plan_size": 15,
+      "minimum_rebalancing_amount": 10,
+      "constraints": {
+        "core_min": 0.60,
+        "layer5_max": 0.03,
+        "layer4_max": 0.20
+      }
+    }
+  },
+  "custom_overrides": {
+    "enabled": false
+  },
+  "layer_names": {
+    "1": "Global Core",
+    "2": "Core-Plus",
+    "3": "Themes",
+    "4": "Individual Stocks",
+    "5": "Unclassified"
+  },
+  "max_saving_plans_per_layer": {
+    "1": 2,
+    "2": 4,
+    "3": 8,
+    "4": 8,
+    "5": 17
+  }
+}

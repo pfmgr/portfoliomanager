@@ -1,0 +1,6 @@
+.idea
+.project
+.settings/
+.jdk-temurin-25/
+e2e/test-results*/
+.jdk-temurin-25/

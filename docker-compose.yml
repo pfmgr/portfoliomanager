@@ -1,0 +1,75 @@
+services:
+  db_metabase:
+    build:
+      dockerfile: postgres/Dockerfile
+    image: portfoliomanager-postgres:16
+    environment:
+      POSTGRES_DB: metabase_app
+      POSTGRES_USER: metabase
+      POSTGRES_PASSWORD: ${METABASE_DB_PASSWORD}
+    volumes:
+      - metabase_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  db_portfolio:
+    build:
+      dockerfile: postgres/Dockerfile
+    image: portfoliomanager-postgres:16
+    environment:
+      POSTGRES_DB: portfolio
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: ${PORTFOLIO_DB_PASSWORD}
+    volumes:
+      - portfolio_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  metabase:
+    image: metabase/metabase:latest
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase_app
+      MB_DB_PORT: 5432
+      MB_DB_USER: metabase
+      MB_DB_PASS: ${METABASE_DB_PASSWORD}
+      MB_DB_HOST: db_metabase
+    ports:
+      - "3000:3000"
+    depends_on: [db_metabase]
+    restart: unless-stopped
+
+  admin_spring:
+    build:
+      context: ./services/app/backend
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://db_portfolio:5432/portfolio
+      DB_USER: portfolio
+      DB_PASSWORD: ${PORTFOLIO_DB_PASSWORD}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASS: ${ADMIN_PASS}
+      JWT_ISSUER: ${JWT_ISSUER:-portfolio-manager}
+      LLM_PROVIDER: ${LLM_PROVIDER:-none}
+      LLM_PROVIDER_MODEL: ${LLM_PROVIDER_MODEL:-gpt-5-nano}
+      LLM_PROVIDER_API_KEY: ${LLM_PROVIDER_API_KEY}
+      LLM_PROVIDER_BASE_URL: ${LLM_PROVIDER_BASE_URL:-https://api.openai.com/v1}
+      KB_ENABLED: ${KB_ENABLED:-true}
+      KB_LLM_ENABLED: ${KB_LLM_ENABLED:-false}
+    depends_on:
+      - db_portfolio
+    ports:
+      - "${ADMIN_SPRING_BIND:-127.0.0.1}:8089:8080"
+    restart: unless-stopped
+
+  admin_frontend:
+    build:
+      context: ./services/app/frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - admin_spring
+    ports:
+      - "${ADMIN_FRONTEND_BIND:-127.0.0.1}:8080:80"
+    restart: unless-stopped
+
+volumes:
+  metabase_data:
+  portfolio_data:

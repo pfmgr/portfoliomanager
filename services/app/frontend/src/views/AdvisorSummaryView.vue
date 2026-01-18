@@ -1,0 +1,779 @@
+<template>
+  <div>
+    <div class="card">
+      <h2>Advisor Summary</h2>
+      <div class="grid grid-2">
+        <label>
+          As Of Date
+          <input class="input" type="date" v-model="asOf" />
+        </label>
+        <div style="display:flex; align-items:flex-end; gap: 0.8rem;">
+          <button class="secondary" @click="load">Refresh</button>
+          <button class="primary" :disabled="savingRun" @click="saveRun">
+            {{ savingRun ? 'Saving…' : 'Save Run' }}
+          </button>
+        </div>
+        <div v-if="constraintChecks.length">
+          <h4>Constraint checks</h4>
+          <ul class="note">
+            <li v-for="constraint in constraintChecks" :key="constraint.name">
+              <strong>{{ constraint.name }}:</strong> {{ constraint.details }}
+              <span :class="['status', constraint.ok ? 'ok' : 'warn']">
+                {{ constraint.ok ? 'OK' : 'Violation' }}
+              </span>
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div v-if="toast" :class="['toast', toastType]">{{ toast }}</div>
+      <p v-if="loading" class="note">Loading summary...</p>
+    </div>
+
+    <div class="card">
+      <h3>Layer Allocations</h3>
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="sr-only">Layer allocation summary.</caption>
+          <thead>
+              <tr>
+                <th scope="col">Layer</th>
+                <th scope="col" class="num">Value €</th>
+                <th scope="col" class="num">Weight %</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-if="loading">
+                <tr>
+                  <td colspan="3">Loading layer allocations...</td>
+                </tr>
+              </template>
+              <template v-else-if="summary.layerAllocations.length === 0">
+                <tr>
+                  <td colspan="3">No layer allocations available.</td>
+                </tr>
+              </template>
+              <template v-else>
+                <tr v-for="item in summary.layerAllocations" :key="item.label">
+                  <th scope="row">{{ layerLabelFromAllocation(item) }}</th>
+                  <td class="num">{{ item.valueEur.toFixed(2) }}</td>
+                  <td class="num">{{ item.weightPct.toFixed(2) }}</td>
+                </tr>
+              </template>
+            </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Asset Class Allocations</h3>
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="sr-only">Asset class allocation summary.</caption>
+          <thead>
+              <tr>
+                <th scope="col">Asset Class</th>
+                <th scope="col" class="num">Value €</th>
+                <th scope="col" class="num">Weight %</th>
+              </tr>
+            </thead>
+          <tbody>
+            <template v-if="loading">
+              <tr>
+                <td colspan="3">Loading asset class allocations...</td>
+              </tr>
+            </template>
+            <template v-else-if="summary.assetClassAllocations.length === 0">
+              <tr>
+                <td colspan="3">No asset class allocations available.</td>
+              </tr>
+            </template>
+            <template v-else>
+              <tr v-for="item in summary.assetClassAllocations" :key="item.label">
+                <th scope="row">{{ item.label || 'Unclassified' }}</th>
+                <td class="num">{{ item.valueEur.toFixed(2) }}</td>
+                <td class="num">{{ item.weightPct.toFixed(2) }}</td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Top Positions</h3>
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="sr-only">Top positions by value.</caption>
+          <thead>
+              <tr>
+                <th scope="col">ISIN</th>
+                <th scope="col">Name</th>
+                <th scope="col" class="num">Value €</th>
+                <th scope="col" class="num">Weight %</th>
+              </tr>
+            </thead>
+          <tbody>
+            <template v-if="loading">
+              <tr>
+                <td colspan="4">Loading top positions...</td>
+              </tr>
+            </template>
+            <template v-else-if="summary.topPositions.length === 0">
+              <tr>
+                <td colspan="4">No top positions available.</td>
+              </tr>
+            </template>
+            <template v-else>
+              <tr v-for="item in summary.topPositions" :key="item.isin">
+                <th scope="row">{{ item.isin }}</th>
+                <td>{{ item.name }}</td>
+                <td class="num">{{ item.valueEur.toFixed(2) }}</td>
+                <td class="num">{{ item.weightPct.toFixed(2) }}</td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" v-if="summary.savingPlanSummary">
+      <h3>Savings plan Advisory</h3>
+      <p v-if="profileName">
+        Active profile:
+        <strong>{{ profileName }}</strong>
+        <span v-if="profileKey && profileKey !== profileName">({{ profileKey }})</span>
+      </p>
+      <p v-if="profileRecommendation" class="note">{{ profileRecommendation }}</p>
+      <dl>
+        <dt>Total active</dt>
+        <dd>
+          <b>{{ formatAmount(summary.savingPlanSummary.totalActiveAmountEur) }}</b> EUR
+          ({{ summary.savingPlanSummary.activeCount }} plans)
+        </dd>
+        <dt>Monthly total</dt>
+        <dd>
+          <b>{{ formatAmount(summary.savingPlanSummary.monthlyTotalAmountEur) }}</b> EUR
+          ({{ summary.savingPlanSummary.monthlyCount }} plans)
+        </dd>
+      </dl>
+
+      <h4>Monthly by Layer</h4>
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="sr-only">Monthly savings plan totals by layer.</caption>
+          <thead>
+              <tr>
+                <th scope="col">Layer</th>
+                <th scope="col" class="num">Amount €</th>
+                <th scope="col" class="num">Weight %</th>
+                <th scope="col" class="num">Plans</th>
+              </tr>
+            </thead>
+          <tbody>
+            <template v-if="loading">
+              <tr>
+                <td colspan="4">Loading saving plan monthly totals...</td>
+              </tr>
+            </template>
+            <template v-else-if="summary.savingPlanSummary.monthlyByLayer.length === 0">
+              <tr>
+                <td colspan="4">No monthly layer data available.</td>
+              </tr>
+            </template>
+            <template v-else>
+              <tr v-for="row in summary.savingPlanSummary.monthlyByLayer" :key="row.layer">
+                <th scope="row">{{ layerLabel(row.layer) }}</th>
+                <td class="num">{{ formatAmount(row.amountEur) }}</td>
+                <td class="num">{{ formatWeight(row.weightPct) }}</td>
+                <td class="num">{{ row.count }}</td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Target Weights</h4>
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="sr-only">Target weights by layer.</caption>
+          <thead>
+              <tr>
+                <th scope="col">Layer</th>
+                <th scope="col" class="num">Target Weight %</th>
+              </tr>
+            </thead>
+          <tbody>
+            <template v-if="loading">
+              <tr>
+                <td colspan="2">Loading target weights...</td>
+              </tr>
+            </template>
+            <template v-else-if="summary.savingPlanTargets.length === 0">
+              <tr>
+                <td colspan="2">No target weights available.</td>
+              </tr>
+            </template>
+            <template v-else>
+              <tr v-for="row in summary.savingPlanTargets" :key="row.layer">
+                <th scope="row">{{ layerLabel(row.layer) }}</th>
+                <td class="num">{{ formatWeight(row.targetWeightPct) }}</td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="summary.savingPlanProposal">
+        <h4>Rebalancing Proposal (Savings plan weights)</h4>
+        <p v-if="summary.savingPlanProposal.source">
+          Proposal source: <b>{{ formatSource(summary.savingPlanProposal.source) }}</b>
+        </p>
+        <div v-if="formattedNarrative" class="note narrative" v-html="formattedNarrative"></div>
+        <ul v-if="summary.savingPlanProposal.notes && summary.savingPlanProposal.notes.length">
+          <li v-for="note in summary.savingPlanProposal.notes" :key="note" class="note">
+            {{ note }}
+          </li>
+        </ul>
+        <p class="note">Delta shows proposed minus current amounts.</p>
+        <div class="table-wrap">
+          <table class="table">
+            <caption class="sr-only">Savings plan rebalancing proposal by layer.</caption>
+            <thead>
+              <tr>
+                <th scope="col">Layer</th>
+                <th scope="col" class="num">Current €</th>
+                <th scope="col" class="num">Current %</th>
+                <th scope="col" class="num">Target %</th>
+                <th scope="col" class="num">Proposed €</th>
+                <th scope="col" class="num">Delta €</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-if="loading">
+                <tr>
+                  <td colspan="6">Loading rebalancing proposal...</td>
+                </tr>
+              </template>
+              <template v-else-if="summary.savingPlanProposal.layers.length === 0">
+                <tr>
+                  <td colspan="6">No rebalancing proposal available.</td>
+                </tr>
+              </template>
+              <template v-else>
+                <tr v-for="row in summary.savingPlanProposal.layers" :key="row.layer">
+                  <th scope="row">{{ row.layerName }}</th>
+                  <td class="num">{{ formatAmount(row.currentAmountEur) }}</td>
+                  <td class="num">{{ formatWeight(row.currentWeightPct) }}</td>
+                  <td class="num">{{ formatWeight(row.targetWeightPct) }}</td>
+                  <td class="num">{{ formatAmount(row.targetAmountEur) }}</td>
+                  <td class="num">{{ formatAmount(row.deltaEur) }}</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Instrument Proposal</h4>
+        <div v-if="instrumentGating && !instrumentGating.knowledgeBaseEnabled" class="note">
+          Knowledge Base is disabled; instrument-level proposals are unavailable. The rationale below
+          explains how weights are computed once KB data is available.
+        </div>
+        <div v-else-if="instrumentGating && !instrumentGating.kbComplete" class="note">
+          Missing Knowledge Base extractions for:
+          <span v-if="instrumentGating.missingIsins && instrumentGating.missingIsins.length">
+            {{ instrumentGating.missingIsins.join(', ') }}
+          </span>
+          <span v-else>unknown instruments</span>. The rationale below explains how weights are
+          computed once KB data is complete.
+        </div>
+        <div v-if="instrumentGating" class="note kb-legend">
+          KB status:
+          <span class="badge ok">Complete</span> extraction available,
+          <span class="badge warn">Missing</span> extraction missing.
+        </div>
+        <div v-if="instrumentWarnings.length" class="callout warn">
+          <strong>Instrument proposal warnings</strong>
+          <ul>
+            <li v-for="warning in instrumentWarnings" :key="warning">{{ warning }}</li>
+          </ul>
+        </div>
+        <div class="instrument-rationale">
+          <strong>Instrument rationale</strong>
+          <p v-if="instrumentRationaleNote" class="note">{{ instrumentRationaleNote }}</p>
+          <dl class="reason-legend">
+            <dt>KB-weighted</dt>
+            <dd>
+              Weights favor lower TER and lower overlap (benchmark, regions, top holdings) to reduce
+              redundancy. Scores are normalized within each layer.
+            </dd>
+            <dt>Equal weight</dt>
+            <dd>Used when KB factors are missing or only one instrument is in the layer.</dd>
+            <dt>Dropped (below minimum)</dt>
+            <dd>
+              Proposed amount falls below the minimum saving plan size, so it is set to 0 and the
+              layer budget is redistributed.
+            </dd>
+            <dt>Layer budget 0</dt>
+            <dd>Layer has no budget, so all instruments are proposed at 0.</dd>
+            <dt>No change (within tolerance)</dt>
+            <dd>Current amounts are kept because the plan is within tolerance.</dd>
+            <dt>No change (below minimum rebalancing)</dt>
+            <dd>Adjustments below the minimum rebalancing amount are not proposed.</dd>
+          </dl>
+        </div>
+        <div v-if="instrumentProposals.length" class="actions">
+          <label class="field">
+            Group
+            <select v-model="instrumentGroupMode">
+              <option value="none">None</option>
+              <option value="warnings" :disabled="instrumentWarningDetails.length === 0">By warnings</option>
+            </select>
+          </label>
+          <label class="field">
+            Sort
+            <select v-model="instrumentSortMode">
+              <option value="layer">Layer</option>
+              <option value="isin">ISIN</option>
+              <option value="name">Name</option>
+              <option value="proposed">Proposed €</option>
+              <option value="delta">Delta €</option>
+            </select>
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <caption class="sr-only">Instrument-level savings plan proposal.</caption>
+            <thead>
+              <tr>
+                <th scope="col">ISIN</th>
+                <th scope="col">Name</th>
+                <th scope="col">Layer</th>
+                <th scope="col">KB</th>
+                <th scope="col" class="num">Current €</th>
+                <th scope="col" class="num">Proposed €</th>
+                <th scope="col" class="num">Delta €</th>
+                <th scope="col">Reasons</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-if="loading">
+                <tr>
+                  <td colspan="8">Loading instrument proposals...</td>
+                </tr>
+              </template>
+              <template v-else-if="instrumentGating && !instrumentGating.knowledgeBaseEnabled">
+                <tr>
+                  <td colspan="8">Instrument proposals are gated because the Knowledge Base is disabled.</td>
+                </tr>
+              </template>
+              <template v-else-if="instrumentGating && !instrumentGating.kbComplete">
+                <tr>
+                  <td colspan="8">
+                    Instrument proposals are gated; missing extractions for
+                    <span v-if="instrumentGating.missingIsins && instrumentGating.missingIsins.length">
+                      {{ instrumentGating.missingIsins.join(', ') }}
+                    </span>
+                    <span v-else>unknown instruments</span>.
+                  </td>
+                </tr>
+              </template>
+              <template v-else-if="instrumentProposals.length === 0">
+                <tr>
+                  <td colspan="8">No instrument proposals available.</td>
+                </tr>
+              </template>
+              <template v-else>
+                <template v-for="group in groupedInstrumentProposals" :key="group.key">
+                  <tr class="group-row">
+                    <th scope="rowgroup" colspan="8">{{ group.label }}</th>
+                  </tr>
+                  <tr v-if="group.items.length === 0">
+                    <td colspan="8">No instruments for this warning group.</td>
+                  </tr>
+                  <tr v-for="row in group.items" :key="row.isin">
+                    <th scope="row">{{ row.isin }}</th>
+                    <td>{{ formatInstrumentName(row.instrumentName) }}</td>
+                    <td>{{ layerLabel(row.layer) }}</td>
+                    <td>
+                      <span :class="['badge', kbStatusClass(row.isin)]">
+                        {{ kbStatusLabel(row.isin) }}
+                      </span>
+                    </td>
+                    <td class="num">{{ formatAmount(row.currentAmountEur) }}</td>
+                    <td class="num">{{ formatProposedAmount(row.proposedAmountEur) }}</td>
+                    <td class="num">{{ formatAmount(row.deltaEur) }}</td>
+                    <td>{{ formatReasons(row.reasonCodes) }}</td>
+                  </tr>
+                </template>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { onMounted, ref, computed } from 'vue'
+import { apiRequest } from '../api'
+
+const summary = ref({
+  layerAllocations: [],
+  assetClassAllocations: [],
+  topPositions: [],
+  savingPlanSummary: null,
+  savingPlanTargets: [],
+  savingPlanProposal: null
+})
+const asOf = ref('')
+const toast = ref('')
+const toastType = ref('success')
+const loading = ref(false)
+const savingRun = ref(false)
+const layerNames = ref({
+  1: 'Global Core',
+  2: 'Core-Plus',
+  3: 'Themes',
+  4: 'Individual Stocks',
+  5: 'Unclassified'
+})
+
+const constraintChecks = computed(() => summary.value.savingPlanProposal?.constraints || [])
+const profileName = computed(() => summary.value.savingPlanProposal?.selectedProfileDisplayName)
+const profileKey = computed(() => summary.value.savingPlanProposal?.selectedProfileKey)
+const profileRecommendation = computed(() => summary.value.savingPlanProposal?.recommendation)
+const formattedNarrative = computed(() => formatNarrative(summary.value.savingPlanProposal?.narrative))
+const instrumentGating = computed(() => summary.value.savingPlanProposal?.gating)
+const instrumentProposals = computed(() => summary.value.savingPlanProposal?.instrumentProposals || [])
+const instrumentWarnings = computed(() => summary.value.savingPlanProposal?.instrumentWarnings || [])
+const instrumentWarningCodes = computed(() => summary.value.savingPlanProposal?.instrumentWarningCodes || [])
+const missingIsins = computed(() => new Set(instrumentGating.value?.missingIsins || []))
+const instrumentRationaleNote = computed(() => {
+  if (!summary.value.savingPlanProposal) {
+    return ''
+  }
+  if (instrumentGating.value && !instrumentGating.value.knowledgeBaseEnabled) {
+    return 'Instrument proposals are disabled because the Knowledge Base is off.'
+  }
+  if (instrumentGating.value && !instrumentGating.value.kbComplete) {
+    return 'Instrument proposals need complete Knowledge Base extractions for all ISINs.'
+  }
+  return 'Reasons are deterministic and describe how each layer budget is split.'
+})
+const instrumentGroupMode = ref('none')
+const instrumentSortMode = ref('layer')
+const instrumentWarningDetails = computed(() => buildWarningDetails(instrumentWarningCodes.value, instrumentWarnings.value))
+const sortedInstrumentProposals = computed(() => sortInstrumentProposals(instrumentProposals.value))
+const groupedInstrumentProposals = computed(() => groupInstrumentProposals(sortedInstrumentProposals.value))
+
+async function load() {
+  loading.value = true
+  try {
+    const query = asOf.value ? `?asOf=${asOf.value}` : ''
+    summary.value = await apiRequest(`/advisor/summary${query}`)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadLayerNames() {
+  try {
+    const data = await apiRequest('/layer-targets')
+    if (data.layerNames) {
+      layerNames.value = data.layerNames
+    }
+  } catch (err) {
+    console.warn('Failed to load layer names', err)
+  }
+}
+
+async function saveRun() {
+  toast.value = ''
+  toastType.value = 'success'
+  savingRun.value = true
+  try {
+    const query = asOf.value ? `?asOf=${asOf.value}` : ''
+    const result = await apiRequest(`/advisor/runs${query}`, { method: 'POST' })
+    if (result?.runId) {
+      toast.value = `Advisor run #${result.runId} saved. See Advisor History.`
+    } else {
+      toast.value = 'Advisor run saved. See Advisor History.'
+    }
+  } catch (err) {
+    toastType.value = 'error'
+    toast.value = err.message
+  } finally {
+    savingRun.value = false
+  }
+}
+
+function formatAmount(value) {
+  if (value === null || value === undefined) {
+    return 'n/a'
+  }
+  return value.toFixed(2)
+}
+
+function formatProposedAmount(value) {
+  if (value === null || value === undefined) {
+    return 'n/a'
+  }
+  const numeric = Number(value)
+  const amount = numeric.toFixed(2)
+  return numeric <= 0 ? `${amount} (Discard)` : amount
+}
+
+function formatInstrumentName(value) {
+  if (!value) {
+    return 'n/a'
+  }
+  return value
+}
+
+function formatWeight(value) {
+  if (value === null || value === undefined) {
+    return 'n/a'
+  }
+  return value.toFixed(2)
+}
+
+function formatSource(value) {
+  if (!value) {
+    return 'n/a'
+  }
+  return value === 'llm' ? 'LLM' : 'Targets'
+}
+
+function resolveLayerKey(value) {
+  if (value == null) {
+    return null
+  }
+  const numeric = Number(value)
+  if (Number.isFinite(numeric)) {
+    return numeric
+  }
+  const digits = String(value).replace(/\D/g, '')
+  if (!digits) {
+    return null
+  }
+  const backup = Number(digits)
+  return Number.isFinite(backup) ? backup : null
+}
+
+function layerLabel(layer) {
+  const key = resolveLayerKey(layer)
+  if (key == null) {
+    return layer || 'Unclassified'
+  }
+  return layerNames.value[key] || `Layer ${key}`
+}
+
+function layerLabelFromAllocation(item) {
+  if (!item?.label) {
+    return 'Unclassified'
+  }
+  const key = resolveLayerKey(item.label)
+  if (key == null) {
+    return item.label
+  }
+  return layerNames.value[key] || item.label
+}
+
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case '&':
+        return '&amp;'
+      case '<':
+        return '&lt;'
+      case '>':
+        return '&gt;'
+      case '"':
+        return '&quot;'
+      case "'":
+        return '&#39;'
+      default:
+        return char
+    }
+  })
+}
+
+function formatInline(value) {
+  const escaped = escapeHtml(value)
+  return escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
+}
+
+function formatNarrative(text) {
+  if (!text) {
+    return ''
+  }
+  const normalized = text.replace(/\r\n/g, '\n')
+  const bulletPrepared = normalized
+    .replace(/:\s*-\s+/g, ':\n- ')
+    .replace(/([^\n]) - (?=\*\*)/g, '$1\n- ')
+  const lines = bulletPrepared.split('\n')
+  let html = ''
+  let listOpen = false
+
+  lines.forEach((rawLine) => {
+    const line = rawLine.trim()
+    if (!line) {
+      if (listOpen) {
+        html += '</ul>'
+        listOpen = false
+      }
+      return
+    }
+    if (line.startsWith('- ')) {
+      if (!listOpen) {
+        html += '<ul>'
+        listOpen = true
+      }
+      html += `<li>${formatInline(line.slice(2))}</li>`
+    } else {
+      if (listOpen) {
+        html += '</ul>'
+        listOpen = false
+      }
+      html += `<p>${formatInline(line)}</p>`
+    }
+  })
+
+  if (listOpen) {
+    html += '</ul>'
+  }
+
+  return html
+}
+
+function formatReasons(reasons) {
+  if (!reasons || reasons.length === 0) {
+    return 'n/a'
+  }
+  const labels = {
+    NO_CHANGE_WITHIN_TOLERANCE: 'No change (within tolerance)',
+    MIN_AMOUNT_DROPPED: 'Dropped (below minimum)',
+    MIN_REBALANCE_AMOUNT: 'No change (below minimum rebalancing)',
+    KB_WEIGHTED: 'KB-weighted',
+    EQUAL_WEIGHT: 'Equal weight',
+    LAYER_BUDGET_ZERO: 'Layer budget 0'
+  }
+  return reasons.map((code) => labels[code] || code).join(', ')
+}
+
+function buildWarningDetails(codes, messages) {
+  const list = []
+  const max = Math.max(codes.length, messages.length)
+  for (let index = 0; index < max; index += 1) {
+    const code = codes[index] || 'UNKNOWN'
+    const message = messages[index] || warningLabelFromCode(code) || code
+    list.push({ key: `${code}-${index}`, code, message })
+  }
+  return list
+}
+
+function warningLabelFromCode(code) {
+  const labels = {
+    LAYER_NO_INSTRUMENTS: 'Layer budget has no active instruments',
+    LAYER_ALL_BELOW_MINIMUM: 'All instruments below minimum saving plan size'
+  }
+  return labels[code] || null
+}
+
+function groupInstrumentProposals(items) {
+  if (instrumentGroupMode.value !== 'warnings' || instrumentWarningDetails.value.length === 0) {
+    return [
+      {
+        key: 'all',
+        label: 'All instruments',
+        items
+      }
+    ]
+  }
+  const groups = []
+  const used = new Set()
+  for (const detail of instrumentWarningDetails.value) {
+    const matchers = warningReasonCodes(detail.code)
+    const groupItems = matchers.length
+      ? items.filter((row) => row.reasonCodes && row.reasonCodes.some((code) => matchers.includes(code)))
+      : []
+    groupItems.forEach((row) => used.add(row.isin))
+    groups.push({
+      key: detail.key,
+      label: `Warning: ${detail.message}`,
+      items: groupItems
+    })
+  }
+  const remaining = items.filter((row) => !used.has(row.isin))
+  if (remaining.length) {
+    groups.push({
+      key: 'other',
+      label: 'Other instruments',
+      items: remaining
+    })
+  }
+  return groups
+}
+
+function warningReasonCodes(code) {
+  const mapping = {
+    LAYER_ALL_BELOW_MINIMUM: ['MIN_AMOUNT_DROPPED']
+  }
+  return mapping[code] || []
+}
+
+function sortInstrumentProposals(items) {
+  const sorted = [...items]
+  sorted.sort((a, b) => {
+    switch (instrumentSortMode.value) {
+      case 'isin':
+        return compareText(a.isin, b.isin)
+      case 'name':
+        return compareText(a.instrumentName, b.instrumentName)
+      case 'proposed':
+        return compareNumberDesc(a.proposedAmountEur, b.proposedAmountEur) || compareText(a.isin, b.isin)
+      case 'delta':
+        return compareNumberDesc(a.deltaEur, b.deltaEur) || compareText(a.isin, b.isin)
+      default:
+        return compareNumber(a.layer, b.layer) || compareText(a.isin, b.isin)
+    }
+  })
+  return sorted
+}
+
+function compareText(a, b) {
+  const left = (a || '').toString()
+  const right = (b || '').toString()
+  return left.localeCompare(right)
+}
+
+function compareNumber(a, b) {
+  const left = Number.isFinite(Number(a)) ? Number(a) : Number.POSITIVE_INFINITY
+  const right = Number.isFinite(Number(b)) ? Number(b) : Number.POSITIVE_INFINITY
+  return left - right
+}
+
+function compareNumberDesc(a, b) {
+  return compareNumber(b, a)
+}
+
+function kbStatusLabel(isin) {
+  if (!isin) {
+    return 'n/a'
+  }
+  return missingIsins.value.has(isin) ? 'Missing' : 'Complete'
+}
+
+function kbStatusClass(isin) {
+  if (!isin) {
+    return 'neutral'
+  }
+  return missingIsins.value.has(isin) ? 'warn' : 'ok'
+}
+
+onMounted(() => {
+  load()
+  loadLayerNames()
+})
+</script>
