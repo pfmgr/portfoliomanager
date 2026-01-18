@@ -10,6 +10,8 @@
 name: Publish Frontend Docker image
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
@@ -32,21 +34,39 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
-        with:
-          images: my-docker-hub-namespace/my-docker-hub-repository
+      - name: Set image tags
+        id: set-tags
+        run: |
+          set -euo pipefail
+          IMAGE=index.docker.io/fg1212/portfoliomanager-frontend
+
+          # Default: empty tags to avoid accidental pushes
+          echo "tags=" >> "$GITHUB_OUTPUT"
+
+          # On push to main -> snapshot
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            echo "tags=${IMAGE}:snapshot" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # On release published -> latest and the release tag
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            TAG_NAME=$(jq -r .release.tag_name < "$GITHUB_EVENT_PATH")
+            if [[ -n "$TAG_NAME" && "$TAG_NAME" != "null" ]]; then
+              echo "tags=${IMAGE}:latest,${IMAGE}:${TAG_NAME}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
 
       - name: Build and push Docker image
         id: push
+        if: ${{ steps.set-tags.outputs.tags != '' }}
         uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
         with:
           context: services/app/frontend
-          file: ./Dockerfile
+          file: ./services/app/frontend/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.set-tags.outputs.tags }}
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
@@ -54,4 +74,3 @@ jobs:
           subject-name: index.docker.io/fg1212/portfoliomanager-frontend
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
-
