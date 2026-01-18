@@ -1,6 +1,6 @@
 services:
   db_metabase:
-    image: portfoliomanager-postgres:16
+    image: postgres:16
     environment:
       POSTGRES_DB: metabase_app
       POSTGRES_USER: metabase
@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
 
   db_portfolio:
-    image: portfoliomanager-postgres:16
+    image: postgres:16
     environment:
       POSTGRES_DB: portfolio
       POSTGRES_USER: portfolio
