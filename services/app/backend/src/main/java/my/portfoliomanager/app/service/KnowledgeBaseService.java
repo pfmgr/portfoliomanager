@@ -1,8 +1,8 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.domain.*;
 import my.portfoliomanager.app.dto.*;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;

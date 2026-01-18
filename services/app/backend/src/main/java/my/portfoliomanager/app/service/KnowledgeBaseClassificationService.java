@@ -1,6 +1,6 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.dto.ClassificationDto;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
 import org.slf4j.Logger;

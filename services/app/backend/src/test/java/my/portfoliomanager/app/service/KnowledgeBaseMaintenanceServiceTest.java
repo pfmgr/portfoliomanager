@@ -1,7 +1,7 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import my.portfoliomanager.app.domain.DossierExtractionStatus;
 import my.portfoliomanager.app.domain.DossierStatus;
 import my.portfoliomanager.app.dto.KnowledgeBaseBulkResearchResponseDto;

@@ -68,19 +68,21 @@ A self-hosted admin tool for importing Trade Republic PDFs and Deka CSVs, classi
 
 - Frontend tooling expects Node `v25.3.0`; keep local runtimes, CI, and Docker builds aligned.
 - **Backend (Spring Boot, PostgreSQL int-test env, Liquibase, JaCoCo)**
-  - Start test DB once per session:
+  - Preferred: `services/app/backend/run-gradle-build.sh` (starts the int-test env, runs `./gradlew clean build`, and tears down).
+  - Manual setup:
+    - Start test DB once per session:
+      ```bash
+      docker compose -f services/app/backend/int-test-env/compose.yaml up -d
+      ```
+    - Then run tests:
     ```bash
-    docker compose -f services/app/backend/int-test-env/compose.yaml up -d
+    cd services/app/backend
+    GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test
     ```
-  - Then run tests:
-  ```bash
-  cd services/app/backend
-  GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test
-  ```
-  - Stop test DB when done:
-    ```bash
-    docker compose -f services/app/backend/int-test-env/compose.yaml down
-    ```
+    - Stop test DB when done:
+      ```bash
+      docker compose -f services/app/backend/int-test-env/compose.yaml down
+      ```
 - **Frontend unit tests (Vitest)**
   ```bash
   cd services/app/frontend

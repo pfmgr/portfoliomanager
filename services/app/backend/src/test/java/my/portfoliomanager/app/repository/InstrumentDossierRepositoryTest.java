@@ -1,6 +1,6 @@
 package my.portfoliomanager.app.repository;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.domain.DossierAuthoredBy;
 import my.portfoliomanager.app.domain.DossierOrigin;
 import my.portfoliomanager.app.domain.DossierStatus;

@@ -1,7 +1,5 @@
 services:
   db_metabase:
-    build:
-      dockerfile: postgres/Dockerfile
     image: portfoliomanager-postgres:16
     environment:
       POSTGRES_DB: metabase_app

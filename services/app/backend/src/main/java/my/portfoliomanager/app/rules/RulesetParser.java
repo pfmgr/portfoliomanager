@@ -1,22 +1,25 @@
 package my.portfoliomanager.app.rules;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import com.fasterxml.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.PropertyNamingStrategies;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.dataformat.yaml.YAMLMapper;
 
 public class RulesetParser {
 	private final ObjectMapper jsonMapper;
 	private final ObjectMapper yamlMapper;
 
 	public RulesetParser() {
-		this.jsonMapper = new ObjectMapper();
-		this.jsonMapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
-		this.jsonMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+		this.jsonMapper = JsonMapper.builder()
+				.propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+				.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+				.build();
 
-		this.yamlMapper = new ObjectMapper(new YAMLFactory());
-		this.yamlMapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
-		this.yamlMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+		this.yamlMapper = YAMLMapper.builder()
+				.propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+				.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+				.build();
 	}
 
 	public RulesetDefinition parse(String content) throws Exception {
