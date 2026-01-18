@@ -1,2 +1,2 @@
 #!/bin/sh
-docker build -t fg1212/portfoliomanager-admin-frontend:latest .
+docker build -t fg1212/portfoliomanager-frontend:latest .
