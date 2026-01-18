@@ -291,8 +291,18 @@ public class BackupService {
 				row.put("active_snapshot_id", null);
 			}
 		}
-		List<String> columns = new ArrayList<>(rows.get(0).keySet());
 		Map<String, ColumnInfo> columnInfos = getColumnInfos(tableName);
+		// Determine which columns from the backup are actually known in the database schema.
+		List<String> requestedColumns = new ArrayList<>(rows.get(0).keySet());
+		List<String> columns = requestedColumns.stream()
+				.filter(col -> columnInfos.containsKey(col.toLowerCase(Locale.ROOT)))
+				.collect(Collectors.toList());
+		if (columns.isEmpty()) {
+			throw new IllegalArgumentException("No valid columns found for table: " + tableName);
+		}
+		if (columns.size() != requestedColumns.size()) {
+			throw new IllegalArgumentException("Backup contains unknown columns for table: " + tableName);
+		}
 		String columnList = columns.stream()
 				.map(this::quoteIdentifier)
 				.collect(Collectors.joining(", "));
