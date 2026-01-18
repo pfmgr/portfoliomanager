@@ -30,7 +30,7 @@ dependencies {
 	implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml'
 	implementation 'com.networknt:json-schema-validator:3.0.0'
 	implementation 'org.apache.commons:commons-csv:1.14.1'
-	implementation 'org.apache.pdfbox:pdfbox:2.0.32'
+	implementation 'org.apache.pdfbox:pdfbox:3.0.6'
 	implementation 'org.postgresql:postgresql'
 	developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
 	runtimeOnly 'org.postgresql:postgresql'
