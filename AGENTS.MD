@@ -190,6 +190,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
   - `cd services/app/frontend`
   - `npm test`
 - Always run tests for any component you changed (backend, frontend, or e2e) before handing off work.
+- CI: GitHub Actions workflows in `.github/workflows` run frontend build + Vitest and backend test/build against Postgres 16 using `DB_URL/DB_USER/DB_PASSWORD`; keep these aligned with test config if they change.
 
 ### Run Spring Boot tests + coverage
 - `cd services/app/backend`

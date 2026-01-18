@@ -1,0 +1,56 @@
+name: Backend CI
+
+on:
+  push:
+    tags-ignore:
+      - "*"
+    paths:
+      - "services/app/backend/**"
+      - ".github/workflows/backend.yml"
+  pull_request:
+    paths:
+      - "services/app/backend/**"
+      - ".github/workflows/backend.yml"
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      DB_URL: jdbc:postgresql://localhost:5432/mydatabase
+      DB_USER: myuser
+      DB_PASSWORD: secret
+      GRADLE_USER_HOME: ${{ github.workspace }}/services/app/backend/.gradle_home
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mydatabase
+          POSTGRES_USER: myuser
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U myuser -d mydatabase"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Run backend tests
+        working-directory: services/app/backend
+        run: ./gradlew test --no-daemon
+
+      - name: Build backend
+        working-directory: services/app/backend
+        run: ./gradlew build -x test --no-daemon
