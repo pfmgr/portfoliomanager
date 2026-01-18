@@ -266,6 +266,9 @@ public class BackupService {
 								 byte[] jsonData,
 								 int expectedRows,
 								 List<DepotActiveSnapshot> depotActiveSnapshots) throws IOException {
+		if (!isValidIdentifier(tableName)) {
+			throw new IllegalArgumentException("Invalid table name in backup: " + tableName);
+		}
 		List<Map<String, Object>> rows = deserializeRows(jsonData);
 		if (expectedRows != rows.size()) {
 			throw new IllegalArgumentException("Row count mismatch for table: " + tableName);
@@ -295,13 +298,14 @@ public class BackupService {
 		// Determine which columns from the backup are actually known in the database schema.
 		List<String> requestedColumns = new ArrayList<>(rows.get(0).keySet());
 		List<String> columns = requestedColumns.stream()
+				.filter(this::isValidIdentifier)
 				.filter(col -> columnInfos.containsKey(col.toLowerCase(Locale.ROOT)))
 				.collect(Collectors.toList());
 		if (columns.isEmpty()) {
 			throw new IllegalArgumentException("No valid columns found for table: " + tableName);
 		}
 		if (columns.size() != requestedColumns.size()) {
-			throw new IllegalArgumentException("Backup contains unknown columns for table: " + tableName);
+			throw new IllegalArgumentException("Backup contains unknown or invalid columns for table: " + tableName);
 		}
 		String columnList = columns.stream()
 				.map(this::quoteIdentifier)
@@ -318,6 +322,10 @@ public class BackupService {
 			}
 			namedParameterJdbcTemplate.update(sql, params);
 		}
+	private boolean isValidIdentifier(String name) {
+		return name != null && name.matches("[A-Za-z_][A-Za-z0-9_]*");
+	}
+
 		if (needsSupersedesUpdate && !supersedesUpdates.isEmpty()) {
 			applySupersedesUpdates(supersedesUpdates);
 		}
