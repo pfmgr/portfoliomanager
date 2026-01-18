@@ -231,8 +231,19 @@ public class KnowledgeBaseBackupService {
 		if (needsSupersedesUpdate) {
 			supersedesUpdates = collectSupersedesUpdates(rows);
 		}
-		List<String> columns = new ArrayList<>(rows.get(0).keySet());
 		Map<String, ColumnInfo> columnInfos = getColumnInfos(tableName);
+		// Determine and validate the list of columns based on the actual table schema
+		List<String> columns = new ArrayList<>();
+		for (String columnName : rows.get(0).keySet()) {
+			String key = columnName.toLowerCase(Locale.ROOT);
+			if (!columnInfos.containsKey(key)) {
+				throw new IllegalArgumentException("Unknown column '" + columnName + "' for table: " + tableName);
+			}
+			columns.add(columnName);
+		}
+		if (columns.isEmpty()) {
+			throw new IllegalArgumentException("No valid columns found for table: " + tableName);
+		}
 		String columnList = columns.stream()
 				.map(this::quoteIdentifier)
 				.reduce((left, right) -> left + ", " + right)
