@@ -10,6 +10,8 @@
 name: Publish Backend Docker image
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
@@ -37,6 +39,10 @@ jobs:
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
           images: index.docker.io/fg1212/portfoliomanager-backend
+          tags: |
+            type=raw,value=snapshot,enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_tag}}
+            type=ref,event=tag
 
       - name: Build and push Docker image
         id: push
@@ -54,4 +60,3 @@ jobs:
           subject-name: index.docker.io/fg1212/portfoliomanager-backend
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
-
