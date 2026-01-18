@@ -60,6 +60,8 @@ def coverageExcludes = [
 
 tasks.named('jacocoTestReport') {
 	dependsOn tasks.test
+	dependsOn tasks.compileJava
+	dependsOn tasks.processResources
 	classDirectories.setFrom(files(classDirectories.files.collect {
 		fileTree(dir: it, exclude: coverageExcludes)
 	}))
@@ -72,6 +74,8 @@ tasks.named('jacocoTestReport') {
 
 tasks.named('jacocoTestCoverageVerification') {
 	dependsOn tasks.test
+	dependsOn tasks.compileJava
+	dependsOn tasks.processResources
 	classDirectories.setFrom(files(classDirectories.files.collect {
 		fileTree(dir: it, exclude: coverageExcludes)
 	}))
