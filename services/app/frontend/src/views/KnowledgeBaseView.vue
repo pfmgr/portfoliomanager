@@ -2343,7 +2343,9 @@ function formatActionStatus(status) {
 
 function canUseStorage() {
   if (typeof window === 'undefined') return false
-  if (import.meta.env?.MODE === 'test') return false
+  if (import.meta.env?.MODE === 'test') {
+    return window.__ENABLE_TEST_STORAGE__ === true
+  }
   try {
     return !!window.localStorage
   } catch (err) {

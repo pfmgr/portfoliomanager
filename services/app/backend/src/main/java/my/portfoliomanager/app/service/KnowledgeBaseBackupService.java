@@ -1,11 +1,11 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.cfg.DateTimeFeature;
+import tools.jackson.databind.json.JsonMapper;
 import my.portfoliomanager.app.dto.KnowledgeBaseImportResultDto;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -72,9 +72,9 @@ public class KnowledgeBaseBackupService {
 									  DataSource dataSource) {
 		this.jdbcTemplate = jdbcTemplate;
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
-		this.objectMapper = new ObjectMapper()
-				.registerModule(new JavaTimeModule())
-				.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+		this.objectMapper = JsonMapper.builder()
+				.disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
+				.build();
 		this.databaseProductName = resolveDatabaseProductName(dataSource);
 	}
 
@@ -148,7 +148,7 @@ public class KnowledgeBaseBackupService {
 	private byte[] writeJson(List<Map<String, Object>> rows) {
 		try {
 			return objectMapper.writeValueAsBytes(rows);
-		} catch (JsonProcessingException e) {
+		} catch (JacksonException e) {
 			throw new IllegalStateException("Unable to serialize knowledge base data.", e);
 		}
 	}
@@ -247,7 +247,7 @@ public class KnowledgeBaseBackupService {
 				throw new IllegalArgumentException("Unknown column '" + columnName + "' for table: " + tableName);
 			}
 			// Use the canonical column name from schema information
-			columns.add(info.name());
+			columns.add(info.columnName());
 		}
 		if (columns.isEmpty()) {
 			throw new IllegalArgumentException("No valid columns found for table: " + tableName);
@@ -415,7 +415,7 @@ public class KnowledgeBaseBackupService {
 		} else {
 			try {
 				jsonValue = objectMapper.writeValueAsString(normalized);
-			} catch (JsonProcessingException e) {
+			} catch (JacksonException e) {
 				throw new IllegalStateException("Unable to prepare JSON value.", e);
 			}
 		}
@@ -532,11 +532,6 @@ public class KnowledgeBaseBackupService {
 		} catch (SQLException e) {
 			throw new IllegalStateException("Unable to determine database product name.", e);
 		}
-	}
-
-	private String quoteIdentifier(String input) {
-		String escaped = input.replace("\"", "\"\"");
-		return "\"" + escaped + "\"";
 	}
 
 	private String sha256(byte[] data) {

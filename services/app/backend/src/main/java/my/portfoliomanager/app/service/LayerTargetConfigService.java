@@ -1,8 +1,9 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.PropertyNamingStrategies;
+import tools.jackson.databind.json.JsonMapper;
 import my.portfoliomanager.app.dto.LayerTargetConfigRequestDto;
 import my.portfoliomanager.app.dto.LayerTargetConfigResponseDto;
 import my.portfoliomanager.app.model.LayerTargetConfigModel;
@@ -60,8 +61,9 @@ public class LayerTargetConfigService {
 	public LayerTargetConfigService(JdbcTemplate jdbcTemplate, ResourceLoader resourceLoader) {
 		this.jdbcTemplate = jdbcTemplate;
 		this.resourceLoader = resourceLoader;
-		this.jsonMapper = new ObjectMapper();
-		this.jsonMapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+		this.jsonMapper = JsonMapper.builder()
+				.propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+				.build();
 	}
 
 	public LayerTargetEffectiveConfig loadEffectiveConfig() {
@@ -281,7 +283,7 @@ public class LayerTargetConfigService {
 			return Map.of();
 		}
 		Map<String, LayerTargetProfile> profiles = new LinkedHashMap<>();
-		node.fields().forEachRemaining(entry -> {
+		node.properties().forEach(entry -> {
 			String key = entry.getKey().toUpperCase(Locale.ROOT);
 			JsonNode profileNode = entry.getValue();
 			String displayName = extractText(profileNode, "display_name", key);
@@ -333,7 +335,7 @@ public class LayerTargetConfigService {
 			return Map.of();
 		}
 		Map<Integer, String> names = new LinkedHashMap<>();
-		node.fields().forEachRemaining(entry -> {
+		node.properties().forEach(entry -> {
 			Integer layer = toLayer(entry.getKey());
 			if (layer == null) {
 				return;
@@ -351,7 +353,7 @@ public class LayerTargetConfigService {
 			return Map.of();
 		}
 		Map<Integer, Integer> values = new LinkedHashMap<>();
-		node.fields().forEachRemaining(entry -> {
+		node.properties().forEach(entry -> {
 			Integer layer = toLayer(entry.getKey());
 			if (layer == null) {
 				return;
@@ -396,7 +398,7 @@ public class LayerTargetConfigService {
 			return targets;
 		}
 		if (node.isObject()) {
-			node.fields().forEachRemaining(entry -> {
+			node.properties().forEach(entry -> {
 				Integer layer = toLayer(entry.getKey());
 				if (layer == null) {
 					return;
@@ -415,7 +417,7 @@ public class LayerTargetConfigService {
 		if (node == null || node.isMissingNode() || !node.isObject()) {
 			return constraints;
 		}
-		node.fields().forEachRemaining(entry -> {
+		node.properties().forEach(entry -> {
 			BigDecimal value = toBigDecimal(entry.getValue());
 			if (value != null) {
 				constraints.put(entry.getKey(), value);

@@ -1,7 +1,7 @@
 package my.portfoliomanager.app.llm;
 
 import com.sun.net.httpserver.HttpExchange;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;

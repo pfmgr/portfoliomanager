@@ -1,8 +1,5 @@
 services:
   e2e_db_portfolio:
-    build:
-      context: ../../..
-      dockerfile: postgres/Dockerfile
     image: portfoliomanager-postgres:16
     environment:
       POSTGRES_DB: portfolio

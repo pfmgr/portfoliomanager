@@ -5,7 +5,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,10 +14,13 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 
 import java.util.UUID;
 
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -27,14 +29,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(classes = my.portfoliomanager.app.AppApplication.class)
-@AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import(LayerTargetConfigApiIntegrationTest.TestConfig.class)
 class LayerTargetConfigApiIntegrationTest {
 	private static final String JWT_SECRET = UUID.randomUUID().toString();
 
-	@Autowired
 	private MockMvc mockMvc;
+
+	@Autowired
+	private WebApplicationContext context;
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -52,6 +55,10 @@ class LayerTargetConfigApiIntegrationTest {
 
 	@BeforeEach
 	void setUp() {
+		mockMvc = MockMvcBuilders.webAppContextSetup(context)
+				.apply(springSecurity())
+				.build();
+
 		jdbcTemplate.update("delete from layer_target_config");
 	}
 

@@ -1,6 +1,6 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import my.portfoliomanager.app.domain.KnowledgeBaseExtraction;
 import my.portfoliomanager.app.domain.KnowledgeBaseExtractionStatus;
 import my.portfoliomanager.app.repository.KnowledgeBaseExtractionRepository;

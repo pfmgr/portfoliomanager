@@ -1,6 +1,6 @@
 package my.portfoliomanager.app.dto;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 public record InstrumentDossierWebsearchResponseDto(
 		String contentMd,

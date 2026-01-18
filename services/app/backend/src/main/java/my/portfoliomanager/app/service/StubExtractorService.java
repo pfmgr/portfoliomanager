@@ -1,6 +1,6 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import my.portfoliomanager.app.domain.InstrumentDossier;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
 import org.springframework.stereotype.Service;

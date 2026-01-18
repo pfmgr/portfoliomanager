@@ -1,11 +1,11 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.cfg.DateTimeFeature;
+import tools.jackson.databind.json.JsonMapper;
 import javax.sql.DataSource;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -98,9 +98,9 @@ public class BackupService {
 		this.jdbcTemplate = jdbcTemplate;
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
 		this.dataSource = dataSource;
-		this.objectMapper = new ObjectMapper()
-				.registerModule(new JavaTimeModule())
-				.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+		this.objectMapper = JsonMapper.builder()
+				.disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
+				.build();
 		this.databaseProductName = resolveDatabaseProductName();
 	}
 
@@ -171,7 +171,7 @@ public class BackupService {
 	private byte[] writeJson(List<Map<String, Object>> rows) {
 		try {
 			return objectMapper.writeValueAsBytes(rows);
-		} catch (JsonProcessingException e) {
+		} catch (JacksonException e) {
 			throw new IllegalStateException("Unable to serialize table data.", e);
 		}
 	}
@@ -322,14 +322,14 @@ public class BackupService {
 			}
 			namedParameterJdbcTemplate.update(sql, params);
 		}
-	private boolean isValidIdentifier(String name) {
-		return name != null && name.matches("[A-Za-z_][A-Za-z0-9_]*");
-	}
-
 		if (needsSupersedesUpdate && !supersedesUpdates.isEmpty()) {
 			applySupersedesUpdates(supersedesUpdates);
 		}
 		return rows.size();
+	}
+
+	private boolean isValidIdentifier(String name) {
+		return name != null && name.matches("[A-Za-z_][A-Za-z0-9_]*");
 	}
 
 	private List<Map<String, Object>> deserializeRows(byte[] jsonData) throws IOException {
@@ -422,7 +422,7 @@ public class BackupService {
 		} else {
 			try {
 				jsonValue = objectMapper.writeValueAsString(normalized);
-			} catch (JsonProcessingException e) {
+			} catch (JacksonException e) {
 				throw new IllegalStateException("Unable to prepare JSON value.", e);
 			}
 		}

@@ -1,6 +1,6 @@
 package my.portfoliomanager.app.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.dto.AssessorNewInstrumentSuggestionDto;
 import my.portfoliomanager.app.dto.AssessorRunRequestDto;
 import my.portfoliomanager.app.dto.AssessorRunResponseDto;

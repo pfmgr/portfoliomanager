@@ -45,10 +45,11 @@ The intent of this document is to make it straightforward for Codex (and other a
 ## 2) Services & composition
 
 Services in `docker-compose.yml`:
-- `db_portfolio` (Postgres 16.x; built from `postgres/Dockerfile` to raise `max_connections`)
+- `db_portfolio` (Postgres 16.x; uses `portfoliomanager-postgres:16` image that must be available locally or pulled from a registry)
 - `admin_spring` (Spring Boot; reclassification rulesets + advisor API; JWT issuance)
 - `admin_frontend` (Vue 3 + Vite build served by Nginx; proxies /api to admin_spring)
 - `metabase` + `db_metabase` (BI dashboard; included in `docker-compose.yml`). If you don't need it, start only the core services or remove these services.
+Root `docker-compose.yml` only references images; build the app images with `build_docker_containers.sh` or pull them from docker.io before starting the stack.
 
 Ports / binds:
 - Services should bind only to LAN interfaces (e.g. `192.168.x.x`) or be fronted by a LAN-only reverse proxy.
@@ -151,7 +152,8 @@ Important: All unknown instruments should remain `layer=5` until explicitly clas
 ## 7) Developer workflows for Codex
 
 ### Start stack
-- `docker compose up -d --build`
+- Build or pull app images: `./build_docker_containers.sh` (local build) or `docker pull fg1212/portfoliomanager-backend:latest` + `docker pull fg1212/portfoliomanager-frontend:latest` from docker.io.
+- `docker compose up -d`
 - If tests fail against running containers, inspect logs:
   - `docker compose logs --tail=200 db_portfolio`
   - `docker compose logs --tail=200 admin_spring`
@@ -171,7 +173,7 @@ Important: All unknown instruments should remain `layer=5` until explicitly clas
 ### Reset database completely (schema changes)
 Default setup uses named volumes. For a full reset:
 - Stop + remove volumes: `docker compose down -v`
-- Start stack again: `docker compose up -d --build` (Liquibase applies migrations on startup)
+- Start stack again: `docker compose up -d` (Liquibase applies migrations on startup; rebuild images first if needed)
 If you use a bind mount like `./data/postgres_portfolio:/var/lib/postgresql/data`, delete the bind-mounted directory instead.
 
 ### Import depot statements
@@ -183,9 +185,11 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 
 ### Run unit tests
 - Spring Boot (Postgres int-test env + Liquibase + JaCoCo coverage gate):
-  - Start DB: `docker compose -f services/app/backend/int-test-env/compose.yaml up -d` (exposes Postgres on `localhost:5439`, db `mydatabase`, user `myuser`, password `secret`)
-  - `cd services/app/backend`
-  - `GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test`
+  - Preferred: `services/app/backend/run-gradle-build.sh` (starts the int-test env, runs `./gradlew clean build`, and tears down).
+  - Manual:
+    - Start DB: `docker compose -f services/app/backend/int-test-env/compose.yaml up -d` (exposes Postgres on `localhost:5439`, db `mydatabase`, user `myuser`, password `secret`)
+    - `cd services/app/backend`
+    - `GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test`
 - Frontend (Vitest):
   - `cd services/app/frontend`
   - `npm test`
@@ -194,12 +198,13 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - CI: GitHub Actions workflows in `.github/workflows` run frontend build + Vitest and backend test/build against Postgres 16 using `DB_URL/DB_USER/DB_PASSWORD`; keep these aligned with test config if they change.
 
 ### Run Spring Boot tests + coverage
+- Preferred for full build + integration tests in one step: `services/app/backend/run-gradle-build.sh`.
 - `cd services/app/backend`
 - Use `GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home` for agent runs to avoid permission issues.
 - `./gradlew test` (Postgres via int-test env + Liquibase + JaCoCo coverage gate; Postgres must be running as above)
-- If Gradle fails with `Could not determine a usable wildcard IP for this machine` (common in restricted sandboxes), run the backend build + integration tests by building the backend Docker image instead:
-  - `docker compose build admin_spring` (runs `/opt/gradle/bin/gradle clean check bootJar` inside the container build; add `--no-cache` to force rerun)
-  - The backend Dockerfile copies Gradle/JDK from `gradle:9.2-jdk21` and uses a `postgres:16` build stage to provision a temporary Postgres on `localhost:5439`, so the build does not require an external DB.
+- If Gradle fails with `Could not determine a usable wildcard IP for this machine` (common in restricted sandboxes), fall back to the helper script for integration tests and use the Docker build only for packaging:
+  - `services/app/backend/run-gradle-build.sh` for full tests.
+  - `services/app/backend/build-docker.sh` for a build-only BootJar (tests are skipped).
 
 ### Postgres-specific column types (JSONB)
 - Integration tests now run on PostgreSQL (int-test env). Keep explicit JSONB handling where needed:
@@ -285,13 +290,14 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - Whenever the database schema structure changes (new/removed tables, new columns, constraints, or default rows), update the backup/export logic documented above so the exported JSON set and import truncation order cover the new schema; missing this causes backups to open with inconsistent table lists or to silently drop data.
 
 ## Backend validation
-- Backend changes must always be validated via the containerized Gradle build/test pipeline because the host Gradle run is unreliable here. Preferred commands:
-  1. `docker compose build --progress=plain admin_spring` (runs `./gradlew clean bootJar --no-daemon` inside the backend image and prints full compiler/test/coverage output).
-  2. `docker compose run --rm admin_spring /bin/sh -c "cd /app && ./gradlew <task> --stacktrace"` for specific `build`, `test`, or coverage targets when you need extra diagnostics.
-  3. `docker build --progress=plain services/app/backend` if you only need the build step without the Compose stack.
-  4. Always confirm that the required tests/reporting tasks succeeded after any backend change before finishing work so regressions are caught early.
-  5. When Docker commands require it, run them with escalated permissions so `docker compose build` can reach `/var/run/docker.sock`; this is necessary in environments where the user-level daemon socket is blocked.
-  6. If `./gradlew` fails locally because of sandbox/network restrictions (wildcard IP errors, socket permissions, etc.), rerun `docker compose --progress=plain build admin_spring` as the documented fallback and treat the container build result as the authoritative verification.
+- Backend changes must always be validated with full integration tests. Preferred commands:
+  1. `services/app/backend/run-gradle-build.sh` (starts the int-test env, runs `./gradlew clean build`, and tears down).
+  2. `services/app/backend/build-docker.sh` (build-only; runs `./gradlew clean bootJar -x test --no-daemon` inside the backend image).
+  3. `docker compose run --rm admin_spring /bin/sh -c "cd /app && ./gradlew <task> --stacktrace"` for specific `build`, `test`, or coverage targets when you need extra diagnostics.
+  4. `docker build --progress=plain services/app/backend` if you only need the build step without the Compose stack.
+  5. Always confirm that the required tests/reporting tasks succeeded after any backend change before finishing work so regressions are caught early.
+  6. When Docker commands require it, run them with escalated permissions so `docker build` can reach `/var/run/docker.sock`; this is necessary in environments where the user-level daemon socket is blocked.
+  7. If `./gradlew` fails locally because of sandbox/network restrictions (wildcard IP errors, socket permissions, etc.), rerun `services/app/backend/build-docker.sh` as the documented fallback and treat the container build result as the authoritative verification.
 
 ## 10) Operational principles (keep things stable)
 
@@ -381,7 +387,7 @@ Findings (3-10):
 ## 13) Keep AGENTS.MD current
 
 - Whenever you learn something new that affects coordination (new requirements, tooling behavior, environment quirks, or handover notes), add a short entry to AGENTS.MD describing the change. Treat this guide as living documentation so future sessions automatically benefit from the latest context and avoid repeating the same problems.
-- When `gradlew test` fails with “usable wildcard IP,” `docker build services/app/backend` still runs `./gradlew clean bootJar --no-daemon`, so rely on that container build to cover tests/JaCoCo verification.
+- When `gradlew test` fails with “usable wildcard IP,” use `services/app/backend/run-gradle-build.sh` for full tests; Docker builds now skip tests and only package the BootJar.
 
 ## 14) Knowledge Base notes
 

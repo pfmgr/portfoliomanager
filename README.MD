@@ -26,15 +26,24 @@ A self-hosted admin tool for importing Trade Republic PDFs and Deka CSVs, classi
    ADMIN_SPRING_BIND=127.0.0.1
    ADMIN_FRONTEND_BIND=127.0.0.1
    ```
-2. Build and start everything:
+2. Build or pull the application images (frontend + backend):
    ```bash
-   docker compose up -d --build
+   ./build_docker_containers.sh
    ```
-3. Sign in at `/login` with `ADMIN_USER` / `ADMIN_PASS` (JWT login; Basic Auth is not used by the frontend).
-4. Liquibase applies migrations automatically. To reset the database entirely, run:
+   If you have access to docker.io, you can also pull prebuilt images instead:
+   ```bash
+   docker pull fg1212/portfoliomanager-backend:latest
+   docker pull fg1212/portfoliomanager-frontend:latest
+   ```
+3. Start the stack (compose only starts containers; it does not build images):
+   ```bash
+   docker compose up -d
+   ```
+4. Sign in at `/login` with `ADMIN_USER` / `ADMIN_PASS` (JWT login; Basic Auth is not used by the frontend).
+5. Liquibase applies migrations automatically. To reset the database entirely, run:
    ```bash
    docker compose down -v
-   docker compose up -d --build
+   docker compose up -d
    ```
 
 ## Layer targets & advisor profiles
@@ -68,19 +77,21 @@ A self-hosted admin tool for importing Trade Republic PDFs and Deka CSVs, classi
 
 - Frontend tooling expects Node `v25.3.0`; keep local runtimes, CI, and Docker builds aligned.
 - **Backend (Spring Boot, PostgreSQL int-test env, Liquibase, JaCoCo)**
-  - Start test DB once per session:
+  - Preferred: `services/app/backend/run-gradle-build.sh` (starts the int-test env, runs `./gradlew clean build`, and tears down).
+  - Manual setup:
+    - Start test DB once per session:
+      ```bash
+      docker compose -f services/app/backend/int-test-env/compose.yaml up -d
+      ```
+    - Then run tests:
     ```bash
-    docker compose -f services/app/backend/int-test-env/compose.yaml up -d
+    cd services/app/backend
+    GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test
     ```
-  - Then run tests:
-  ```bash
-  cd services/app/backend
-  GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test
-  ```
-  - Stop test DB when done:
-    ```bash
-    docker compose -f services/app/backend/int-test-env/compose.yaml down
-    ```
+    - Stop test DB when done:
+      ```bash
+      docker compose -f services/app/backend/int-test-env/compose.yaml down
+      ```
 - **Frontend unit tests (Vitest)**
   ```bash
   cd services/app/frontend
