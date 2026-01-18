@@ -26,7 +26,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
 	implementation 'org.liquibase:liquibase-core'
-	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.9'
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.1'
 	implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml'
 	implementation 'com.networknt:json-schema-validator:3.0.0'
 	implementation 'org.apache.commons:commons-csv:1.14.1'
