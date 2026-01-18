@@ -1,5 +1,6 @@
 package my.portfoliomanager.app.importer;
 
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 
@@ -120,7 +121,7 @@ public class TrPdfParser implements DepotParser {
 	}
 
 	private List<String> extractLines(byte[] payload) {
-		try (PDDocument doc = PDDocument.load(payload)) {
+		try (PDDocument doc = Loader.loadPDF(payload)) {
 			PDFTextStripper stripper = new PDFTextStripper();
 			String text = stripper.getText(doc);
 			List<String> lines = new ArrayList<>();
