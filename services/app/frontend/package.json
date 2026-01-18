@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.53.0",
-    "@vitest/coverage-v8": "^1.6.0",
+    "@vitest/coverage-v8": "^4.0.17",
     "@vitejs/plugin-vue": "^6.0.3",
     "@vue/test-utils": "^2.4.6",
     "jsdom": "^27.4.0",
