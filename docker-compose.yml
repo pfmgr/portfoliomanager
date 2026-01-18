@@ -34,9 +34,7 @@ services:
     restart: unless-stopped
 
   admin_spring:
-    build:
-      context: ./services/app/backend
-      dockerfile: Dockerfile
+    image: fg1212/portfoliomanager-backend:latest
     environment:
       DB_URL: jdbc:postgresql://db_portfolio:5432/portfolio
       DB_USER: portfolio
@@ -57,9 +55,7 @@ services:
     restart: unless-stopped
 
   admin_frontend:
-    build:
-      context: ./services/app/frontend
-      dockerfile: Dockerfile
+    image: fg1212/portfoliomanager-frontend:latest
     depends_on:
       - admin_spring
     ports:

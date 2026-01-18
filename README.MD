@@ -26,15 +26,24 @@ A self-hosted admin tool for importing Trade Republic PDFs and Deka CSVs, classi
    ADMIN_SPRING_BIND=127.0.0.1
    ADMIN_FRONTEND_BIND=127.0.0.1
    ```
-2. Build and start everything:
+2. Build or pull the application images (frontend + backend):
    ```bash
-   docker compose up -d --build
+   ./build_docker_containers.sh
    ```
-3. Sign in at `/login` with `ADMIN_USER` / `ADMIN_PASS` (JWT login; Basic Auth is not used by the frontend).
-4. Liquibase applies migrations automatically. To reset the database entirely, run:
+   If you have access to docker.io, you can also pull prebuilt images instead:
+   ```bash
+   docker pull fg1212/portfoliomanager-backend:latest
+   docker pull fg1212/portfoliomanager-frontend:latest
+   ```
+3. Start the stack (compose only starts containers; it does not build images):
+   ```bash
+   docker compose up -d
+   ```
+4. Sign in at `/login` with `ADMIN_USER` / `ADMIN_PASS` (JWT login; Basic Auth is not used by the frontend).
+5. Liquibase applies migrations automatically. To reset the database entirely, run:
    ```bash
    docker compose down -v
-   docker compose up -d --build
+   docker compose up -d
    ```
 
 ## Layer targets & advisor profiles
