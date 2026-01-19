@@ -1,2 +1,6 @@
-#!/bin/sh
-docker build -t fg1212/portfoliomanager-backend:latest .
+#!/usr/bin/bash
+if [[ -z "$PORTFOLIO_MANAGER_VERSION" ]]; then
+	export PORTFOLIO_MANAGER_VERSION=latest
+fi
+
+docker build -t fg1212/portfoliomanager-backend:$PORTFOLIO_MANAGER_VERSION .

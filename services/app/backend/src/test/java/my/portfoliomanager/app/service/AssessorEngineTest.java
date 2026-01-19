@@ -118,7 +118,7 @@ class AssessorEngineTest {
 	}
 
 	@Test
-	void disablesWhenBelowMinimumSavingPlanSize() {
+	void discardsWhenBelowMinimumSavingPlanSize() {
 		List<AssessorEngine.SavingPlanItem> plans = List.of(
 				plan("AAA111", 1L, 20.0, 1),
 				plan("BBB222", 1L, 20.0, 2)
@@ -142,12 +142,12 @@ class AssessorEngineTest {
 				false
 		));
 
-		AssessorEngine.SavingPlanSuggestion disable = result.savingPlanSuggestions().stream()
+		AssessorEngine.SavingPlanSuggestion discard = result.savingPlanSuggestions().stream()
 				.filter(item -> "AAA111".equals(item.isin()))
 				.findFirst()
 				.orElseThrow();
-		assertThat(disable.type()).isEqualTo("disable");
-		assertThat(disable.newAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+		assertThat(discard.type()).isEqualTo("discard");
+		assertThat(discard.newAmount()).isEqualByComparingTo(BigDecimal.ZERO);
 	}
 
 	@Test
