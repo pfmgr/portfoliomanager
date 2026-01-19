@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   admin_spring:
-    image: fg1212/portfoliomanager-backend:latest
+    image: fg1212/portfoliomanager-backend:${PORTFOLIO_MANAGER_VERSION:-latest}
     environment:
       DB_URL: jdbc:postgresql://db_portfolio:5432/portfolio
       DB_USER: portfolio
@@ -55,7 +55,7 @@ services:
     restart: unless-stopped
 
   admin_frontend:
-    image: fg1212/portfoliomanager-frontend:latest
+    image: fg1212/portfoliomanager-frontend:${PORTFOLIO_MANAGER_VERSION:-latest}
     depends_on:
       - admin_spring
     ports:

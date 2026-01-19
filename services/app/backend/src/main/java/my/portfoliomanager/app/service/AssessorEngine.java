@@ -1312,7 +1312,7 @@ public class AssessorEngine {
 
 	private String determineType(BigDecimal oldAmount, BigDecimal newAmount) {
 		if (newAmount.signum() == 0 && oldAmount.signum() > 0) {
-			return "disable";
+			return "discard";
 		}
 		if (oldAmount.signum() == 0 && newAmount.signum() > 0) {
 			return "create";
@@ -1328,7 +1328,7 @@ public class AssessorEngine {
 
 	private String buildRationale(String type) {
 		return switch (type) {
-			case "disable" -> "Disable to avoid sub-minimum saving plan size.";
+			case "discard" -> "Discard to avoid sub-minimum saving plan size.";
 			case "increase" -> "Increase to align with target layer allocation.";
 			case "decrease" -> "Decrease to align with target layer allocation.";
 			case "create" -> "Create to align with target layer allocation.";
