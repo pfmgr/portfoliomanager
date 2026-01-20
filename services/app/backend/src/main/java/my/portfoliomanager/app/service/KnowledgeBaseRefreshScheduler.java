@@ -7,6 +7,7 @@ import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionType;
 import my.portfoliomanager.app.dto.KnowledgeBaseRefreshBatchRequestDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.Executors;
@@ -14,6 +15,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Service
+@ConditionalOnProperty(name = "app.kb.refresh-scheduler-enabled", havingValue = "true", matchIfMissing = true)
 public class KnowledgeBaseRefreshScheduler {
 	private static final Logger logger = LoggerFactory.getLogger(KnowledgeBaseRefreshScheduler.class);
 	private final KnowledgeBaseConfigService configService;

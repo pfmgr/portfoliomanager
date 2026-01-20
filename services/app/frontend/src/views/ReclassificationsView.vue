@@ -114,7 +114,7 @@ async function load() {
   loading.value = true
   try {
     const query = `?minConfidence=${minConfidence.value}&onlyDifferent=${onlyDifferent.value}`
-    items.value = await apiRequest(`/advisor/reclassifications${query}`)
+    items.value = await apiRequest(`/rebalancer/reclassifications${query}`)
     selected.value = []
   } finally {
     loading.value = false

@@ -1,38 +1,41 @@
 <template>
   <div>
     <div class="card">
-      <h2>Advisor Summary</h2>
+      <h2>Rebalancer</h2>
       <div class="grid grid-2">
         <label>
           As Of Date
           <input class="input" type="date" v-model="asOf" />
         </label>
-        <div style="display:flex; align-items:flex-end; gap: 0.8rem;">
-          <button class="secondary" @click="load">Refresh</button>
-          <button class="primary" :disabled="savingRun" @click="saveRun">
-            {{ savingRun ? 'Saving…' : 'Save Run' }}
-          </button>
-        </div>
-        <div v-if="constraintChecks.length">
-          <h4>Constraint checks</h4>
-          <ul class="note">
-            <li v-for="constraint in constraintChecks" :key="constraint.name">
-              <strong>{{ constraint.name }}:</strong> {{ constraint.details }}
-              <span :class="['status', constraint.ok ? 'ok' : 'warn']">
-                {{ constraint.ok ? 'OK' : 'Violation' }}
-              </span>
-            </li>
-          </ul>
+        <div class="action-col">
+          <div class="actions">
+            <button class="secondary" :disabled="loading" @click="load">Refresh</button>
+            <button class="primary" :disabled="savingRun || loading" @click="saveRun">
+              {{ savingRun ? 'Saving…' : 'Save Run' }}
+            </button>
+          </div>
+          <p v-if="saveStatus" class="note save-status">{{ saveStatus }}</p>
         </div>
       </div>
+      <div v-if="constraintChecks.length" class="constraint-block">
+        <h4>Constraint checks</h4>
+        <ul class="note">
+          <li v-for="constraint in constraintChecks" :key="constraint.name">
+            <strong>{{ constraint.name }}:</strong> {{ constraint.details }}
+            <span :class="['status', constraint.ok ? 'ok' : 'warn']">
+              {{ constraint.ok ? 'OK' : 'Violation' }}
+            </span>
+          </li>
+        </ul>
+      </div>
       <div v-if="toast" :class="['toast', toastType]">{{ toast }}</div>
-      <p v-if="loading" class="note">Loading summary...</p>
+      <p v-if="loading" class="note">Running rebalancer...</p>
     </div>
 
     <div class="card">
-      <h3>No financal advice</h3>
-      <p>These suggestions do not constitute financial advice!</p>
-      <p>Examine the suggestions critically and use them with due caution!</p>
+      <h3>No financial advice</h3>
+      <p>The rebalancer output does not constitute financial advice.</p>
+      <p>Review the suggestions critically and use them with due caution.</p>
     </div>
 
     <div class="card">
@@ -49,8 +52,13 @@
             </thead>
             <tbody>
               <template v-if="loading">
-                <tr>
+                <tr class="sr-only">
                   <td colspan="3">Loading layer allocations...</td>
+                </tr>
+                <tr v-for="n in 3" :key="`layer-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                  <td><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
                 </tr>
               </template>
               <template v-else-if="summary.layerAllocations.length === 0">
@@ -84,8 +92,13 @@
             </thead>
           <tbody>
             <template v-if="loading">
-              <tr>
+              <tr class="sr-only">
                 <td colspan="3">Loading asset class allocations...</td>
+              </tr>
+              <tr v-for="n in 3" :key="`asset-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                <td><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
               </tr>
             </template>
             <template v-else-if="summary.assetClassAllocations.length === 0">
@@ -120,8 +133,14 @@
             </thead>
           <tbody>
             <template v-if="loading">
-              <tr>
+              <tr class="sr-only">
                 <td colspan="4">Loading top positions...</td>
+              </tr>
+              <tr v-for="n in 3" :key="`top-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                <td><span class="skeleton-block"></span></td>
+                <td><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
               </tr>
             </template>
             <template v-else-if="summary.topPositions.length === 0">
@@ -143,7 +162,7 @@
     </div>
 
     <div class="card" v-if="summary.savingPlanSummary">
-      <h3>Savings plan Advisory</h3>
+      <h3>Savings plan Rebalancing</h3>
       <p v-if="profileName">
         Active profile:
         <strong>{{ profileName }}</strong>
@@ -177,8 +196,14 @@
             </thead>
           <tbody>
             <template v-if="loading">
-              <tr>
+              <tr class="sr-only">
                 <td colspan="4">Loading saving plan monthly totals...</td>
+              </tr>
+              <tr v-for="n in 3" :key="`monthly-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                <td><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
               </tr>
             </template>
             <template v-else-if="summary.savingPlanSummary.monthlyByLayer.length === 0">
@@ -210,8 +235,12 @@
             </thead>
           <tbody>
             <template v-if="loading">
-              <tr>
+              <tr class="sr-only">
                 <td colspan="2">Loading target weights...</td>
+              </tr>
+              <tr v-for="n in 3" :key="`target-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                <td><span class="skeleton-block"></span></td>
+                <td class="num"><span class="skeleton-block"></span></td>
               </tr>
             </template>
             <template v-else-if="summary.savingPlanTargets.length === 0">
@@ -256,8 +285,16 @@
             </thead>
             <tbody>
               <template v-if="loading">
-                <tr>
+                <tr class="sr-only">
                   <td colspan="6">Loading rebalancing proposal...</td>
+                </tr>
+                <tr v-for="n in 3" :key="`proposal-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                  <td><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
                 </tr>
               </template>
               <template v-else-if="summary.savingPlanProposal.layers.length === 0">
@@ -363,8 +400,18 @@
             </thead>
             <tbody>
               <template v-if="loading">
-                <tr>
+                <tr class="sr-only">
                   <td colspan="8">Loading instrument proposals...</td>
+                </tr>
+                <tr v-for="n in 3" :key="`instrument-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                  <td><span class="skeleton-block"></span></td>
+                  <td><span class="skeleton-block"></span></td>
+                  <td><span class="skeleton-block"></span></td>
+                  <td><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td><span class="skeleton-block"></span></td>
                 </tr>
               </template>
               <template v-else-if="instrumentGating && !instrumentGating.knowledgeBaseEnabled">
@@ -424,19 +471,15 @@
 import { onMounted, ref, computed } from 'vue'
 import { apiRequest } from '../api'
 
-const summary = ref({
-  layerAllocations: [],
-  assetClassAllocations: [],
-  topPositions: [],
-  savingPlanSummary: null,
-  savingPlanTargets: [],
-  savingPlanProposal: null
-})
+const summary = ref(emptySummary())
 const asOf = ref('')
 const toast = ref('')
 const toastType = ref('success')
 const loading = ref(false)
 const savingRun = ref(false)
+const saveStatus = ref('')
+const jobState = ref(null)
+let pollTimer = null
 const layerNames = ref({
   1: 'Global Core',
   2: 'Core-Plus',
@@ -474,13 +517,7 @@ const sortedInstrumentProposals = computed(() => sortInstrumentProposals(instrum
 const groupedInstrumentProposals = computed(() => groupInstrumentProposals(sortedInstrumentProposals.value))
 
 async function load() {
-  loading.value = true
-  try {
-    const query = asOf.value ? `?asOf=${asOf.value}` : ''
-    summary.value = await apiRequest(`/advisor/summary${query}`)
-  } finally {
-    loading.value = false
-  }
+  await startRebalancerRun({ saveRun: false })
 }
 
 async function loadLayerNames() {
@@ -495,22 +532,113 @@ async function loadLayerNames() {
 }
 
 async function saveRun() {
-  toast.value = ''
-  toastType.value = 'success'
-  savingRun.value = true
+  await startRebalancerRun({ saveRun: true })
+}
+
+async function startRebalancerRun({ saveRun }) {
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+  saveStatus.value = ''
+  if (saveRun) {
+    toast.value = ''
+    toastType.value = 'success'
+    savingRun.value = true
+    saveStatus.value = 'Saving run...'
+  }
+  loading.value = true
   try {
-    const query = asOf.value ? `?asOf=${asOf.value}` : ''
-    const result = await apiRequest(`/advisor/runs${query}`, { method: 'POST' })
-    if (result?.runId) {
-      toast.value = `Advisor run #${result.runId} saved. See Advisor History.`
-    } else {
-      toast.value = 'Advisor run saved. See Advisor History.'
+    const payload = {}
+    if (asOf.value) {
+      payload.asOf = asOf.value
     }
+    if (saveRun) {
+      payload.saveRun = true
+    }
+    const response = await apiRequest('/rebalancer/run', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+    jobState.value = response
+    await pollRebalancerJob(response?.job_id, saveRun)
   } catch (err) {
+    loading.value = false
+    savingRun.value = false
     toastType.value = 'error'
     toast.value = err.message
-  } finally {
+  }
+}
+
+async function pollRebalancerJob(jobId, saveRun) {
+  if (!jobId) {
+    loading.value = false
     savingRun.value = false
+    toastType.value = 'error'
+    toast.value = 'Rebalancer job was not started.'
+    return
+  }
+  try {
+    const response = await apiRequest(`/rebalancer/run/${jobId}`)
+    jobState.value = response
+    const status = response?.status
+    if (status === 'DONE') {
+      const result = response?.result
+      applySummary(result?.summary)
+      loading.value = false
+      savingRun.value = false
+      if (saveRun) {
+        const runId = result?.saved_run?.runId
+        if (runId) {
+          toast.value = `Rebalancer run #${runId} saved. See Rebalancer History.`
+          saveStatus.value = `Saved run #${runId}.`
+        } else {
+          toast.value = 'Rebalancer run saved. See Rebalancer History.'
+          saveStatus.value = 'Run saved.'
+        }
+      } else {
+        saveStatus.value = ''
+      }
+      return
+    }
+    if (status === 'FAILED') {
+      loading.value = false
+      savingRun.value = false
+      toastType.value = 'error'
+      toast.value = response?.error || 'Rebalancer run failed.'
+      if (saveRun) {
+        saveStatus.value = 'Save failed. Please try again.'
+      }
+      return
+    }
+    pollTimer = setTimeout(() => pollRebalancerJob(jobId, saveRun), 1200)
+  } catch (err) {
+    loading.value = false
+    savingRun.value = false
+    toastType.value = 'error'
+    toast.value = err.message
+    if (saveRun) {
+      saveStatus.value = 'Save failed. Please try again.'
+    }
+  }
+}
+
+function applySummary(nextSummary) {
+  if (!nextSummary) {
+    summary.value = emptySummary()
+    return
+  }
+  summary.value = nextSummary
+}
+
+function emptySummary() {
+  return {
+    layerAllocations: [],
+    assetClassAllocations: [],
+    topPositions: [],
+    savingPlanSummary: null,
+    savingPlanTargets: [],
+    savingPlanProposal: null
   }
 }
 
@@ -783,3 +911,53 @@ onMounted(() => {
   loadLayerNames()
 })
 </script>
+<style scoped>
+.action-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.8rem;
+}
+
+.save-status {
+  margin: 0;
+}
+
+.constraint-block {
+  margin-top: 0.8rem;
+}
+
+.skeleton-row td {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
+
+.skeleton-block {
+  display: block;
+  height: 0.75rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e6e6e6 25%, #f2f2f2 50%, #e6e6e6 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.skeleton-row td.num .skeleton-block {
+  margin-left: auto;
+  width: 70%;
+}
+
+.skeleton-row td .skeleton-block {
+  width: 90%;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+</style>

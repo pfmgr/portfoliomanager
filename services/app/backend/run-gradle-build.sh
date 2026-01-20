@@ -14,6 +14,6 @@ cleanup() {
 
 trap cleanup EXIT
 
-docker compose -f "${COMPOSE_FILE}" up -d --build
+docker compose -f "${COMPOSE_FILE}" up -d
 
 (cd "${BACKEND_DIR}" && ./gradlew clean build)

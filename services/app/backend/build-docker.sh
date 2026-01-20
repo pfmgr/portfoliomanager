@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 if [[ -z "$PORTFOLIO_MANAGER_VERSION" ]]; then
 	export PORTFOLIO_MANAGER_VERSION=latest
 fi

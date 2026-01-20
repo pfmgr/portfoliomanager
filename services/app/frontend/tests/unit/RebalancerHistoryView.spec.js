@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect, vi } from 'vitest'
-import AdvisorHistoryView from '../../src/views/AdvisorHistoryView.vue'
+import RebalancerHistoryView from '../../src/views/RebalancerHistoryView.vue'
 import { apiRequest } from '../../src/api'
 
 vi.mock('../../src/api', () => ({
@@ -9,7 +9,7 @@ vi.mock('../../src/api', () => ({
 
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-describe('AdvisorHistoryView', () => {
+describe('RebalancerHistoryView', () => {
   it('renders saved runs and narrative', async () => {
     apiRequest.mockResolvedValueOnce([
       {
@@ -28,10 +28,10 @@ describe('AdvisorHistoryView', () => {
       summary: {}
     })
 
-    const wrapper = mount(AdvisorHistoryView)
+    const wrapper = mount(RebalancerHistoryView)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Advisor History')
+    expect(wrapper.text()).toContain('Rebalancer History')
     await wrapper.get('button').trigger('click')
     await flushPromises()
 

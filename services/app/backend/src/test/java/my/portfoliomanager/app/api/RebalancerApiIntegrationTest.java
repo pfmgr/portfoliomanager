@@ -1,8 +1,9 @@
 package my.portfoliomanager.app.api;
 
 import my.portfoliomanager.app.llm.NoopLlmClient;
-import org.junit.jupiter.api.BeforeEach;
+import my.portfoliomanager.app.support.TestDatabaseCleaner;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -14,9 +15,9 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
-import my.portfoliomanager.app.support.TestDatabaseCleaner;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -25,13 +26,14 @@ import java.util.UUID;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(classes = my.portfoliomanager.app.AppApplication.class)
 @ActiveProfiles("test")
-@Import(AdvisorApiIntegrationTest.TestConfig.class)
-class AdvisorApiIntegrationTest {
+@Import(RebalancerApiIntegrationTest.TestConfig.class)
+class RebalancerApiIntegrationTest {
 	private static final String JWT_SECRET = UUID.randomUUID().toString();
 
 	private MockMvc mockMvc;
@@ -100,14 +102,18 @@ class AdvisorApiIntegrationTest {
 
 	@Test
 	void summaryEndpointReturnsAllocations() throws Exception {
-		mockMvc.perform(get("/api/advisor/summary")
+		MvcResult result = mockMvc.perform(post("/api/rebalancer/run")
 						.with(httpBasic("admin", "admin")))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.layerAllocations").isArray())
-				.andExpect(jsonPath("$.topPositions").isArray())
-				.andExpect(jsonPath("$.savingPlanSummary.totalActiveAmountEur").value(25.0))
-				.andExpect(jsonPath("$.savingPlanTargets").isArray())
-				.andExpect(jsonPath("$.savingPlanProposal.layers").isArray());
+				.andExpect(jsonPath("$.job_id").isString())
+				.andReturn();
+
+		String jobId = JsonHelper.read(result, "$.job_id").toString();
+		MvcResult doneResult = awaitJob(jobId);
+		String json = doneResult.getResponse().getContentAsString();
+		org.assertj.core.api.Assertions.assertThat(JsonHelper.read(json, "$.status")).isEqualTo("DONE");
+		org.assertj.core.api.Assertions.assertThat(JsonHelper.read(json, "$.result.summary.savingPlanSummary.totalActiveAmountEur"))
+				.isEqualTo(25.0);
 	}
 
 	@Test
@@ -117,24 +123,38 @@ class AdvisorApiIntegrationTest {
 				values ('DE000C', 'COMPLETE', cast(? as jsonb), ?)
 				""", "{\"isin\":\"DE000C\"}", LocalDateTime.now());
 
-		mockMvc.perform(get("/api/advisor/summary")
+		MvcResult result = mockMvc.perform(post("/api/rebalancer/run")
 						.with(httpBasic("admin", "admin")))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.savingPlanProposal.layerBudgets").exists())
-				.andExpect(jsonPath("$.savingPlanProposal.gating.kbComplete").value(true))
-				.andExpect(jsonPath("$.savingPlanProposal.instrumentProposals").isArray())
-				.andExpect(jsonPath("$.savingPlanProposal.instrumentProposals[0].isin").value("DE000C"));
+				.andReturn();
+		String jobId = JsonHelper.read(result, "$.job_id").toString();
+		awaitJob(jobId);
+		mockMvc.perform(get("/api/rebalancer/run/" + jobId)
+						.with(httpBasic("admin", "admin")))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.layerBudgets").exists())
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.gating.kbComplete").value(true))
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals").isArray())
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals[0].isin").value("DE000C"));
 	}
 
 	@Test
-	void advisorRunsPersistAndLoad() throws Exception {
-		mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/advisor/runs")
+	void rebalancerRunsPersistAndLoad() throws Exception {
+		MvcResult result = mockMvc.perform(post("/api/rebalancer/run")
+						.contentType("application/json")
+						.content("{\"saveRun\":true}")
 						.with(httpBasic("admin", "admin")))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.runId").isNumber())
-				.andExpect(jsonPath("$.summary.savingPlanProposal").exists());
+				.andReturn();
+		String jobId = JsonHelper.read(result, "$.job_id").toString();
+		MvcResult doneResult = awaitJob(jobId);
+		mockMvc.perform(get("/api/rebalancer/run/" + jobId)
+						.with(httpBasic("admin", "admin")))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.saved_run.runId").isNumber())
+				.andExpect(jsonPath("$.result.saved_run.summary.savingPlanProposal").exists());
 
-		mockMvc.perform(get("/api/advisor/runs")
+		mockMvc.perform(get("/api/rebalancer/runs")
 						.with(httpBasic("admin", "admin")))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$[0].runId").isNumber());
@@ -142,7 +162,7 @@ class AdvisorApiIntegrationTest {
 
 	@Test
 	void reclassificationsEndpointReturnsResults() throws Exception {
-		mockMvc.perform(get("/api/advisor/reclassifications?minConfidence=0.0&onlyDifferent=false")
+		mockMvc.perform(get("/api/rebalancer/reclassifications?minConfidence=0.0&onlyDifferent=false")
 						.with(httpBasic("admin", "admin")))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$[0].isin").value("DE000C"));
@@ -154,5 +174,33 @@ class AdvisorApiIntegrationTest {
 		NoopLlmClient llmClient() {
 			return new NoopLlmClient();
 		}
+	}
+
+	private static final class JsonHelper {
+		private static Object read(MvcResult result, String path) throws Exception {
+			return read(result.getResponse().getContentAsString(), path);
+		}
+
+		private static Object read(String json, String path) {
+			return com.jayway.jsonpath.JsonPath.read(json, path);
+		}
+	}
+
+	private MvcResult awaitJob(String jobId) throws Exception {
+		for (int i = 0; i < 10; i++) {
+			MvcResult result = mockMvc.perform(get("/api/rebalancer/run/" + jobId)
+							.with(httpBasic("admin", "admin")))
+					.andExpect(status().isOk())
+					.andReturn();
+			String status = JsonHelper.read(result, "$.status").toString();
+			if ("DONE".equals(status) || "FAILED".equals(status)) {
+				return result;
+			}
+			Thread.sleep(200L);
+		}
+		return mockMvc.perform(get("/api/rebalancer/run/" + jobId)
+						.with(httpBasic("admin", "admin")))
+				.andExpect(status().isOk())
+				.andReturn();
 	}
 }
