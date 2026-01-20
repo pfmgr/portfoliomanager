@@ -564,7 +564,8 @@ public class AssessorService {
 		builder.append("minimum_saving_plan_size_eur=").append(minimumSavingPlanSize).append("\n");
 		builder.append("minimum_rebalancing_amount_eur=").append(minimumRebalancingAmount).append("\n");
 		builder.append("allocation_rules=New instrument amounts are split evenly after reserving the minimum per instrument. ")
-				.append("Any remaining euros are distributed alphabetically by ISIN.\n");
+				.append("Any remaining euros are distributed using the weighting; if weighting does not break ties, ")
+				.append("the tie is resolved alphabetically by ISIN.\n");
 		builder.append("within_tolerance=").append(result.diagnostics() != null && result.diagnostics().withinTolerance()).append("\n");
 		builder.append("monthly_total_eur=").append(toAmount(result.currentMonthlyTotal())).append("\n");
 		builder.append("layer_names=").append(config == null ? Map.of() : config.getLayerNames()).append("\n");
