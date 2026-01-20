@@ -2,7 +2,7 @@
 
 This repository contains a small, self-hosted portfolio tracker for **Trade Republic (TR) PDF** and **Deka CSV** exports.
 It imports positions into PostgreSQL and manages savings plans via the **Spring Boot Admin API + Vue 3 UI**, then lets you classify instruments (type/asset class/layer) using a **rules engine**. The Admin UI authenticates via JWT login only.
-The current stack is a **Spring Boot Admin API** plus a **Vue 3 UI** under `services/app/` for imports, reclassification rulesets, reclassifications, and advisor summaries.
+The current stack is a **Spring Boot Admin API** plus a **Vue 3 UI** under `services/app/` for imports, reclassification rulesets, reclassifications, and rebalancer summaries.
 
 The intent of this document is to make it straightforward for Codex (and other agents) to implement changes safely.
 
@@ -31,7 +31,7 @@ The intent of this document is to make it straightforward for Codex (and other a
   - managing reclassification rulesets and applying reclassifications
   - importing/exporting overrides as CSV (skips unknown instruments)
   - creating, editing, deleting savings plans
-  - running advisor summary analysis
+  - running rebalancer analysis
 - Depot statement imports can trigger rule application automatically.
 
 **Database (PostgreSQL)**
@@ -46,7 +46,7 @@ The intent of this document is to make it straightforward for Codex (and other a
 
 Services in `docker-compose.yml`:
 - `db_portfolio` (Postgres 16.x; uses `portfoliomanager-postgres:16` image that must be available locally or pulled from a registry)
-- `admin_spring` (Spring Boot; reclassification rulesets + advisor API; JWT issuance)
+- `admin_spring` (Spring Boot; reclassification rulesets + rebalancer API; JWT issuance)
 - `admin_frontend` (Vue 3 + Vite build served by Nginx; proxies /api to admin_spring)
 - `metabase` + `db_metabase` (BI dashboard; included in `docker-compose.yml`). If you don't need it, start only the core services or remove these services.
 Root `docker-compose.yml` only references images; build the app images with `build_docker_containers.sh` or pull them from docker.io before starting the stack.
@@ -65,7 +65,7 @@ Ports / binds:
 - `services/app/backend/` (Spring Boot API + Liquibase + rules engine)
   - `services/app/backend/src/main/resources/application.yaml` (runtime config; env var mapping)
   - `services/app/backend/src/main/resources/db/changelog/db.changelog-master.yaml` (Liquibase schema/migrations)
-  - `services/app/backend/src/main/resources/layer_targets.json` (advisor target weights + variance tolerance defaults)
+  - `services/app/backend/src/main/resources/layer_targets.json` (rebalancer target weights + variance tolerance defaults)
   - `services/app/backend/src/main/resources/default_classification_ruleset.json` (default reclassification ruleset loaded on first start)
 - `services/app/frontend/` (Vue 3 + Vite UI served via Nginx)
   - `services/app/frontend/src/` (UI code)
@@ -86,7 +86,7 @@ Minimum tables:
 - `import_files(...)` (dedupe file imports by hash)
 - `snapshots(...)`
 - `snapshot_positions(snapshot_id, isin, shares, value_eur, ...)`
-- `advisor_runs(...)` (advisor history)
+- `advisor_runs(...)` (rebalancer history)
 - `instrument_classifications`, `instrument_overrides`
 
 Key invariants / constraints:
@@ -140,12 +140,12 @@ Rule application strategy:
 Important: All unknown instruments should remain `layer=5` until explicitly classified.
 
 ---
-## 6a) Layer target profiles & advisor config
+## 6a) Layer target profiles & rebalancer config
 
-- Five advisor profiles (Classic → Opportunity) live in `services/app/backend/src/main/resources/layer_targets.json`. Each includes layer targets, an acceptable variance (default 3%), a minimum saving plan size (integer EUR, default 15), a minimum rebalancing amount (integer EUR, default 10), max saving plans per layer (default 17), and constraint thresholds (core minimum, layer 4/5 caps) so the advisor can warn about violations even before tolerance checks.
-- The `layer_target_config` table stores a single row (`id=1`). `LayerTargetConfigService` and Liquibase ensure the JSON supports the new schema plus backwards compatibility for legacy `{layer_targets, acceptable_variance_pct}` payloads. The service feeds `LayerTargetEffectiveConfig` to the advisor, merges custom overrides when enabled, and exposes `LayerTargetConfigResponseDto` to the UI.
+- Five rebalancer profiles (Classic → Opportunity) live in `services/app/backend/src/main/resources/layer_targets.json`. Each includes layer targets, an acceptable variance (default 3%), a minimum saving plan size (integer EUR, default 15), a minimum rebalancing amount (integer EUR, default 10), max saving plans per layer (default 17), and constraint thresholds (core minimum, layer 4/5 caps) so the rebalancer can warn about violations even before tolerance checks.
+- The `layer_target_config` table stores a single row (`id=1`). `LayerTargetConfigService` and Liquibase ensure the JSON supports the new schema plus backwards compatibility for legacy `{layer_targets, acceptable_variance_pct}` payloads. The service feeds `LayerTargetEffectiveConfig` to the rebalancer, merges custom overrides when enabled, and exposes `LayerTargetConfigResponseDto` to the UI.
 - API endpoints: `GET /api/layer-targets`, `PUT /api/layer-targets`, `POST /api/layer-targets/reset`. They supply/accept the active profile key, profile display metadata, effective layer targets, variance, layer name mapping, and custom override flags. Liquibase handles default inserts for Postgres, migrating legacy configs into the new shape.
-- The Vue UI (`LayerTargetsView.vue`) renders the “Advisor Profile” panel + new layer target table using the API response. It lets you switch profiles, enable overrides, edit per-layer weights (0–1), variance, minimum saving plan size, minimum rebalancing amount, and max saving plans per layer, and see delta warnings alongside layer names (Global Core, Core-Plus, Themes, Individual Stocks, Unclassified). Overridden weights flow back into the advisor narrative so the LLM and summaries always describe the actual profile in play.
+- The Vue UI (`LayerTargetsView.vue`) renders the “Rebalancer Profile” panel + new layer target table using the API response. It lets you switch profiles, enable overrides, edit per-layer weights (0–1), variance, minimum saving plan size, minimum rebalancing amount, and max saving plans per layer, and see delta warnings alongside layer names (Global Core, Core-Plus, Themes, Individual Stocks, Unclassified). Overridden weights flow back into the rebalancer narrative so the LLM and summaries always describe the actual profile in play.
 
 ---
 
@@ -251,23 +251,23 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/InstrumentController.java`
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/InstrumentEffectiveService.java`
 - **Reclassifications (review + apply)**:
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/api/AdvisorController.java` (`GET /api/advisor/reclassifications`)
+  - `services/app/backend/src/main/java/my/portfoliomanager/app/api/RebalancerController.java` (`GET /api/rebalancer/reclassifications`)
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/RulesetController.java` (`POST /api/rulesets/{name}/apply`)
   - Reclassification suggestions prefer Knowledge Base extraction fields by ISIN; ruleset output is used when KB data is missing.
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/ClassificationService.java`
   - `services/app/frontend/src/views/ReclassificationsView.vue`
 
-- **Advisor analysis + UI**:
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/api/AdvisorController.java`
-  - `services/app/frontend/src/views/AdvisorSummaryView.vue`
-  - `services/app/frontend/src/views/AdvisorHistoryView.vue`
+- **Rebalancer analysis + UI**:
+  - `services/app/backend/src/main/java/my/portfoliomanager/app/api/RebalancerController.java`
+  - `services/app/frontend/src/views/RebalancerView.vue`
+  - `services/app/frontend/src/views/RebalancerHistoryView.vue`
 - **Assessor analysis + UI**:
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/AssessorController.java`
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/AssessorService.java`
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/AssessorEngine.java`
   - `services/app/frontend/src/views/AssessorView.vue`
   - Assessor responses include new instrument suggestions for saving plans and one-time allocations when KB coverage shows missing themes/regions/sub-classes and budgets allow it; narratives must explain the gap and why each instrument fits.
-  - Saving plan assessment gate algorithm: compute target layer budgets from the active advisor profile, derive layer deltas, then walk layers 5→1 and enforce a gate size of `max(minimum saving plan size, minimum rebalancing amount)` by zeroing small positive deltas and snapping small negative deltas to `-gate`, shifting the delta difference to the next higher layer. For each layer with delta ≠ 0: if delta > 0, propose new saving plan candidates via gap detection and KB weighting while respecting min size and max plans; if none are eligible, allocate the full delta to existing plans by KB weights with per-plan deltas ≥ minimum rebalancing. If delta < 0, allocate weighted reductions while keeping post-change amounts ≥ minimum saving plan size; if that is not possible, discard the minimal number of plans (full disable) until the negative delta can be distributed.
+  - Saving plan assessment gate algorithm: compute target layer budgets from the active rebalancer profile, derive layer deltas, then walk layers 5→1 and enforce a gate size of `max(minimum saving plan size, minimum rebalancing amount)` by zeroing small positive deltas and snapping small negative deltas to `-gate`, shifting the delta difference to the next higher layer. For each layer with delta ≠ 0: if delta > 0, propose new saving plan candidates via gap detection and KB weighting while respecting min size and max plans; if none are eligible, allocate the full delta to existing plans by KB weights with per-plan deltas ≥ minimum rebalancing. If delta < 0, allocate weighted reductions while keeping post-change amounts ≥ minimum saving plan size; if that is not possible, discard the minimal number of plans (full disable) until the negative delta can be distributed.
 - **Layer targets config UI**:
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/LayerTargetConfigController.java`
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/LayerTargetConfigService.java`
@@ -275,7 +275,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - `services/app/backend/src/main/resources/layer_targets.json` (targets config defaults)
   - `services/app/backend/src/main/resources/db/changelog/db.changelog-master.yaml` (schema incl. advisor_runs)
 
-- **Spring Boot rulesets + advisor**:
+- **Spring Boot rulesets + rebalancer**:
   - API controllers: `services/app/backend/src/main/java/my/portfoliomanager/app/api`
   - Services: `services/app/backend/src/main/java/my/portfoliomanager/app/service`
   - Rules engine: `services/app/backend/src/main/java/my/portfoliomanager/app/rules`
@@ -283,7 +283,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
   - Vue UI: `services/app/frontend/src`
 - **LLM port (mockable)**:
   - Interface + implementations: `services/app/backend/src/main/java/my/portfoliomanager/app/llm`
-  - Savings plan advisor uses LLM (if enabled) for narrative/explanation only; proposal targets remain deterministic (rule-based).
+  - Savings plan rebalancer uses LLM (if enabled) for narrative/explanation only; proposal targets remain deterministic (rule-based).
 
 ---
 
@@ -393,6 +393,7 @@ Findings (3-10):
 ## 14) Knowledge Base notes
 
 - Knowledge Base endpoints are gated by `KB_ENABLED=true` and a configured LLM provider; when LLM is not configured, `/api/kb/**` returns 503.
+- Test profile disables the KB refresh scheduler via `app.kb.refresh-scheduler-enabled=false` in `services/app/backend/src/test/resources/application-test.yaml`.
 - Backup/import now includes `instrument_dossiers`, `instrument_dossier_extractions`, `instrument_facts`, `kb_config`, `kb_runs`, and `kb_alternatives` in the import order/sequence reset lists; keep BackupService in sync when KB schema changes.
 - Knowledge base dossiers no longer require a matching instrument; unknown ISINs are allowed and may not exist in `instruments`.
 - Knowledge Base UI can generate a dossier draft via async websearch jobs:
@@ -407,6 +408,6 @@ Findings (3-10):
 ### Automatic application
 If you change UI files or observe UI issues, run this review and add the output to the PR description or commit/review log.
 
-### Advisor instrument proposals
-- Instrument-level saving plan proposals are gated by `app.kb.enabled` and the latest `knowledge_base_extractions` status (`COMPLETE`). When gating fails, advisor responses include missing ISINs and no instrument-level proposals.
+### Rebalancer instrument proposals
+- Instrument-level saving plan proposals are gated by `app.kb.enabled` and the latest `knowledge_base_extractions` status (`COMPLETE`). When gating fails, rebalancer responses include missing ISINs and no instrument-level proposals.
 - `instrument_dossier_extractions` are synced into `knowledge_base_extractions` on extraction run/approve/apply.

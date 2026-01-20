@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="card">
-      <h2>Advisor Profile</h2>
+      <h2>Rebalancer Profile</h2>
       <p>Manage the active profile and optional custom overrides.</p>
       <p v-if="selectedProfileName">
         Selected profile:

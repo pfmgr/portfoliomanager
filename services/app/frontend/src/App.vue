@@ -6,8 +6,8 @@
         <ul class="nav-list">
           <li><RouterLink to="/rulesets">Reclassification Rulesets</RouterLink></li>
           <li><RouterLink to="/reclassifications">Reclassifications</RouterLink></li>
-          <li><RouterLink to="/advisor">Advisor Summary</RouterLink></li>
-          <li><RouterLink to="/advisor/history">Advisor History</RouterLink></li>
+          <li><RouterLink to="/rebalancer">Rebalancer</RouterLink></li>
+          <li><RouterLink to="/rebalancer/history">Rebalancer History</RouterLink></li>
           <li><RouterLink to="/assessor">Assessor</RouterLink></li>
           <li><RouterLink to="/layer-targets">Layer Targets</RouterLink></li>
           <li><RouterLink to="/instruments">Effective Instruments</RouterLink></li>

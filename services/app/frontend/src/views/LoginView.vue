@@ -1,7 +1,7 @@
 <template>
   <div class="card" style="max-width: 420px; margin: 4rem auto;">
     <h2>Admin Login</h2>
-    <p>Authenticate to access reclassification rulesets and advisor tools.</p>
+    <p>Authenticate to access reclassification rulesets and rebalancer tools.</p>
     <div v-if="displayMessage" :class="['toast', messageClass]">{{ displayMessage }}</div>
     <form @submit.prevent="submit">
       <label>

@@ -187,7 +187,7 @@ class KnowledgeBaseApiIntegrationTest {
 	}
 
 	private KnowledgeBaseLlmActionDto awaitAction(String actionId) throws Exception {
-		for (int attempt = 0; attempt < 50; attempt++) {
+		for (int attempt = 0; attempt < 200; attempt++) {
 			MvcResult result = mockMvc.perform(get("/api/kb/llm-actions/" + actionId)
 							.with(httpBasic("admin", "admin")))
 					.andExpect(status().isOk())

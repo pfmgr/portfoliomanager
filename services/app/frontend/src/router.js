@@ -2,8 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from './views/LoginView.vue'
 import RulesetsView from './views/RulesetsView.vue'
 import ReclassificationsView from './views/ReclassificationsView.vue'
-import AdvisorSummaryView from './views/AdvisorSummaryView.vue'
-import AdvisorHistoryView from './views/AdvisorHistoryView.vue'
+import RebalancerView from './views/RebalancerView.vue'
+import RebalancerHistoryView from './views/RebalancerHistoryView.vue'
 import AssessorView from './views/AssessorView.vue'
 import LayerTargetsView from './views/LayerTargetsView.vue'
 import ImportsExportsView from './views/ImportsExportsView.vue'
@@ -17,8 +17,8 @@ const routes = [
   { path: '/login', component: LoginView },
   { path: '/rulesets', component: RulesetsView },
   { path: '/reclassifications', component: ReclassificationsView },
-  { path: '/advisor', component: AdvisorSummaryView },
-  { path: '/advisor/history', component: AdvisorHistoryView },
+  { path: '/rebalancer', component: RebalancerView },
+  { path: '/rebalancer/history', component: RebalancerHistoryView },
   { path: '/assessor', component: AssessorView },
   { path: '/layer-targets', component: LayerTargetsView },
   { path: '/instruments', component: InstrumentsView },

@@ -3,47 +3,50 @@ package my.portfoliomanager.app.api;
 import my.portfoliomanager.app.domain.Ruleset;
 import my.portfoliomanager.app.dto.AdvisorRunDetailDto;
 import my.portfoliomanager.app.dto.AdvisorRunDto;
-import my.portfoliomanager.app.dto.AdvisorSummaryDto;
 import my.portfoliomanager.app.dto.ReclassificationDto;
+import my.portfoliomanager.app.dto.RebalancerRunJobResponseDto;
+import my.portfoliomanager.app.dto.RebalancerRunRequestDto;
 import my.portfoliomanager.app.rules.RulesetDefinition;
 import my.portfoliomanager.app.service.AdvisorService;
 import my.portfoliomanager.app.service.ClassificationService;
+import my.portfoliomanager.app.service.RebalancerJobService;
 import my.portfoliomanager.app.service.RulesetService;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.LocalDate;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/advisor")
-public class AdvisorController {
+@RequestMapping("/api/rebalancer")
+public class RebalancerController {
+	private final RebalancerJobService rebalancerJobService;
 	private final AdvisorService advisorService;
 	private final ClassificationService classificationService;
 	private final RulesetService rulesetService;
 
-	public AdvisorController(AdvisorService advisorService, ClassificationService classificationService,
+	public RebalancerController(RebalancerJobService rebalancerJobService,
+								AdvisorService advisorService,
+								ClassificationService classificationService,
 								RulesetService rulesetService) {
+		this.rebalancerJobService = rebalancerJobService;
 		this.advisorService = advisorService;
 		this.classificationService = classificationService;
 		this.rulesetService = rulesetService;
 	}
 
-	@GetMapping("/summary")
-	public AdvisorSummaryDto summary(@RequestParam(required = false)
-									 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate asOf) {
-		return advisorService.summary(asOf);
+	@PostMapping("/run")
+	public RebalancerRunJobResponseDto run(@RequestBody(required = false) RebalancerRunRequestDto request) {
+		return rebalancerJobService.start(request);
 	}
 
-	@PostMapping("/runs")
-	public AdvisorRunDetailDto saveRun(@RequestParam(required = false)
-									   @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate asOf) {
-		return advisorService.saveRun(asOf);
+	@GetMapping("/run/{jobId}")
+	public RebalancerRunJobResponseDto get(@PathVariable("jobId") String jobId) {
+		return rebalancerJobService.get(jobId);
 	}
 
 	@GetMapping("/runs")

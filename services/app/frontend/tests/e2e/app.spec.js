@@ -7,9 +7,56 @@ const seedToken = async (page) => {
 }
 
 const stubApi = async (page) => {
+  let pendingSaveRun = false
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
+    const summaryBody = {
+      layerAllocations: [{ label: '1', valueEur: 100, weightPct: 50 }],
+      assetClassAllocations: [{ label: 'Equity', valueEur: 100, weightPct: 50 }],
+      topPositions: [{ isin: 'DE0000000001', name: 'Alpha', valueEur: 100, weightPct: 50 }],
+      savingPlanSummary: {
+        totalActiveAmountEur: 100,
+        monthlyTotalAmountEur: 80,
+        activeCount: 2,
+        monthlyCount: 1,
+        monthlyByLayer: [
+          { layer: 1, amountEur: 50, weightPct: 62.5, count: 1 },
+          { layer: 2, amountEur: 30, weightPct: 37.5, count: 0 }
+        ]
+      },
+      savingPlanTargets: [
+        { layer: 1, targetWeightPct: 60 },
+        { layer: 2, targetWeightPct: 40 }
+      ],
+      savingPlanProposal: {
+        totalMonthlyAmountEur: 80,
+        targetWeightTotalPct: 100,
+        source: 'llm',
+        narrative: 'Current savings plan distribution matches the Balanced profile within tolerance.',
+        notes: ['Existing savings plan distribution is within tolerance (<= 3.0%) and does not need adjustment.'],
+        layers: [
+          {
+            layer: 1,
+            layerName: 'Global Core',
+            currentAmountEur: 50,
+            currentWeightPct: 62.5,
+            targetWeightPct: 60,
+            targetAmountEur: 48,
+            deltaEur: -2
+          }
+        ],
+        actualDistributionByLayer: { 1: 62.5, 2: 37.5, 3: 0, 4: 0, 5: 0 },
+        targetDistributionByLayer: { 1: 60, 2: 40, 3: 0, 4: 0, 5: 0 },
+        proposedDistributionByLayer: { 1: 62.5, 2: 37.5, 3: 0, 4: 0, 5: 0 },
+        deviationsByLayer: { 1: 2.5, 2: 2.5, 3: 0, 4: 0, 5: 0 },
+        withinTolerance: true,
+        constraints: [],
+        recommendation: 'No change needed; distribution is within tolerance.',
+        selectedProfileKey: 'BALANCED',
+        selectedProfileDisplayName: 'Balanced'
+      }
+    }
 
     if (path === '/api/rulesets') {
       return route.fulfill({
@@ -43,7 +90,7 @@ const stubApi = async (page) => {
         body: JSON.stringify([])
       })
     }
-    if (path.startsWith('/api/advisor/reclassifications')) {
+    if (path.startsWith('/api/rebalancer/reclassifications')) {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -58,59 +105,40 @@ const stubApi = async (page) => {
         }])
       })
     }
-    if (path.startsWith('/api/advisor/summary')) {
+    if (path === '/api/rebalancer/run' && route.request().method() === 'POST') {
+      let payload = {}
+      try {
+        payload = route.request().postDataJSON() ?? {}
+      } catch (err) {
+        payload = {}
+      }
+      pendingSaveRun = Boolean(payload.saveRun)
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-        layerAllocations: [{ label: '1', valueEur: 100, weightPct: 50 }],
-          assetClassAllocations: [{ label: 'Equity', valueEur: 100, weightPct: 50 }],
-          topPositions: [{ isin: 'DE0000000001', name: 'Alpha', valueEur: 100, weightPct: 50 }],
-        savingPlanSummary: {
-          totalActiveAmountEur: 100,
-          monthlyTotalAmountEur: 80,
-          activeCount: 2,
-          monthlyCount: 1,
-          monthlyByLayer: [
-            { layer: 1, amountEur: 50, weightPct: 62.5, count: 1 },
-            { layer: 2, amountEur: 30, weightPct: 37.5, count: 0 }
-          ]
-        },
-        savingPlanTargets: [
-          { layer: 1, targetWeightPct: 60 },
-          { layer: 2, targetWeightPct: 40 }
-        ],
-        savingPlanProposal: {
-          totalMonthlyAmountEur: 80,
-            targetWeightTotalPct: 100,
-            source: 'llm',
-            narrative: 'Current Savings plan distribution matches the Balanced profile within tolerance.',
-            notes: ['Existing savings plan distribution is within tolerance (<= 3.0%) and does not need adjustment.'],
-            layers: [
-              {
-                layer: 1,
-                layerName: 'Global Core',
-                currentAmountEur: 50,
-                currentWeightPct: 62.5,
-                targetWeightPct: 60,
-                targetAmountEur: 48,
-                deltaEur: -2
-              }
-            ],
-            actualDistributionByLayer: { 1: 62.5, 2: 37.5, 3: 0, 4: 0, 5: 0 },
-            targetDistributionByLayer: { 1: 60, 2: 40, 3: 0, 4: 0, 5: 0 },
-            proposedDistributionByLayer: { 1: 62.5, 2: 37.5, 3: 0, 4: 0, 5: 0 },
-            deviationsByLayer: { 1: 2.5, 2: 2.5, 3: 0, 4: 0, 5: 0 },
-            withinTolerance: true,
-            constraints: [],
-            recommendation: 'No change needed; distribution is within tolerance.',
-            selectedProfileKey: 'BALANCED',
-            selectedProfileDisplayName: 'Balanced'
-          }
-        })
+        body: JSON.stringify({ job_id: 'job-1', status: 'PENDING' })
       })
     }
-    if (path === '/api/advisor/runs') {
+    if (path.startsWith('/api/rebalancer/run/')) {
+      const result = { summary: summaryBody }
+      if (pendingSaveRun) {
+        result.saved_run = {
+          runId: 1,
+          createdAt: '2024-01-01T10:00:00Z',
+          asOfDate: '2024-01-01',
+          depotScope: ['tr'],
+          narrativeMd: 'LLM narrative.',
+          summary: summaryBody
+        }
+        pendingSaveRun = false
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ job_id: 'job-1', status: 'DONE', result })
+      })
+    }
+    if (path === '/api/rebalancer/runs') {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -122,7 +150,7 @@ const stubApi = async (page) => {
         }])
       })
     }
-    if (path === '/api/advisor/runs/1') {
+    if (path === '/api/rebalancer/runs/1') {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -308,11 +336,11 @@ test('navigates across main pages', async ({ page }) => {
   await page.goto('/reclassifications')
   await expect(page.getByRole('heading', { name: 'Reclassifications' })).toBeVisible()
 
-  await page.goto('/advisor')
-  await expect(page.getByRole('heading', { name: 'Advisor Summary' })).toBeVisible()
+  await page.goto('/rebalancer')
+  await expect(page.getByRole('heading', { name: 'Rebalancer' })).toBeVisible()
 
-  await page.goto('/advisor/history')
-  await expect(page.getByRole('heading', { name: 'Advisor History' })).toBeVisible()
+  await page.goto('/rebalancer/history')
+  await expect(page.getByRole('heading', { name: 'Rebalancer History' })).toBeVisible()
 
   await page.goto('/layer-targets')
   await expect(page.getByRole('heading', { name: 'Layer Targets' })).toBeVisible()
@@ -347,16 +375,16 @@ test('savings plans edit then reset form', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Create Savings plan' })).toBeVisible()
 })
 
-test('advisor displays savings plan advisory', async ({ page }) => {
-  await page.goto('/advisor')
-  await expect(page.getByRole('heading', { name: 'Savings plan Advisory' })).toBeVisible()
+test('rebalancer displays savings plan rebalancing', async ({ page }) => {
+  await page.goto('/rebalancer')
+  await expect(page.getByRole('heading', { name: 'Savings plan Rebalancing' })).toBeVisible()
   await expect(page.getByText('Monthly by Layer')).toBeVisible()
   await expect(page.getByText('Rebalancing Proposal (Savings plan weights)')).toBeVisible()
   await expect(page.getByText('Proposal source')).toBeVisible()
 })
 
-test('advisor history loads narrative', async ({ page }) => {
-  await page.goto('/advisor/history')
+test('rebalancer history loads narrative', async ({ page }) => {
+  await page.goto('/rebalancer/history')
   await page.getByRole('button', { name: 'View' }).click({ force: true })
   await expect(page.getByText('LLM narrative.')).toBeVisible()
 })

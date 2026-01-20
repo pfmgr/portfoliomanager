@@ -1,15 +1,15 @@
 <template>
   <div>
     <div class="card">
-      <h2>Advisor History</h2>
-      <p class="note">Saved advisor runs with narrative snapshots.</p>
+      <h2>Rebalancer History</h2>
+      <p class="note">Saved rebalancer runs with narrative snapshots.</p>
     </div>
 
     <div class="card">
       <h3>Saved Runs</h3>
       <div class="table-wrap">
         <table class="table">
-          <caption class="sr-only">Saved advisor runs.</caption>
+          <caption class="sr-only">Saved rebalancer runs.</caption>
           <thead>
             <tr>
               <th scope="col">Run</th>
@@ -22,12 +22,12 @@
           <tbody>
             <template v-if="loading">
               <tr>
-                <td colspan="5">Loading advisor runs...</td>
+                <td colspan="5">Loading rebalancer runs...</td>
               </tr>
             </template>
             <template v-else-if="runs.length === 0">
               <tr>
-                <td colspan="5">No saved advisor runs yet.</td>
+                <td colspan="5">No saved rebalancer runs yet.</td>
               </tr>
             </template>
             <template v-else>
@@ -71,14 +71,14 @@ const loading = ref(false)
 async function loadRuns() {
   loading.value = true
   try {
-    runs.value = await apiRequest('/advisor/runs')
+    runs.value = await apiRequest('/rebalancer/runs')
   } finally {
     loading.value = false
   }
 }
 
 async function loadRun(runId) {
-  selectedRun.value = await apiRequest(`/advisor/runs/${runId}`)
+  selectedRun.value = await apiRequest(`/rebalancer/runs/${runId}`)
 }
 
 function formatDateTime(value) {

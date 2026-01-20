@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect, vi } from 'vitest'
-import AdvisorSummaryView from '../../src/views/AdvisorSummaryView.vue'
+import RebalancerView from '../../src/views/RebalancerView.vue'
 import { apiRequest } from '../../src/api'
 
 vi.mock('../../src/api', () => ({
@@ -9,9 +9,9 @@ vi.mock('../../src/api', () => ({
 
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-describe('AdvisorSummaryView', () => {
-  it('renders saving plan advisory when available', async () => {
-    apiRequest.mockResolvedValue({
+describe('RebalancerView', () => {
+  it('renders saving plan rebalancing when available', async () => {
+    const summary = {
       layerAllocations: [],
       assetClassAllocations: [],
       topPositions: [],
@@ -93,14 +93,40 @@ describe('AdvisorSummaryView', () => {
           }
         ]
       }
+    }
+
+    apiRequest.mockImplementation((url) => {
+      if (url === '/layer-targets') {
+        return Promise.resolve({
+          layerNames: {
+            1: 'Global Core',
+            2: 'Core-Plus',
+            3: 'Themes',
+            4: 'Individual Stocks',
+            5: 'Unclassified'
+          }
+        })
+      }
+      if (url === '/rebalancer/run') {
+        return Promise.resolve({ job_id: 'job-1', status: 'PENDING' })
+      }
+      if (url === '/rebalancer/run/job-1') {
+        return Promise.resolve({
+          job_id: 'job-1',
+          status: 'DONE',
+          result: { summary }
+        })
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`))
     })
 
-    const wrapper = mount(AdvisorSummaryView)
+    const wrapper = mount(RebalancerView)
+    await flushPromises()
     await flushPromises()
 
     const text = wrapper.text()
     expect(text).toContain('Layer Allocations')
-    expect(text).toContain('Savings plan Advisory')
+    expect(text).toContain('Savings plan Rebalancing')
     expect(text).toContain('Monthly by Layer')
     expect(text).toContain('Rebalancing Proposal (Savings plan weights)')
     expect(text).toContain('Instrument Proposal')
