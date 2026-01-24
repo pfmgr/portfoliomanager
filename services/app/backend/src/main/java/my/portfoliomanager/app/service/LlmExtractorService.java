@@ -1,6 +1,8 @@
 package my.portfoliomanager.app.service;
 
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.domain.InstrumentDossier;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;
@@ -19,9 +21,12 @@ import java.util.Locale;
 @ConditionalOnProperty(name = "app.kb.llm-enabled", havingValue = "true")
 public class LlmExtractorService implements ExtractorService {
 	private final KnowledgeBaseLlmClient llmClient;
+	private final ObjectMapper objectMapper;
 
-	public LlmExtractorService(KnowledgeBaseLlmClient llmClient) {
+	public LlmExtractorService(KnowledgeBaseLlmClient llmClient,
+							   ObjectMapper objectMapper) {
 		this.llmClient = llmClient;
+		this.objectMapper = objectMapper;
 	}
 
 	@Override
@@ -75,6 +80,20 @@ public class LlmExtractorService implements ExtractorService {
 
 		List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions = parseRegions(data, warnings);
 		List<InstrumentDossierExtractionPayload.HoldingPayload> topHoldings = parseTopHoldings(data, warnings);
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = parsePayload(
+				data == null ? null : data.get("financials"),
+				InstrumentDossierExtractionPayload.FinancialsPayload.class,
+				warnings,
+				"financials"
+		);
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = parsePayload(
+				data == null ? null : data.get("valuation"),
+				InstrumentDossierExtractionPayload.ValuationPayload.class,
+				warnings,
+				"valuation"
+		);
+		PeCurrentAsOfFallbackResult fallbackResult = applyPeCurrentAsOfFallback(dossier, valuation, warnings);
+		valuation = fallbackResult.valuation();
 
 		InstrumentDossierExtractionPayload.EtfPayload etfPayload =
 				(ongoingChargesPct == null && benchmarkIndex == null)
@@ -90,8 +109,24 @@ public class LlmExtractorService implements ExtractorService {
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields = parseMissingFields(data);
 		if (missingFields == null || missingFields.isEmpty()) {
 			missingFields = buildMissingFields(
-					name, instrumentType, assetClass, subClass, layer, layerNotes, ongoingChargesPct, benchmarkIndex, sriValue
+					name,
+					instrumentType,
+					assetClass,
+					subClass,
+					layer,
+					layerNotes,
+					ongoingChargesPct,
+					benchmarkIndex,
+					sriValue,
+					financials,
+					valuation
 			);
+		}
+		if (fallbackResult.applied() && missingFields != null && !missingFields.isEmpty()) {
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> updatedMissing = new ArrayList<>(missingFields);
+			updatedMissing.removeIf(item -> item != null
+					&& ("pe_current_asof".equals(item.field()) || "valuation.pe_current_asof".equals(item.field())));
+			missingFields = updatedMissing;
 		}
 		List<InstrumentDossierExtractionPayload.WarningPayload> llmWarnings = parseWarnings(data);
 		if (llmWarnings != null && !llmWarnings.isEmpty()) {
@@ -110,6 +145,8 @@ public class LlmExtractorService implements ExtractorService {
 				riskPayload,
 				regions,
 				topHoldings,
+				financials,
+				valuation,
 				sources,
 				missingFields,
 				warnings.isEmpty() ? null : warnings
@@ -157,7 +194,9 @@ public class LlmExtractorService implements ExtractorService {
 			String layerNotes,
 			BigDecimal ongoingChargesPct,
 			String benchmarkIndex,
-			Integer summaryRiskIndicator
+			Integer summaryRiskIndicator,
+			InstrumentDossierExtractionPayload.FinancialsPayload financials,
+			InstrumentDossierExtractionPayload.ValuationPayload valuation
 	) {
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing = new ArrayList<>();
 		addMissing(missing, "name", name);
@@ -169,6 +208,8 @@ public class LlmExtractorService implements ExtractorService {
 		addMissing(missing, "etf.ongoing_charges_pct", ongoingChargesPct);
 		addMissing(missing, "etf.benchmark_index", benchmarkIndex);
 		addMissing(missing, "risk.summary_risk_indicator.value", summaryRiskIndicator);
+		addMissing(missing, "financials", financials);
+		addMissing(missing, "valuation", valuation);
 		return missing;
 	}
 
@@ -215,6 +256,73 @@ public class LlmExtractorService implements ExtractorService {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
 		}
 		return warnings.isEmpty() ? null : warnings;
+	}
+
+	private <T> T parsePayload(JsonNode node,
+							   Class<T> target,
+							   List<InstrumentDossierExtractionPayload.WarningPayload> warnings,
+							   String label) {
+		if (node == null || node.isNull()) {
+			return null;
+		}
+		if (!node.isObject()) {
+			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+					"Invalid " + label + " payload; expected object, set to null."
+			));
+			return null;
+		}
+		try {
+			return objectMapper.treeToValue(node, target);
+		} catch (Exception ex) {
+			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+					"Failed to parse " + label + " payload; set to null."
+			));
+			return null;
+		}
+	}
+
+	private PeCurrentAsOfFallbackResult applyPeCurrentAsOfFallback(
+			InstrumentDossier dossier,
+			InstrumentDossierExtractionPayload.ValuationPayload valuation,
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
+		if (valuation == null || valuation.peCurrent() == null || valuation.peCurrentAsOf() != null) {
+			return new PeCurrentAsOfFallbackResult(valuation, false);
+		}
+		java.time.LocalDateTime updatedAt = dossier == null ? null : dossier.getUpdatedAt();
+		if (updatedAt == null && dossier != null) {
+			updatedAt = dossier.getCreatedAt();
+		}
+		if (updatedAt == null) {
+			return new PeCurrentAsOfFallbackResult(valuation, false);
+		}
+		String asOf = updatedAt.toLocalDate().toString();
+		try {
+			java.util.Map<String, Object> raw = objectMapper.convertValue(
+					valuation,
+					new TypeReference<java.util.Map<String, Object>>() {
+					}
+			);
+			raw.put("pe_current_asof", asOf);
+			InstrumentDossierExtractionPayload.ValuationPayload updated = objectMapper.convertValue(
+					raw,
+					InstrumentDossierExtractionPayload.ValuationPayload.class
+			);
+			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+					"pe_current_asof missing; defaulted to dossier updated date " + asOf + "."
+			));
+			return new PeCurrentAsOfFallbackResult(updated, true);
+		} catch (IllegalArgumentException ex) {
+			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+					"Failed to apply pe_current_asof fallback; kept null."
+			));
+			return new PeCurrentAsOfFallbackResult(valuation, false);
+		}
+	}
+
+	private record PeCurrentAsOfFallbackResult(
+			InstrumentDossierExtractionPayload.ValuationPayload valuation,
+			boolean applied
+	) {
 	}
 
 	private String textOrNull(JsonNode node, String... fields) {

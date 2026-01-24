@@ -650,6 +650,23 @@ public class KnowledgeBaseService {
             Integer value = payload.risk().summaryRiskIndicator().value();
             upsertFact(isin, "risk.summary_risk_indicator.value", null, value == null ? null : BigDecimal.valueOf(value), null);
         }
+        InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+        if (financials != null) {
+            upsertFact(isin, "financials.revenue", null, financials.revenue(), null);
+            upsertFact(isin, "financials.revenue_currency", financials.revenueCurrency(), null, null);
+            upsertFact(isin, "financials.revenue_eur", null, financials.revenueEur(), "eur");
+            upsertFact(isin, "financials.revenue_period_end", financials.revenuePeriodEnd(), null, null);
+            upsertFact(isin, "financials.revenue_period_type", financials.revenuePeriodType(), null, null);
+            upsertFact(isin, "financials.net_income", null, financials.netIncome(), null);
+            upsertFact(isin, "financials.net_income_currency", financials.netIncomeCurrency(), null, null);
+            upsertFact(isin, "financials.net_income_eur", null, financials.netIncomeEur(), "eur");
+            upsertFact(isin, "financials.net_income_period_end", financials.netIncomePeriodEnd(), null, null);
+            upsertFact(isin, "financials.net_income_period_type", financials.netIncomePeriodType(), null, null);
+            upsertFact(isin, "financials.dividend_per_share", null, financials.dividendPerShare(), null);
+            upsertFact(isin, "financials.dividend_currency", financials.dividendCurrency(), null, null);
+            upsertFact(isin, "financials.dividend_asof", financials.dividendAsOf(), null, null);
+            upsertFact(isin, "financials.fx_rate_to_eur", null, financials.fxRateToEur(), null);
+        }
         InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
         if (valuation != null) {
             upsertFact(isin, "valuation.ebitda", null, valuation.ebitda(), null);
@@ -661,9 +678,30 @@ public class KnowledgeBaseService {
             upsertFact(isin, "valuation.market_cap", null, valuation.marketCap(), null);
             upsertFact(isin, "valuation.shares_outstanding", null, valuation.sharesOutstanding(), null);
             upsertFact(isin, "valuation.ev_to_ebitda", null, valuation.evToEbitda(), null);
+            upsertFact(isin, "valuation.net_rent", null, valuation.netRent(), null);
+            upsertFact(isin, "valuation.net_rent_currency", valuation.netRentCurrency(), null, null);
+            upsertFact(isin, "valuation.net_rent_period_end", valuation.netRentPeriodEnd(), null, null);
+            upsertFact(isin, "valuation.net_rent_period_type", valuation.netRentPeriodType(), null, null);
+            upsertFact(isin, "valuation.noi", null, valuation.noi(), null);
+            upsertFact(isin, "valuation.noi_currency", valuation.noiCurrency(), null, null);
+            upsertFact(isin, "valuation.noi_period_end", valuation.noiPeriodEnd(), null, null);
+            upsertFact(isin, "valuation.noi_period_type", valuation.noiPeriodType(), null, null);
+            upsertFact(isin, "valuation.affo", null, valuation.affo(), null);
+            upsertFact(isin, "valuation.affo_currency", valuation.affoCurrency(), null, null);
+            upsertFact(isin, "valuation.affo_period_end", valuation.affoPeriodEnd(), null, null);
+            upsertFact(isin, "valuation.affo_period_type", valuation.affoPeriodType(), null, null);
+            upsertFact(isin, "valuation.ffo", null, valuation.ffo(), null);
+            upsertFact(isin, "valuation.ffo_currency", valuation.ffoCurrency(), null, null);
+            upsertFact(isin, "valuation.ffo_period_end", valuation.ffoPeriodEnd(), null, null);
+            upsertFact(isin, "valuation.ffo_period_type", valuation.ffoPeriodType(), null, null);
+            upsertFact(isin, "valuation.ffo_type", valuation.ffoType(), null, null);
             upsertFact(isin, "valuation.eps_norm", null, valuation.epsNorm(), null);
             upsertFact(isin, "valuation.pe_longterm", null, valuation.peLongterm(), null);
             upsertFact(isin, "valuation.earnings_yield_longterm", null, valuation.earningsYieldLongterm(), null);
+            upsertFact(isin, "valuation.pe_current", null, valuation.peCurrent(), null);
+            upsertFact(isin, "valuation.pe_current_asof", valuation.peCurrentAsOf(), null, null);
+            upsertFact(isin, "valuation.pb_current", null, valuation.pbCurrent(), null);
+            upsertFact(isin, "valuation.pb_current_asof", valuation.pbCurrentAsOf(), null, null);
             upsertFact(isin, "valuation.pe_ttm_holdings", null, valuation.peTtmHoldings(), null);
             upsertFact(isin, "valuation.earnings_yield_ttm_holdings", null, valuation.earningsYieldTtmHoldings(), null);
             upsertFact(isin, "valuation.holdings_coverage_weight_pct", null, valuation.holdingsCoverageWeightPct(), "pct");
@@ -889,10 +927,17 @@ public class KnowledgeBaseService {
                     - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                     - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                     - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
-                    - For single stocks, include EBITDA (with currency and TTM/FY label) and a long-term P/E based on EPS_norm:
-                      EPS_norm = median(EPS_t-1 ... EPS_t-7) using adjusted EPS if available; apply flooring for very small positive EPS to avoid extreme P/E.
-                      Report: EPS_norm value, years used/available, EPS type, EPS floor policy/value, P/E_longterm, earnings_yield_longterm, data-as-of date, plus EBITDA currency.
+                    - For single stocks, collect the raw inputs needed for long-term P/E:
+                      EBITDA (currency + TTM/FY label), share price (currency + as-of date), and annual EPS history for the last 3-7 fiscal years (include year, period end, EPS value, and whether EPS is adjusted or reported).
+                      If EPS history is incomplete or only a single year is available, still report what you have and explain the gap; do not fabricate long-term P/E.
                       If EBITDA currency is not EUR, include EBITDA converted to EUR and the FX rate used (with date).
+                      If available, include market cap and shares outstanding so price can be derived.
+                    - Always capture the current P/E (TTM/forward as stated) with an as-of date, even when long-term metrics are available.
+                    - If EBITDA is stated, capture it with currency, period type (TTM/FY), and period end.
+                    - If revenue or net income are stated, capture them with currency, period type (TTM/FY), and period end; include EUR conversion and FX rate when not in EUR.
+                    - If a dividend per share is stated, capture the amount, currency, and as-of date.
+                    - If long-term P/E or multi-year EPS history is unavailable, also capture price-to-book (P/B) with an as-of date.
+                    - For real estate/REITs, capture net rent, NOI, AFFO, and FFO (label FFO I if specified), including currency, period type (TTM/FY), and period end/as-of date.
                     - For ETFs, include holdings-based TTM P/E computed from historical earnings of holdings:
                       E/P_portfolio = sum(w_i * E/P_i), P/E_ttm_holdings = 1 / E/P_portfolio.
                       Report: P/E_ttm_holdings, earnings_yield_ttm_holdings, holdings coverage (count and weight pct), holdings as-of date.

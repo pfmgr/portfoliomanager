@@ -363,7 +363,8 @@
                     <summary>Valuation metrics</summary>
                     <p class="hint">
                       Long-term P/E uses smoothed EPS. Holdings P/E aggregates trailing earnings from
-                      the ETF's holdings. EBITDA is normalized to EUR when FX rates are available.
+                      the ETF's holdings. Current P/E and P/B may be used when history is missing.
+                      EBITDA and REIT profitability metrics are normalized to EUR when FX rates are available.
                     </p>
                     <p v-if="!hasValuationData" class="hint">No valuation data found in this extraction.</p>
                     <dl v-else class="kb-dl">
@@ -1445,6 +1446,91 @@ const extractionValuationFields = computed(() => {
       value: formatFieldValue(valuation.ev_to_ebitda ?? valuation.evToEbitda)
     },
     {
+      label: 'Net rent',
+      title: 'Net rental income (real estate)',
+      value: formatFieldValue(valuation.net_rent ?? valuation.netRent)
+    },
+    {
+      label: 'Net rent (ccy)',
+      title: 'Net rent reporting currency',
+      value: formatFieldValue(valuation.net_rent_currency ?? valuation.netRentCurrency)
+    },
+    {
+      label: 'Net rent period',
+      title: 'Net rent period end or fiscal year',
+      value: formatFieldValue(valuation.net_rent_period_end ?? valuation.netRentPeriodEnd)
+    },
+    {
+      label: 'Net rent period type',
+      title: 'Net rent period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.net_rent_period_type ?? valuation.netRentPeriodType)
+    },
+    {
+      label: 'NOI',
+      title: 'Net operating income (real estate)',
+      value: formatFieldValue(valuation.noi)
+    },
+    {
+      label: 'NOI (ccy)',
+      title: 'NOI reporting currency',
+      value: formatFieldValue(valuation.noi_currency ?? valuation.noiCurrency)
+    },
+    {
+      label: 'NOI period',
+      title: 'NOI period end or fiscal year',
+      value: formatFieldValue(valuation.noi_period_end ?? valuation.noiPeriodEnd)
+    },
+    {
+      label: 'NOI period type',
+      title: 'NOI period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.noi_period_type ?? valuation.noiPeriodType)
+    },
+    {
+      label: 'AFFO',
+      title: 'Adjusted funds from operations',
+      value: formatFieldValue(valuation.affo)
+    },
+    {
+      label: 'AFFO (ccy)',
+      title: 'AFFO reporting currency',
+      value: formatFieldValue(valuation.affo_currency ?? valuation.affoCurrency)
+    },
+    {
+      label: 'AFFO period',
+      title: 'AFFO period end or fiscal year',
+      value: formatFieldValue(valuation.affo_period_end ?? valuation.affoPeriodEnd)
+    },
+    {
+      label: 'AFFO period type',
+      title: 'AFFO period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.affo_period_type ?? valuation.affoPeriodType)
+    },
+    {
+      label: 'FFO',
+      title: 'Funds from operations',
+      value: formatFieldValue(valuation.ffo)
+    },
+    {
+      label: 'FFO (ccy)',
+      title: 'FFO reporting currency',
+      value: formatFieldValue(valuation.ffo_currency ?? valuation.ffoCurrency)
+    },
+    {
+      label: 'FFO period',
+      title: 'FFO period end or fiscal year',
+      value: formatFieldValue(valuation.ffo_period_end ?? valuation.ffoPeriodEnd)
+    },
+    {
+      label: 'FFO period type',
+      title: 'FFO period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.ffo_period_type ?? valuation.ffoPeriodType)
+    },
+    {
+      label: 'FFO type',
+      title: 'FFO variant (e.g., FFO I)',
+      value: formatFieldValue(valuation.ffo_type ?? valuation.ffoType)
+    },
+    {
       label: 'P/E (LT)',
       title: 'Long-term P/E using smoothed EPS',
       value: formatFieldValue(valuation.pe_longterm ?? valuation.peLongterm)
@@ -1453,6 +1539,26 @@ const extractionValuationFields = computed(() => {
       label: 'Earnings yield (LT)',
       title: 'Inverse of long-term P/E using smoothed EPS',
       value: formatFieldValue(valuation.earnings_yield_longterm ?? valuation.earningsYieldLongterm)
+    },
+    {
+      label: 'P/E (current)',
+      title: 'Current price-to-earnings ratio (TTM/forward as stated)',
+      value: formatFieldValue(valuation.pe_current ?? valuation.peCurrent)
+    },
+    {
+      label: 'P/E (current) as-of',
+      title: 'As-of date for current P/E',
+      value: formatFieldValue(valuation.pe_current_asof ?? valuation.peCurrentAsOf)
+    },
+    {
+      label: 'P/B (current)',
+      title: 'Current price-to-book ratio',
+      value: formatFieldValue(valuation.pb_current ?? valuation.pbCurrent)
+    },
+    {
+      label: 'P/B as-of',
+      title: 'As-of date for current P/B',
+      value: formatFieldValue(valuation.pb_current_asof ?? valuation.pbCurrentAsOf)
     },
     {
       label: 'P/E (TTM holdings)',

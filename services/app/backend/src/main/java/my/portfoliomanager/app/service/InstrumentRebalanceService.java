@@ -37,6 +37,7 @@ public class InstrumentRebalanceService {
 	private static final String REASON_LAYER_BUDGET_ZERO = "LAYER_BUDGET_ZERO";
 	private static final String WARNING_NO_INSTRUMENTS = "LAYER_NO_INSTRUMENTS";
 	private static final String WARNING_ALL_BELOW_MIN = "LAYER_ALL_BELOW_MINIMUM";
+	private static final double DEFAULT_PB_TARGET = 2.0;
 
 	private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 	private final ObjectMapper objectMapper;
@@ -523,20 +524,63 @@ public class InstrumentRebalanceService {
 		if (payload == null || payload.valuation() == null) {
 			return null;
 		}
-		BigDecimal earningsYield = extractEarningsYield(payload.valuation());
+		BigDecimal longtermYield = extractLongtermEarningsYield(payload.valuation());
+		BigDecimal currentYield = extractCurrentEarningsYield(payload.valuation());
+		BigDecimal priceToBook = extractPriceToBook(payload.valuation());
 		BigDecimal evToEbitda = extractEvToEbitda(payload.valuation());
 		BigDecimal ebitdaEur = extractEbitdaEur(payload.valuation());
-		double yieldScore = scoreEarningsYield(earningsYield);
+		BigDecimal netIncomeEur = extractNetIncomeEur(payload);
+		BigDecimal revenueEur = extractRevenueEur(payload);
+		BigDecimal dividendYield = extractDividendYield(payload);
+		double longtermYieldScore = scoreEarningsYield(longtermYield);
+		double currentYieldScore = scoreEarningsYield(currentYield);
+		double dividendYieldScore = scoreDividendYield(dividendYield);
 		double evScore = scoreEvToEbitda(evToEbitda);
 		double ebitdaScore = scoreEbitdaEur(ebitdaEur);
-		if (yieldScore <= 0 && evScore <= 0 && ebitdaScore <= 0) {
+		double netIncomeScore = scoreNetIncomeEur(netIncomeEur);
+		double revenueScore = scoreRevenueEur(revenueEur);
+		double pbScore = scorePriceToBook(priceToBook);
+		double weightSum = 0.0;
+		double scoreSum = 0.0;
+		if (longtermYieldScore > 0) {
+			scoreSum += longtermYieldScore * 0.35;
+			weightSum += 0.35;
+		}
+		if (currentYieldScore > 0) {
+			scoreSum += currentYieldScore * 0.15;
+			weightSum += 0.15;
+		}
+		if (dividendYieldScore > 0) {
+			scoreSum += dividendYieldScore * 0.07;
+			weightSum += 0.07;
+		}
+		if (evScore > 0) {
+			scoreSum += evScore * 0.18;
+			weightSum += 0.18;
+		}
+		if (ebitdaScore > 0) {
+			scoreSum += ebitdaScore * 0.10;
+			weightSum += 0.10;
+		}
+		if (netIncomeScore > 0) {
+			scoreSum += netIncomeScore * 0.08;
+			weightSum += 0.08;
+		}
+		if (revenueScore > 0) {
+			scoreSum += revenueScore * 0.04;
+			weightSum += 0.04;
+		}
+		if (pbScore > 0) {
+			scoreSum += pbScore * 0.03;
+			weightSum += 0.03;
+		}
+		if (weightSum <= 0) {
 			return null;
 		}
-		double score = (yieldScore * 0.5) + (evScore * 0.35) + (ebitdaScore * 0.15);
-		return BigDecimal.valueOf(score);
+		return BigDecimal.valueOf(scoreSum / weightSum);
 	}
 
-	private BigDecimal extractEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+	private BigDecimal extractLongtermEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
 		if (valuation == null) {
 			return null;
 		}
@@ -548,13 +592,135 @@ public class InstrumentRebalanceService {
 		if (pe != null && pe.compareTo(BigDecimal.ZERO) > 0) {
 			return BigDecimal.ONE.divide(pe, 8, RoundingMode.HALF_UP);
 		}
-		yield = valuation.earningsYieldTtmHoldings();
+		BigDecimal computedYield = computeLongtermEarningsYield(valuation);
+		if (computedYield != null) {
+			return computedYield;
+		}
+		return null;
+	}
+
+	private BigDecimal extractCurrentEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal yield = valuation.earningsYieldTtmHoldings();
 		if (yield != null) {
 			return yield;
 		}
 		BigDecimal peHoldings = valuation.peTtmHoldings();
 		if (peHoldings != null && peHoldings.compareTo(BigDecimal.ZERO) > 0) {
 			return BigDecimal.ONE.divide(peHoldings, 8, RoundingMode.HALF_UP);
+		}
+		BigDecimal peCurrent = valuation.peCurrent();
+		if (peCurrent != null && peCurrent.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(peCurrent, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractPriceToBook(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		return valuation.pbCurrent();
+	}
+
+	private BigDecimal computeLongtermEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		BigDecimal epsNorm = computeEpsNormFromHistory(valuation);
+		BigDecimal price = extractPrice(valuation);
+		if (epsNorm == null || price == null) {
+			return null;
+		}
+		if (epsNorm.compareTo(BigDecimal.ZERO) <= 0 || price.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		return epsNorm.divide(price, 8, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal computeEpsNormFromHistory(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		List<InstrumentDossierExtractionPayload.EpsHistoryPayload> history = valuation == null ? null : valuation.epsHistory();
+		if (history == null || history.isEmpty()) {
+			return null;
+		}
+		List<InstrumentDossierExtractionPayload.EpsHistoryPayload> selected = selectPreferredEpsHistory(history);
+		List<BigDecimal> values = new ArrayList<>();
+		selected.stream()
+				.filter(entry -> entry != null && entry.year() != null && entry.eps() != null)
+				.sorted(Comparator.comparing(InstrumentDossierExtractionPayload.EpsHistoryPayload::year).reversed())
+				.limit(7)
+				.forEach(entry -> values.add(applyEpsFloor(entry.eps(), valuation)));
+		if (values.size() < 3) {
+			return null;
+		}
+		values.sort(Comparator.naturalOrder());
+		int mid = values.size() / 2;
+		if (values.size() % 2 == 1) {
+			return values.get(mid);
+		}
+		return values.get(mid - 1).add(values.get(mid)).divide(BigDecimal.valueOf(2), 8, RoundingMode.HALF_UP);
+	}
+
+	private List<InstrumentDossierExtractionPayload.EpsHistoryPayload> selectPreferredEpsHistory(
+			List<InstrumentDossierExtractionPayload.EpsHistoryPayload> history) {
+		boolean hasAdjusted = history.stream().anyMatch(entry -> isAdjustedEpsType(entry == null ? null : entry.epsType()));
+		if (!hasAdjusted) {
+			return history;
+		}
+		return history.stream()
+				.filter(entry -> isAdjustedEpsType(entry == null ? null : entry.epsType()))
+				.toList();
+	}
+
+	private boolean isAdjustedEpsType(String epsType) {
+		if (epsType == null || epsType.isBlank()) {
+			return false;
+		}
+		String normalized = epsType.trim().toLowerCase(Locale.ROOT);
+		return normalized.contains("adjusted")
+				|| normalized.contains("normalized")
+				|| normalized.contains("non-gaap")
+				|| normalized.contains("non gaap");
+	}
+
+	private BigDecimal applyEpsFloor(BigDecimal value, InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (value == null) {
+			return null;
+		}
+		if (value.compareTo(BigDecimal.ZERO) <= 0) {
+			return value;
+		}
+		if (!shouldApplyEpsFloor(valuation == null ? null : valuation.epsFloorPolicy())) {
+			return value;
+		}
+		BigDecimal floor = valuation == null || valuation.epsFloorValue() == null
+				? new BigDecimal("0.10")
+				: valuation.epsFloorValue();
+		if (floor == null || floor.compareTo(BigDecimal.ZERO) <= 0) {
+			return value;
+		}
+		return value.compareTo(floor) < 0 ? floor : value;
+	}
+
+	private boolean shouldApplyEpsFloor(String policy) {
+		if (policy == null || policy.isBlank()) {
+			return true;
+		}
+		String normalized = policy.trim().toLowerCase(Locale.ROOT);
+		return !(normalized.equals("none") || normalized.equals("off") || normalized.equals("no_floor"));
+	}
+
+	private BigDecimal extractPrice(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal price = valuation.price();
+		if (price != null) {
+			return price;
+		}
+		BigDecimal marketCap = valuation.marketCap();
+		BigDecimal shares = valuation.sharesOutstanding();
+		if (marketCap != null && shares != null && shares.compareTo(BigDecimal.ZERO) > 0) {
+			return marketCap.divide(shares, 8, RoundingMode.HALF_UP);
 		}
 		return null;
 	}
@@ -579,20 +745,109 @@ public class InstrumentRebalanceService {
 		if (valuation == null) {
 			return null;
 		}
+		return extractProfitabilityEur(valuation);
+	}
+
+	private BigDecimal extractProfitabilityEur(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
 		BigDecimal ebitdaEur = valuation.ebitdaEur();
 		if (ebitdaEur != null) {
 			return ebitdaEur;
 		}
-		BigDecimal ebitda = valuation.ebitda();
-		BigDecimal fxRate = valuation.fxRateToEur();
-		if (ebitda != null && fxRate != null && fxRate.compareTo(BigDecimal.ZERO) > 0) {
-			return ebitda.multiply(fxRate);
-		}
-		String currency = valuation.ebitdaCurrency();
-		if (ebitda != null && currency != null && currency.equalsIgnoreCase("EUR")) {
+		BigDecimal ebitda = convertMetricToEur(valuation.ebitda(), valuation.ebitdaCurrency(), valuation.fxRateToEur());
+		if (ebitda != null) {
 			return ebitda;
 		}
+		BigDecimal affo = convertMetricToEur(valuation.affo(), valuation.affoCurrency(), valuation.fxRateToEur());
+		if (affo != null) {
+			return affo;
+		}
+		BigDecimal ffo = convertMetricToEur(valuation.ffo(), valuation.ffoCurrency(), valuation.fxRateToEur());
+		if (ffo != null) {
+			return ffo;
+		}
+		BigDecimal noi = convertMetricToEur(valuation.noi(), valuation.noiCurrency(), valuation.fxRateToEur());
+		if (noi != null) {
+			return noi;
+		}
+		return convertMetricToEur(valuation.netRent(), valuation.netRentCurrency(), valuation.fxRateToEur());
+	}
+
+	private BigDecimal extractNetIncomeEur(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.financials() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+		if (financials.netIncomeEur() != null) {
+			return financials.netIncomeEur();
+		}
+		BigDecimal fxRate = resolveFinancialsFxRate(financials, payload);
+		return convertMetricToEur(financials.netIncome(), financials.netIncomeCurrency(), fxRate);
+	}
+
+	private BigDecimal extractRevenueEur(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.financials() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+		if (financials.revenueEur() != null) {
+			return financials.revenueEur();
+		}
+		BigDecimal fxRate = resolveFinancialsFxRate(financials, payload);
+		return convertMetricToEur(financials.revenue(), financials.revenueCurrency(), fxRate);
+	}
+
+	private BigDecimal extractDividendYield(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.financials() == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+		BigDecimal dividend = financials.dividendPerShare();
+		if (dividend == null || dividend.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		BigDecimal price = extractPrice(payload.valuation());
+		if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		String dividendCcy = financials.dividendCurrency();
+		String priceCcy = payload.valuation().priceCurrency();
+		if (dividendCcy != null && priceCcy != null && !dividendCcy.equalsIgnoreCase(priceCcy)) {
+			BigDecimal fxDividend = resolveFinancialsFxRate(financials, payload);
+			BigDecimal dividendEur = convertMetricToEur(dividend, dividendCcy, fxDividend);
+			BigDecimal priceEur = convertMetricToEur(price, priceCcy, payload.valuation().fxRateToEur());
+			if (dividendEur == null || priceEur == null || priceEur.compareTo(BigDecimal.ZERO) <= 0) {
+				return null;
+			}
+			return dividendEur.divide(priceEur, 8, RoundingMode.HALF_UP);
+		}
+		return dividend.divide(price, 8, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal resolveFinancialsFxRate(InstrumentDossierExtractionPayload.FinancialsPayload financials,
+											   InstrumentDossierExtractionPayload payload) {
+		if (financials != null && financials.fxRateToEur() != null) {
+			return financials.fxRateToEur();
+		}
+		if (payload != null && payload.valuation() != null) {
+			return payload.valuation().fxRateToEur();
+		}
 		return null;
+	}
+
+	private BigDecimal convertMetricToEur(BigDecimal value, String currency, BigDecimal fxRate) {
+		if (value == null) {
+			return null;
+		}
+		if (currency == null || currency.isBlank() || currency.equalsIgnoreCase("EUR")) {
+			return value;
+		}
+		if (fxRate == null || fxRate.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		return value.multiply(fxRate);
 	}
 
 	private double scoreEarningsYield(BigDecimal earningsYield) {
@@ -619,6 +874,29 @@ public class InstrumentRebalanceService {
 		return Math.min(target / value, 1.0);
 	}
 
+	private double scoreDividendYield(BigDecimal dividendYield) {
+		if (dividendYield == null) {
+			return 0.0;
+		}
+		double value = dividendYield.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 0.08;
+		return Math.min(value / cap, 1.0);
+	}
+
+	private double scorePriceToBook(BigDecimal priceToBook) {
+		if (priceToBook == null) {
+			return 0.0;
+		}
+		double value = priceToBook.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		return Math.min(DEFAULT_PB_TARGET / value, 1.0);
+	}
+
 	private double scoreEbitdaEur(BigDecimal ebitdaEur) {
 		if (ebitdaEur == null) {
 			return 0.0;
@@ -628,6 +906,32 @@ public class InstrumentRebalanceService {
 			return 0.0;
 		}
 		double cap = 10_000_000_000d;
+		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
+		return Math.max(0.0, Math.min(scaled, 1.0));
+	}
+
+	private double scoreNetIncomeEur(BigDecimal netIncomeEur) {
+		if (netIncomeEur == null) {
+			return 0.0;
+		}
+		double value = netIncomeEur.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 20_000_000_000d;
+		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
+		return Math.max(0.0, Math.min(scaled, 1.0));
+	}
+
+	private double scoreRevenueEur(BigDecimal revenueEur) {
+		if (revenueEur == null) {
+			return 0.0;
+		}
+		double value = revenueEur.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 200_000_000_000d;
 		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
 		return Math.max(0.0, Math.min(scaled, 1.0));
 	}

@@ -168,6 +168,27 @@ class InstrumentRebalanceServiceTest {
 	}
 
 	@Test
+	void prefersLowerCurrentPeInValuationWeights() {
+		Map<String, ExtractionRow> rows = Map.of(
+				"DE000A", new ExtractionRow("DE000A", "COMPLETE", "{\"valuation\":{\"pe_current\":10.0}}"),
+				"DE000B", new ExtractionRow("DE000B", "COMPLETE", "{\"valuation\":{\"pe_current\":30.0}}")
+		);
+		InstrumentRebalanceService service = buildService(rows, true);
+
+		List<SavingPlanInstrument> instruments = List.of(
+				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("50"), 1, null),
+				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("50"), 1, null)
+		);
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("100"));
+
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false);
+
+		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
+		assertThat(byIsin.get("DE000A").getProposedAmountEur())
+				.isGreaterThan(byIsin.get("DE000B").getProposedAmountEur());
+	}
+
+	@Test
 	void backupDataKeepsSavingPlanTotals() throws IOException {
 		BackupFixture fixture = loadBackupFixture();
 		InstrumentRebalanceService service = buildService(fixture.extractions(), true);

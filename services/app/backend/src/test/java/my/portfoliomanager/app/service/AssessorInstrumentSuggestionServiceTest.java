@@ -220,6 +220,66 @@ class AssessorInstrumentSuggestionServiceTest {
 	}
 
 	@Test
+	void prefersCandidateWithLowerCurrentPeWhenLongtermMissing() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND1",
+				"Real Estate Fund A",
+				1,
+				"real estate",
+				"real estate thematic accumulating",
+				new BigDecimal("0.12"),
+				"Global REIT Index",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Example REIT", new BigDecimal("6"))),
+				buildValuationWithCurrentPe(new BigDecimal("10.0"))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND2",
+				"Real Estate Fund B",
+				1,
+				"real estate",
+				"real estate thematic accumulating",
+				new BigDecimal("0.12"),
+				"Global REIT Index",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Example REIT", new BigDecimal("6"))),
+				buildValuationWithCurrentPe(new BigDecimal("25.0"))
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).hasSize(1);
+		assertThat(result.savingPlanSuggestions().get(0).isin()).isEqualTo("CAND1");
+	}
+
+	@Test
 	void savingPlanSuggestionsStopWhenMaxPlansReached() throws Exception {
 		insertExtraction(buildPayload(
 				"EXIST1",
@@ -579,6 +639,7 @@ class AssessorInstrumentSuggestionServiceTest {
 				null,
 				regions,
 				holdings,
+				null,
 				valuation,
 				null,
 				null,
@@ -594,6 +655,12 @@ class AssessorInstrumentSuggestionServiceTest {
 				"ev_to_ebitda", evToEbitda,
 				"ebitda_eur", ebitdaEur,
 				"ebitda_currency", "EUR"
+		), InstrumentDossierExtractionPayload.ValuationPayload.class);
+	}
+
+	private InstrumentDossierExtractionPayload.ValuationPayload buildValuationWithCurrentPe(BigDecimal peCurrent) {
+		return objectMapper.convertValue(Map.of(
+				"pe_current", peCurrent
 		), InstrumentDossierExtractionPayload.ValuationPayload.class);
 	}
 }

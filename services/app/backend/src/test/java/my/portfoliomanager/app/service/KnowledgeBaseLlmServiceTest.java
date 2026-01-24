@@ -167,6 +167,7 @@ class KnowledgeBaseLlmServiceTest {
 						  },
 						  "regions": [],
 						  "top_holdings": [],
+						  "financials": null,
 						  "valuation": null,
 						  "missing_fields": [],
 						  "warnings": []

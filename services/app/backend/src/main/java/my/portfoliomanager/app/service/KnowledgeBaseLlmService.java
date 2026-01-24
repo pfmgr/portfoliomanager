@@ -41,7 +41,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			  "$schema": "https://json-schema.org/draft/2020-12/schema",
 			  "type": "object",
 			  "additionalProperties": false,
-		  "required": ["isin","name","instrument_type","asset_class","sub_class","layer","layer_notes","etf","risk","regions","top_holdings","valuation","missing_fields","warnings"],
+		  "required": ["isin","name","instrument_type","asset_class","sub_class","layer","layer_notes","etf","risk","regions","top_holdings","financials","valuation","missing_fields","warnings"],
 			  "properties": {
 			    "isin": { "type": ["string","null"] },
 			    "name": { "type": ["string","null"] },
@@ -113,12 +113,109 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		        }
 		      }
 		    },
+		    "financials": {
+		      "anyOf": [
+		        { "type": "null" },
+		        {
+		          "type": "object",
+		          "additionalProperties": false,
+		          "required": [
+		            "revenue",
+		            "revenue_currency",
+		            "revenue_eur",
+		            "revenue_period_end",
+		            "revenue_period_type",
+		            "net_income",
+		            "net_income_currency",
+		            "net_income_eur",
+		            "net_income_period_end",
+		            "net_income_period_type",
+		            "dividend_per_share",
+		            "dividend_currency",
+		            "dividend_asof",
+		            "fx_rate_to_eur"
+		          ],
+		          "properties": {
+		            "revenue": { "type": ["number","null"] },
+		            "revenue_currency": { "type": ["string","null"] },
+		            "revenue_eur": { "type": ["number","null"] },
+		            "revenue_period_end": { "type": ["string","null"], "format": "date" },
+		            "revenue_period_type": { "type": ["string","null"] },
+		            "net_income": { "type": ["number","null"] },
+		            "net_income_currency": { "type": ["string","null"] },
+		            "net_income_eur": { "type": ["number","null"] },
+		            "net_income_period_end": { "type": ["string","null"], "format": "date" },
+		            "net_income_period_type": { "type": ["string","null"] },
+		            "dividend_per_share": { "type": ["number","null"] },
+		            "dividend_currency": { "type": ["string","null"] },
+		            "dividend_asof": { "type": ["string","null"], "format": "date" },
+		            "fx_rate_to_eur": { "type": ["number","null"] }
+		          }
+		        }
+		      ]
+		    },
 		    "valuation": {
 		      "anyOf": [
 		        { "type": "null" },
 		        {
 		          "type": "object",
 		          "additionalProperties": false,
+		          "required": [
+		            "ebitda",
+		            "ebitda_currency",
+		            "ebitda_eur",
+		            "fx_rate_to_eur",
+		            "ebitda_period_end",
+		            "ebitda_period_type",
+		            "enterprise_value",
+		            "net_debt",
+		            "market_cap",
+		            "shares_outstanding",
+		            "ev_to_ebitda",
+		            "net_rent",
+		            "net_rent_currency",
+		            "net_rent_period_end",
+		            "net_rent_period_type",
+		            "noi",
+		            "noi_currency",
+		            "noi_period_end",
+		            "noi_period_type",
+		            "affo",
+		            "affo_currency",
+		            "affo_period_end",
+		            "affo_period_type",
+		            "ffo",
+		            "ffo_currency",
+		            "ffo_period_end",
+		            "ffo_period_type",
+		            "ffo_type",
+		            "price",
+		            "price_currency",
+		            "price_asof",
+		            "eps_type",
+		            "eps_norm",
+		            "eps_norm_years_used",
+		            "eps_norm_years_available",
+		            "eps_history",
+		            "eps_floor_policy",
+		            "eps_floor_value",
+		            "eps_norm_period_end",
+		            "pe_longterm",
+		            "earnings_yield_longterm",
+		            "pe_current",
+		            "pe_current_asof",
+		            "pb_current",
+		            "pb_current_asof",
+		            "pe_ttm_holdings",
+		            "earnings_yield_ttm_holdings",
+		            "holdings_coverage_weight_pct",
+		            "holdings_coverage_count",
+		            "holdings_asof",
+		            "holdings_weight_method",
+		            "pe_method",
+		            "pe_horizon",
+		            "neg_earnings_handling"
+		          ],
 		          "properties": {
 		            "ebitda": { "type": ["number","null"] },
 		            "ebitda_currency": { "type": ["string","null"] },
@@ -131,16 +228,54 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		            "market_cap": { "type": ["number","null"] },
 		            "shares_outstanding": { "type": ["number","null"] },
 		            "ev_to_ebitda": { "type": ["number","null"] },
+		            "net_rent": { "type": ["number","null"] },
+		            "net_rent_currency": { "type": ["string","null"] },
+		            "net_rent_period_end": { "type": ["string","null"], "format": "date" },
+		            "net_rent_period_type": { "type": ["string","null"] },
+		            "noi": { "type": ["number","null"] },
+		            "noi_currency": { "type": ["string","null"] },
+		            "noi_period_end": { "type": ["string","null"], "format": "date" },
+		            "noi_period_type": { "type": ["string","null"] },
+		            "affo": { "type": ["number","null"] },
+		            "affo_currency": { "type": ["string","null"] },
+		            "affo_period_end": { "type": ["string","null"], "format": "date" },
+		            "affo_period_type": { "type": ["string","null"] },
+		            "ffo": { "type": ["number","null"] },
+		            "ffo_currency": { "type": ["string","null"] },
+		            "ffo_period_end": { "type": ["string","null"], "format": "date" },
+		            "ffo_period_type": { "type": ["string","null"] },
+		            "ffo_type": { "type": ["string","null"] },
+		            "price": { "type": ["number","null"] },
+		            "price_currency": { "type": ["string","null"] },
 		            "price_asof": { "type": ["string","null"], "format": "date" },
 		            "eps_type": { "type": ["string","null"] },
 		            "eps_norm": { "type": ["number","null"] },
 		            "eps_norm_years_used": { "type": ["integer","null"] },
 		            "eps_norm_years_available": { "type": ["integer","null"] },
+		            "eps_history": {
+		              "type": ["array","null"],
+		              "items": {
+		                "type": "object",
+		                "additionalProperties": false,
+		                "required": ["year","eps","eps_type","eps_currency","period_end"],
+		                "properties": {
+		                  "year": { "type": ["integer","null"] },
+		                  "eps": { "type": ["number","null"] },
+		                  "eps_type": { "type": ["string","null"] },
+		                  "eps_currency": { "type": ["string","null"] },
+		                  "period_end": { "type": ["string","null"], "format": "date" }
+		                }
+		              }
+		            },
 		            "eps_floor_policy": { "type": ["string","null"] },
 		            "eps_floor_value": { "type": ["number","null"] },
 		            "eps_norm_period_end": { "type": ["string","null"], "format": "date" },
 		            "pe_longterm": { "type": ["number","null"] },
 		            "earnings_yield_longterm": { "type": ["number","null"] },
+		            "pe_current": { "type": ["number","null"] },
+		            "pe_current_asof": { "type": ["string","null"], "format": "date" },
+		            "pb_current": { "type": ["number","null"] },
+		            "pb_current_asof": { "type": ["string","null"], "format": "date" },
 		            "pe_ttm_holdings": { "type": ["number","null"] },
 		            "earnings_yield_ttm_holdings": { "type": ["number","null"] },
 		            "holdings_coverage_weight_pct": { "type": ["number","null"] },
@@ -387,10 +522,15 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                 - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                 - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
-                - For single stocks, include EBITDA (with currency and TTM/FY label) and a long-term P/E based on EPS_norm:
-                  EPS_norm = median(EPS_t-1 ... EPS_t-7) using adjusted EPS if available; apply flooring for very small positive EPS to avoid extreme P/E.
-                  Report: EPS_norm value, years used/available, EPS type, EPS floor policy/value, P/E_longterm, earnings_yield_longterm, data-as-of date, plus EBITDA currency.
+                - For single stocks, collect the raw inputs needed for long-term P/E:
+                  EBITDA (currency + TTM/FY label), share price (currency + as-of date), and annual EPS history for the last 3-7 fiscal years (include year, period end, EPS value, and whether EPS is adjusted or reported).
+                  If EPS history is incomplete or only a single year is available, still report what you have and explain the gap; do not fabricate long-term P/E.
                   If EBITDA currency is not EUR, include EBITDA converted to EUR and the FX rate used (with date).
+                  If available, include market cap and shares outstanding so price can be derived.
+                - Always capture the current P/E (TTM/forward as stated) with an as-of date, even when long-term metrics are available.
+                - If EBITDA is stated, capture it with currency, period type (TTM/FY), and period end.
+                - If long-term P/E or multi-year EPS history is unavailable, also capture price-to-book (P/B) with an as-of date.
+                - For real estate/REITs, capture net rent, NOI, AFFO, and FFO (label FFO I if specified), including currency, period type (TTM/FY), and period end/as-of date.
                 - For ETFs, include holdings-based TTM P/E computed from historical earnings of holdings:
                   E/P_portfolio = sum(w_i * E/P_i), P/E_ttm_holdings = 1 / E/P_portfolio.
                   Report: P/E_ttm_holdings, earnings_yield_ttm_holdings, holdings coverage (count and weight pct), holdings as-of date.
@@ -445,6 +585,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 
 				Rules:
 				- Output JSON only. No Markdown, no code fences, no explanation, no extra keys.
+				- Include every key listed below, even when the value is null. Do not omit required keys.
 				- Do not guess. Only use information explicitly present in the dossier.
 				- Use null for unknown/missing values (not the string "unknown").
 				- Keep string values short and literal (e.g., "ETF", "Equity", "Developed Markets", ...).
@@ -455,13 +596,25 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- If both ETF fields are null, set "etf" to null. If the risk indicator is null, set "risk" to null.
 				- regions is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
 				- top_holdings is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
+				- If a numeric value is given as a range (e.g., 19-20), use the midpoint and add a warning message (e.g., "Used midpoint for range: pe_current 19-20").
+				- If a range spans multiple dates, use the latest as-of date for *_asof and mention that in warnings.
 				- valuation.pe_method must be one of: ttm, forward, provider_weighted_avg, provider_aggregate.
 				- valuation.pe_horizon must be one of: ttm, normalized.
 				- valuation.neg_earnings_handling must be one of: exclude, set_null, aggregate_allows_negative.
 				- earnings_yield fields are decimals (e.g., 0.05 for 5%%).
 				- For EBITDA, include ebitda_currency, and if currency is not EUR, include ebitda_eur plus fx_rate_to_eur (same as-of date if given).
+				- For net rent, NOI, AFFO, and FFO, include currency and period metadata (period type + end date).
+				- For current P/E, use pe_current (TTM/forward as stated) with an as-of date if given.
+				- For current price-to-book, use pb_current with an as-of date if given.
+				- If EBITDA is stated, populate ebitda, ebitda_currency, ebitda_period_type, and ebitda_period_end.
+				- If revenue or net income are stated, populate financials.revenue/net_income with currency, period type (TTM/FY), period end, and EUR conversion + fx_rate_to_eur when not in EUR.
+				- If a dividend per share is stated, populate financials.dividend_per_share, dividend_currency, and dividend_asof.
+				- valuation.eps_history is an array of yearly EPS entries (3-7 years if available). Include year, eps, eps_type, eps_currency, period_end.
+				- If EPS history and price are available, you may compute eps_norm and pe_longterm; otherwise leave them null.
+				- If financials is present but all fields are null, set financials to null.
 				- If valuation is present but all fields are null, set valuation to null.
 				- If a field is missing, keep it null and add an entry to missing_fields.
+				- Do not include sources or citations in the output.
 
 				Return JSON with exactly these keys:
 				- isin
@@ -475,13 +628,24 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- risk: { summary_risk_indicator: { value } } | null
 				- regions
 				- top_holdings
+				- financials: {
+				    revenue, revenue_currency, revenue_eur, revenue_period_end, revenue_period_type,
+				    net_income, net_income_currency, net_income_eur, net_income_period_end, net_income_period_type,
+				    dividend_per_share, dividend_currency, dividend_asof, fx_rate_to_eur
+				  } | null
 				- valuation: {
 				    ebitda, ebitda_currency, ebitda_eur, fx_rate_to_eur,
 				    ebitda_period_end, ebitda_period_type,
 				    enterprise_value, net_debt, market_cap, shares_outstanding, ev_to_ebitda,
-				    price_asof, eps_type, eps_norm, eps_norm_years_used, eps_norm_years_available,
+				    net_rent, net_rent_currency, net_rent_period_end, net_rent_period_type,
+				    noi, noi_currency, noi_period_end, noi_period_type,
+				    affo, affo_currency, affo_period_end, affo_period_type,
+				    ffo, ffo_currency, ffo_period_end, ffo_period_type, ffo_type,
+				    price, price_currency, price_asof,
+				    eps_type, eps_norm, eps_norm_years_used, eps_norm_years_available, eps_history,
 				    eps_floor_policy, eps_floor_value, eps_norm_period_end,
-				    pe_longterm, earnings_yield_longterm, pe_ttm_holdings, earnings_yield_ttm_holdings,
+				    pe_longterm, earnings_yield_longterm, pe_current, pe_current_asof, pb_current, pb_current_asof,
+				    pe_ttm_holdings, earnings_yield_ttm_holdings,
 				    holdings_coverage_weight_pct, holdings_coverage_count, holdings_asof, holdings_weight_method,
 				    pe_method, pe_horizon, neg_earnings_handling
 				  } | null
