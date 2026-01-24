@@ -18,11 +18,12 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     private static final Duration DEFAULT_READ_TIMEOUT = Duration.ofMinutes(5);
     public static final List<String> allowedWebSearchDomains = List.of("justetf.com", "ishares.com", "vanguard.com", "ssga.com",
             "spdrs.com", "amundietf.com", "wisdomtree.eu", "invesco.com", "vaneck.com",
-            "xtrackers.com", "blackrock.com", "stateStreet.com", "lyxoretf.com", "openfigi.com",
+            "xtrackers.com", "blackrock.com", "statestreet.com", "lyxoretf.com", "openfigi.com",
             "sec.gov", "companieshouse.gov.uk", "bundesanzeiger.de", "nasdaq.com", "nyse.com",
             "londonstockexchange.com", "euronext.com", "boerse-frankfurt.de", "deutsche-boerse.com",
             "six-group.com", "borsaitaliana.it", "asx.com.au", "hkex.com.hk", "tse.or.jp",
-            "tmx.com", "nseindia.com", "bseindia.com", "sgx.com", "fondsweb.com", "deka.de","deka-etf.de","boerse-hamburg.de");
+            "tmx.com", "nseindia.com", "bseindia.com", "sgx.com", "fondsweb.com", "deka.de",
+            "deka-etf.de", "boerse-hamburg.de", "marketscreener.com", "statista.com", "finbox.com");
     private final RestClient restClient;
     private final String model;
 
