@@ -520,11 +520,12 @@ public class AssessorInstrumentSuggestionService {
 				: 1.0 / (1.0 + candidate.ongoingChargesPct().doubleValue());
 		double redundancy = computeRedundancy(candidate, existingProfiles);
 		double uniquenessScore = 1.0 - redundancy;
+		double valuationScore = computeValuationScore(candidate);
 		double typeScore = isPreferredInstrument(candidate) ? 0.3 : 0.0;
 		double penalty = (candidate.singleStock() && candidate.layer() <= 3) ? 0.4 : 0.0;
 		int gapCoverage = missing.coverageCount(candidate);
 		double gapScore = Math.min(0.4, gapCoverage * 0.1);
-		return (costScore * 0.4) + (uniquenessScore * 0.4) + typeScore + gapScore - penalty;
+		return (costScore * 0.35) + (uniquenessScore * 0.35) + (valuationScore * 0.15) + typeScore + gapScore - penalty;
 	}
 
 	private double scoreCandidate(InstrumentProfile candidate,
@@ -572,6 +573,56 @@ public class AssessorInstrumentSuggestionService {
 			return 0.0;
 		}
 		return sum / components;
+	}
+
+	private double computeValuationScore(InstrumentProfile candidate) {
+		if (candidate == null) {
+			return 0.0;
+		}
+		double yieldScore = scoreEarningsYield(candidate.earningsYield());
+		double evScore = scoreEvToEbitda(candidate.evToEbitda());
+		double ebitdaScore = scoreEbitdaEur(candidate.ebitdaEur());
+		if (yieldScore <= 0 && evScore <= 0 && ebitdaScore <= 0) {
+			return 0.0;
+		}
+		return (yieldScore * 0.5) + (evScore * 0.35) + (ebitdaScore * 0.15);
+	}
+
+	private double scoreEarningsYield(BigDecimal earningsYield) {
+		if (earningsYield == null) {
+			return 0.0;
+		}
+		double value = earningsYield.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 0.20;
+		return Math.min(value / cap, 1.0);
+	}
+
+	private double scoreEvToEbitda(BigDecimal evToEbitda) {
+		if (evToEbitda == null) {
+			return 0.0;
+		}
+		double value = evToEbitda.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double target = 12.0;
+		return Math.min(target / value, 1.0);
+	}
+
+	private double scoreEbitdaEur(BigDecimal ebitdaEur) {
+		if (ebitdaEur == null) {
+			return 0.0;
+		}
+		double value = ebitdaEur.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 10_000_000_000d;
+		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
+		return Math.max(0.0, Math.min(scaled, 1.0));
 	}
 
 	private double averageOverlap(Set<String> base,
@@ -773,7 +824,7 @@ public class AssessorInstrumentSuggestionService {
 			Set<String> locales = extractLocales(name, subClass, layerNotes, Set.of());
 			boolean singleStock = isSingleStock(instrumentType, subClass, layerNotes);
 			InstrumentProfile profile = new InstrumentProfile(isin, name, layer, instrumentType, assetClass, subClass,
-					layerNotes, null, null, Set.of(), Set.of(), distribution, themes, locales, singleStock);
+					layerNotes, null, null, Set.of(), Set.of(), distribution, themes, locales, singleStock, null, null, null);
 			profiles.put(isin, profile);
 		});
 		return profiles;
@@ -804,16 +855,81 @@ public class AssessorInstrumentSuggestionService {
 			String benchmark = payload.etf() == null ? null : trimToNull(payload.etf().benchmarkIndex());
 			Set<String> regions = normalizeRegionNames(payload.regions());
 			Set<String> holdings = normalizeHoldingNames(payload.topHoldings());
+			BigDecimal earningsYield = extractEarningsYield(payload);
+			BigDecimal evToEbitda = extractEvToEbitda(payload);
+			BigDecimal ebitdaEur = extractEbitdaEur(payload);
 			String distribution = inferDistribution(name, layerNotes);
 			Set<String> themes = extractThemes(subClass, layerNotes);
 			Set<String> locales = extractLocales(name, subClass, layerNotes, regions);
 			boolean singleStock = isSingleStock(instrumentType, subClass, layerNotes);
 			return new InstrumentProfile(isin, name, layer, instrumentType, assetClass, subClass, layerNotes, ter,
-					benchmark, regions, holdings, distribution, themes, locales, singleStock);
+					benchmark, regions, holdings, distribution, themes, locales, singleStock, earningsYield, evToEbitda, ebitdaEur);
 		} catch (Exception ex) {
 			logger.debug("Failed to parse KB extraction payload for {}: {}", isin, ex.getMessage());
 			return null;
 		}
+	}
+
+	private BigDecimal extractEarningsYield(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		BigDecimal yield = valuation.earningsYieldLongterm();
+		if (yield != null) {
+			return yield;
+		}
+		BigDecimal pe = valuation.peLongterm();
+		if (pe != null && pe.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(pe, 8, RoundingMode.HALF_UP);
+		}
+		yield = valuation.earningsYieldTtmHoldings();
+		if (yield != null) {
+			return yield;
+		}
+		BigDecimal peHoldings = valuation.peTtmHoldings();
+		if (peHoldings != null && peHoldings.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(peHoldings, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractEvToEbitda(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		BigDecimal evToEbitda = valuation.evToEbitda();
+		if (evToEbitda != null) {
+			return evToEbitda;
+		}
+		BigDecimal enterpriseValue = valuation.enterpriseValue();
+		BigDecimal ebitda = valuation.ebitda();
+		if (enterpriseValue != null && ebitda != null && ebitda.compareTo(BigDecimal.ZERO) > 0) {
+			return enterpriseValue.divide(ebitda, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractEbitdaEur(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		BigDecimal ebitdaEur = valuation.ebitdaEur();
+		if (ebitdaEur != null) {
+			return ebitdaEur;
+		}
+		BigDecimal ebitda = valuation.ebitda();
+		BigDecimal fxRate = valuation.fxRateToEur();
+		if (ebitda != null && fxRate != null && fxRate.compareTo(BigDecimal.ZERO) > 0) {
+			return ebitda.multiply(fxRate);
+		}
+		String currency = valuation.ebitdaCurrency();
+		if (ebitda != null && currency != null && currency.equalsIgnoreCase("EUR")) {
+			return ebitda;
+		}
+		return null;
 	}
 
 	private Map<Integer, LayerCoverage> buildCoverage(java.util.Collection<InstrumentProfile> profiles) {
@@ -1041,7 +1157,10 @@ public class AssessorInstrumentSuggestionService {
 									 String distribution,
 									 Set<String> themes,
 									 Set<String> locales,
-									 boolean singleStock) {
+									 boolean singleStock,
+									 BigDecimal earningsYield,
+									 BigDecimal evToEbitda,
+									 BigDecimal ebitdaEur) {
 		boolean matchesGap(CoverageGap gap) {
 			if (gap == null || gap.value() == null) {
 				return false;

@@ -41,7 +41,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			  "$schema": "https://json-schema.org/draft/2020-12/schema",
 			  "type": "object",
 			  "additionalProperties": false,
-			  "required": ["isin","name","instrument_type","asset_class","sub_class","layer","layer_notes","etf","risk","regions","top_holdings","missing_fields","warnings"],
+		  "required": ["isin","name","instrument_type","asset_class","sub_class","layer","layer_notes","etf","risk","regions","top_holdings","valuation","missing_fields","warnings"],
 			  "properties": {
 			    "isin": { "type": ["string","null"] },
 			    "name": { "type": ["string","null"] },
@@ -101,21 +101,62 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			        }
 			      }
 			    },
-			    "top_holdings": {
-			      "type": ["array","null"],
-			      "items": {
-			        "type": "object",
-			        "additionalProperties": false,
-			        "required": ["name","weight_pct"],
-			        "properties": {
-			          "name": { "type": ["string","null"] },
-			          "weight_pct": { "type": ["number","null"] }
-			        }
-			      }
-			    },
-			    "missing_fields": {
-			      "type": ["array","null"],
-			      "items": {
+		    "top_holdings": {
+		      "type": ["array","null"],
+		      "items": {
+		        "type": "object",
+		        "additionalProperties": false,
+		        "required": ["name","weight_pct"],
+		        "properties": {
+		          "name": { "type": ["string","null"] },
+		          "weight_pct": { "type": ["number","null"] }
+		        }
+		      }
+		    },
+		    "valuation": {
+		      "anyOf": [
+		        { "type": "null" },
+		        {
+		          "type": "object",
+		          "additionalProperties": false,
+		          "properties": {
+		            "ebitda": { "type": ["number","null"] },
+		            "ebitda_currency": { "type": ["string","null"] },
+		            "ebitda_eur": { "type": ["number","null"] },
+		            "fx_rate_to_eur": { "type": ["number","null"] },
+		            "ebitda_period_end": { "type": ["string","null"], "format": "date" },
+		            "ebitda_period_type": { "type": ["string","null"] },
+		            "enterprise_value": { "type": ["number","null"] },
+		            "net_debt": { "type": ["number","null"] },
+		            "market_cap": { "type": ["number","null"] },
+		            "shares_outstanding": { "type": ["number","null"] },
+		            "ev_to_ebitda": { "type": ["number","null"] },
+		            "price_asof": { "type": ["string","null"], "format": "date" },
+		            "eps_type": { "type": ["string","null"] },
+		            "eps_norm": { "type": ["number","null"] },
+		            "eps_norm_years_used": { "type": ["integer","null"] },
+		            "eps_norm_years_available": { "type": ["integer","null"] },
+		            "eps_floor_policy": { "type": ["string","null"] },
+		            "eps_floor_value": { "type": ["number","null"] },
+		            "eps_norm_period_end": { "type": ["string","null"], "format": "date" },
+		            "pe_longterm": { "type": ["number","null"] },
+		            "earnings_yield_longterm": { "type": ["number","null"] },
+		            "pe_ttm_holdings": { "type": ["number","null"] },
+		            "earnings_yield_ttm_holdings": { "type": ["number","null"] },
+		            "holdings_coverage_weight_pct": { "type": ["number","null"] },
+		            "holdings_coverage_count": { "type": ["integer","null"] },
+		            "holdings_asof": { "type": ["string","null"], "format": "date" },
+		            "holdings_weight_method": { "type": ["string","null"] },
+		            "pe_method": { "type": ["string","null"] },
+		            "pe_horizon": { "type": ["string","null"] },
+		            "neg_earnings_handling": { "type": ["string","null"] }
+		          }
+		        }
+		      ]
+		    },
+		    "missing_fields": {
+		      "type": ["array","null"],
+		      "items": {
 			        "type": "object",
 			        "additionalProperties": false,
 			        "required": ["field","reason"],
@@ -331,6 +372,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 ## Risk (SRI and notes)
                 ## Costs & structure (TER, replication, domicile, distribution, currency if relevant)
                 ## Exposures (regions, sectors, top holdings/top-10, benchmark/index)
+                ## Valuation & profitability (see requirements below)
                 ## Redundancy hints (qualitative; do not claim precise correlations without data)
                 ## Sources (numbered list)
                 
@@ -345,6 +387,14 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                 - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                 - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
+                - For single stocks, include EBITDA (with currency and TTM/FY label) and a long-term P/E based on EPS_norm:
+                  EPS_norm = median(EPS_t-1 ... EPS_t-7) using adjusted EPS if available; apply flooring for very small positive EPS to avoid extreme P/E.
+                  Report: EPS_norm value, years used/available, EPS type, EPS floor policy/value, P/E_longterm, earnings_yield_longterm, data-as-of date, plus EBITDA currency.
+                  If EBITDA currency is not EUR, include EBITDA converted to EUR and the FX rate used (with date).
+                - For ETFs, include holdings-based TTM P/E computed from historical earnings of holdings:
+                  E/P_portfolio = sum(w_i * E/P_i), P/E_ttm_holdings = 1 / E/P_portfolio.
+                  Report: P/E_ttm_holdings, earnings_yield_ttm_holdings, holdings coverage (count and weight pct), holdings as-of date.
+                - For both, include method flags: pe_method {ttm, forward, provider_weighted_avg, provider_aggregate}, pe_horizon {ttm, normalized}, neg_earnings_handling {exclude, set_null, aggregate_allows_negative}.
                 
                 Create dossier for:
                 - ISIN: %s
@@ -405,6 +455,12 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- If both ETF fields are null, set "etf" to null. If the risk indicator is null, set "risk" to null.
 				- regions is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
 				- top_holdings is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
+				- valuation.pe_method must be one of: ttm, forward, provider_weighted_avg, provider_aggregate.
+				- valuation.pe_horizon must be one of: ttm, normalized.
+				- valuation.neg_earnings_handling must be one of: exclude, set_null, aggregate_allows_negative.
+				- earnings_yield fields are decimals (e.g., 0.05 for 5%%).
+				- For EBITDA, include ebitda_currency, and if currency is not EUR, include ebitda_eur plus fx_rate_to_eur (same as-of date if given).
+				- If valuation is present but all fields are null, set valuation to null.
 				- If a field is missing, keep it null and add an entry to missing_fields.
 
 				Return JSON with exactly these keys:
@@ -419,6 +475,16 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- risk: { summary_risk_indicator: { value } } | null
 				- regions
 				- top_holdings
+				- valuation: {
+				    ebitda, ebitda_currency, ebitda_eur, fx_rate_to_eur,
+				    ebitda_period_end, ebitda_period_type,
+				    enterprise_value, net_debt, market_cap, shares_outstanding, ev_to_ebitda,
+				    price_asof, eps_type, eps_norm, eps_norm_years_used, eps_norm_years_available,
+				    eps_floor_policy, eps_floor_value, eps_norm_period_end,
+				    pe_longterm, earnings_yield_longterm, pe_ttm_holdings, earnings_yield_ttm_holdings,
+				    holdings_coverage_weight_pct, holdings_coverage_count, holdings_asof, holdings_weight_method,
+				    pe_method, pe_horizon, neg_earnings_handling
+				  } | null
 				- missing_fields: [{ field, reason }]
 				- warnings: [{ message }]
 

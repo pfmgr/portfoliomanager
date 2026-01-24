@@ -95,7 +95,7 @@ class AssessorInstrumentSuggestionServiceTest {
 						25,
 						10,
 						25,
-						Map.of(1, 5),
+						Map.of(1, 2),
 						Set.of(),
 						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
 				)
@@ -143,7 +143,7 @@ class AssessorInstrumentSuggestionServiceTest {
 						25,
 						10,
 						25,
-						Map.of(1, 5),
+						Map.of(1, 2),
 						Set.of(),
 						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
 				)
@@ -157,6 +157,66 @@ class AssessorInstrumentSuggestionServiceTest {
 				.map(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::amount)
 				.reduce(BigDecimal.ZERO, BigDecimal::add);
 		assertThat(total).isEqualByComparingTo(new BigDecimal("50"));
+	}
+
+	@Test
+	void prefersCandidateWithStrongerValuationSignals() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND1",
+				"Tech Innovators ETF A",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6"))),
+				buildValuation(new BigDecimal("0.15"), new BigDecimal("8.0"), new BigDecimal("8000000000"))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND2",
+				"Tech Innovators ETF B",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6"))),
+				buildValuation(new BigDecimal("0.005"), new BigDecimal("100.0"), new BigDecimal("1000"))
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).hasSize(1);
+		assertThat(result.savingPlanSuggestions().get(0).isin()).isEqualTo("CAND1");
 	}
 
 	@Test
@@ -495,5 +555,45 @@ class AssessorInstrumentSuggestionServiceTest {
 				null,
 				null
 		);
+	}
+
+	private InstrumentDossierExtractionPayload buildPayloadWithValuation(String isin,
+																		 String name,
+																		 int layer,
+																		 String subClass,
+																		 String notes,
+																		 BigDecimal ter,
+																		 String benchmark,
+																		 List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions,
+																		 List<InstrumentDossierExtractionPayload.HoldingPayload> holdings,
+																		 InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		return new InstrumentDossierExtractionPayload(
+				isin,
+				name,
+				"ETF",
+				"Equity",
+				subClass,
+				layer,
+				notes,
+				new InstrumentDossierExtractionPayload.EtfPayload(ter, benchmark),
+				null,
+				regions,
+				holdings,
+				valuation,
+				null,
+				null,
+				null
+		);
+	}
+
+	private InstrumentDossierExtractionPayload.ValuationPayload buildValuation(BigDecimal earningsYield,
+																			   BigDecimal evToEbitda,
+																			   BigDecimal ebitdaEur) {
+		return objectMapper.convertValue(Map.of(
+				"earnings_yield_longterm", earningsYield,
+				"ev_to_ebitda", evToEbitda,
+				"ebitda_eur", ebitdaEur,
+				"ebitda_currency", "EUR"
+		), InstrumentDossierExtractionPayload.ValuationPayload.class);
 	}
 }

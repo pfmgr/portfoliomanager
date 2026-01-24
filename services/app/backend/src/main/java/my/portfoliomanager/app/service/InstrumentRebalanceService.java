@@ -245,6 +245,7 @@ public class InstrumentRebalanceService {
 					weighting.benchmarkUsed(),
 					weighting.regionsUsed(),
 					weighting.holdingsUsed(),
+					weighting.valuationUsed(),
 					Map.copyOf(weighting.weights())
 			);
 			break;
@@ -410,10 +411,12 @@ public class InstrumentRebalanceService {
 		boolean useBenchmark = true;
 		boolean useRegions = true;
 		boolean useHoldings = true;
+		boolean useValuation = true;
 		Map<String, String> benchmarks = new HashMap<>();
 		Map<String, BigDecimal> ters = new HashMap<>();
 		Map<String, Set<String>> regionNames = new HashMap<>();
 		Map<String, Set<String>> holdingNames = new HashMap<>();
+		Map<String, BigDecimal> valuationScores = new HashMap<>();
 
 		for (SavingPlanInstrument instrument : instruments) {
 			KbExtraction extraction = extractions.get(instrument.isin());
@@ -422,6 +425,7 @@ public class InstrumentRebalanceService {
 			String benchmark = null;
 			Set<String> regions = null;
 			Set<String> holdings = null;
+			BigDecimal valuationScore = null;
 			if (payload != null) {
 				if (payload.etf() != null) {
 					ter = payload.etf().ongoingChargesPct();
@@ -429,6 +433,7 @@ public class InstrumentRebalanceService {
 				}
 				regions = normalizeRegionNames(payload.regions());
 				holdings = normalizeHoldingNames(payload.topHoldings());
+				valuationScore = computeValuationScore(payload);
 			}
 			if (ter == null) {
 				useCost = false;
@@ -450,10 +455,15 @@ public class InstrumentRebalanceService {
 			} else {
 				holdingNames.put(instrument.isin(), holdings);
 			}
+			if (valuationScore == null) {
+				useValuation = false;
+			} else {
+				valuationScores.put(instrument.isin(), valuationScore);
+			}
 		}
 
 		boolean useRedundancy = useBenchmark || useRegions || useHoldings;
-		if (!useCost && !useRedundancy) {
+		if (!useCost && !useRedundancy && !useValuation) {
 			return WeightingResult.equal(instruments);
 		}
 
@@ -484,6 +494,14 @@ public class InstrumentRebalanceService {
 				}
 				score = score.multiply(uniqueness);
 			}
+			if (useValuation) {
+				BigDecimal valuationScore = valuationScores.get(instrument.isin());
+				if (valuationScore != null) {
+					BigDecimal factor = BigDecimal.valueOf(0.7)
+							.add(valuationScore.multiply(BigDecimal.valueOf(0.3)));
+					score = score.multiply(factor);
+				}
+			}
 			scores.put(instrument.isin(), score);
 			total = total.add(score);
 		}
@@ -497,7 +515,121 @@ public class InstrumentRebalanceService {
 			BigDecimal score = scores.getOrDefault(instrument.isin(), BigDecimal.ZERO);
 			weights.put(instrument.isin(), score.divide(total, 8, RoundingMode.HALF_UP));
 		}
-		return new WeightingResult(weights, useCost || useRedundancy, useCost, useBenchmark, useRegions, useHoldings);
+		return new WeightingResult(weights, useCost || useRedundancy || useValuation, useCost, useBenchmark, useRegions,
+				useHoldings, useValuation);
+	}
+
+	private BigDecimal computeValuationScore(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		BigDecimal earningsYield = extractEarningsYield(payload.valuation());
+		BigDecimal evToEbitda = extractEvToEbitda(payload.valuation());
+		BigDecimal ebitdaEur = extractEbitdaEur(payload.valuation());
+		double yieldScore = scoreEarningsYield(earningsYield);
+		double evScore = scoreEvToEbitda(evToEbitda);
+		double ebitdaScore = scoreEbitdaEur(ebitdaEur);
+		if (yieldScore <= 0 && evScore <= 0 && ebitdaScore <= 0) {
+			return null;
+		}
+		double score = (yieldScore * 0.5) + (evScore * 0.35) + (ebitdaScore * 0.15);
+		return BigDecimal.valueOf(score);
+	}
+
+	private BigDecimal extractEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal yield = valuation.earningsYieldLongterm();
+		if (yield != null) {
+			return yield;
+		}
+		BigDecimal pe = valuation.peLongterm();
+		if (pe != null && pe.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(pe, 8, RoundingMode.HALF_UP);
+		}
+		yield = valuation.earningsYieldTtmHoldings();
+		if (yield != null) {
+			return yield;
+		}
+		BigDecimal peHoldings = valuation.peTtmHoldings();
+		if (peHoldings != null && peHoldings.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(peHoldings, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractEvToEbitda(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal evToEbitda = valuation.evToEbitda();
+		if (evToEbitda != null) {
+			return evToEbitda;
+		}
+		BigDecimal enterpriseValue = valuation.enterpriseValue();
+		BigDecimal ebitda = valuation.ebitda();
+		if (enterpriseValue != null && ebitda != null && ebitda.compareTo(BigDecimal.ZERO) > 0) {
+			return enterpriseValue.divide(ebitda, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractEbitdaEur(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal ebitdaEur = valuation.ebitdaEur();
+		if (ebitdaEur != null) {
+			return ebitdaEur;
+		}
+		BigDecimal ebitda = valuation.ebitda();
+		BigDecimal fxRate = valuation.fxRateToEur();
+		if (ebitda != null && fxRate != null && fxRate.compareTo(BigDecimal.ZERO) > 0) {
+			return ebitda.multiply(fxRate);
+		}
+		String currency = valuation.ebitdaCurrency();
+		if (ebitda != null && currency != null && currency.equalsIgnoreCase("EUR")) {
+			return ebitda;
+		}
+		return null;
+	}
+
+	private double scoreEarningsYield(BigDecimal earningsYield) {
+		if (earningsYield == null) {
+			return 0.0;
+		}
+		double value = earningsYield.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 0.20;
+		return Math.min(value / cap, 1.0);
+	}
+
+	private double scoreEvToEbitda(BigDecimal evToEbitda) {
+		if (evToEbitda == null) {
+			return 0.0;
+		}
+		double value = evToEbitda.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double target = 12.0;
+		return Math.min(target / value, 1.0);
+	}
+
+	private double scoreEbitdaEur(BigDecimal ebitdaEur) {
+		if (ebitdaEur == null) {
+			return 0.0;
+		}
+		double value = ebitdaEur.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 10_000_000_000d;
+		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
+		return Math.max(0.0, Math.min(scaled, 1.0));
 	}
 
 	private Map<String, BigDecimal> roundLayerAmounts(Map<String, BigDecimal> rawAmounts, BigDecimal budget) {
@@ -892,6 +1024,7 @@ public class InstrumentRebalanceService {
 										boolean benchmarkUsed,
 										boolean regionsUsed,
 										boolean holdingsUsed,
+										boolean valuationUsed,
 										Map<String, BigDecimal> weights) {
 	}
 
@@ -916,7 +1049,8 @@ public class InstrumentRebalanceService {
 								   boolean costUsed,
 								   boolean benchmarkUsed,
 								   boolean regionsUsed,
-								   boolean holdingsUsed) {
+								   boolean holdingsUsed,
+								   boolean valuationUsed) {
 		private static WeightingResult equal(List<SavingPlanInstrument> instruments) {
 			Map<String, BigDecimal> weights = new HashMap<>();
 			if (instruments != null && !instruments.isEmpty()) {
@@ -925,13 +1059,13 @@ public class InstrumentRebalanceService {
 					weights.put(instrument.isin(), share);
 				}
 			}
-			return new WeightingResult(weights, false, false, false, false, false);
+			return new WeightingResult(weights, false, false, false, false, false, false);
 		}
 
 		private static WeightingResult single(String isin) {
 			Map<String, BigDecimal> weights = new HashMap<>();
 			weights.put(isin, BigDecimal.ONE);
-			return new WeightingResult(weights, false, false, false, false, false);
+			return new WeightingResult(weights, false, false, false, false, false, false);
 		}
 	}
 }

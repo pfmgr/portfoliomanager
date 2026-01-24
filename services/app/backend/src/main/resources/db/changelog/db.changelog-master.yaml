@@ -1222,6 +1222,7 @@ databaseChangeLog:
       id: 017a-kb-config-postgres
       author: codex
       dbms: postgresql
+      validCheckSum: 9:40832b385cbec632801f4fb02dc58dd1
       preConditions:
         onFail: MARK_RAN
         not:

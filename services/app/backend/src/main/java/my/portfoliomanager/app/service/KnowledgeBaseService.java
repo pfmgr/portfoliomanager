@@ -650,6 +650,29 @@ public class KnowledgeBaseService {
             Integer value = payload.risk().summaryRiskIndicator().value();
             upsertFact(isin, "risk.summary_risk_indicator.value", null, value == null ? null : BigDecimal.valueOf(value), null);
         }
+        InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+        if (valuation != null) {
+            upsertFact(isin, "valuation.ebitda", null, valuation.ebitda(), null);
+            upsertFact(isin, "valuation.ebitda_currency", valuation.ebitdaCurrency(), null, null);
+            upsertFact(isin, "valuation.ebitda_eur", null, valuation.ebitdaEur(), "eur");
+            upsertFact(isin, "valuation.fx_rate_to_eur", null, valuation.fxRateToEur(), null);
+            upsertFact(isin, "valuation.enterprise_value", null, valuation.enterpriseValue(), null);
+            upsertFact(isin, "valuation.net_debt", null, valuation.netDebt(), null);
+            upsertFact(isin, "valuation.market_cap", null, valuation.marketCap(), null);
+            upsertFact(isin, "valuation.shares_outstanding", null, valuation.sharesOutstanding(), null);
+            upsertFact(isin, "valuation.ev_to_ebitda", null, valuation.evToEbitda(), null);
+            upsertFact(isin, "valuation.eps_norm", null, valuation.epsNorm(), null);
+            upsertFact(isin, "valuation.pe_longterm", null, valuation.peLongterm(), null);
+            upsertFact(isin, "valuation.earnings_yield_longterm", null, valuation.earningsYieldLongterm(), null);
+            upsertFact(isin, "valuation.pe_ttm_holdings", null, valuation.peTtmHoldings(), null);
+            upsertFact(isin, "valuation.earnings_yield_ttm_holdings", null, valuation.earningsYieldTtmHoldings(), null);
+            upsertFact(isin, "valuation.holdings_coverage_weight_pct", null, valuation.holdingsCoverageWeightPct(), "pct");
+            upsertFact(isin, "valuation.holdings_coverage_count", null,
+                    valuation.holdingsCoverageCount() == null ? null : BigDecimal.valueOf(valuation.holdingsCoverageCount()), null);
+            upsertFact(isin, "valuation.pe_method", valuation.peMethod(), null, null);
+            upsertFact(isin, "valuation.pe_horizon", valuation.peHorizon(), null, null);
+            upsertFact(isin, "valuation.neg_earnings_handling", valuation.negEarningsHandling(), null, null);
+        }
     }
 
     private void upsertFact(String isin, String key, String textValue, BigDecimal numValue, String unit) {
@@ -848,6 +871,7 @@ public class KnowledgeBaseService {
                 	## Risk (SRI and notes)
                 	## Costs & structure (TER, replication, domicile, distribution, currency if relevant)
                 	## Exposures (regions, sectors, top holdings/top-10, benchmark/index)
+                	## Valuation & profitability (see requirements below)
                 	## Redundancy hints (qualitative; do not claim precise correlations without data)
                 	## Sources (numbered list)
                 
@@ -865,6 +889,14 @@ public class KnowledgeBaseService {
                     - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                     - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                     - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
+                    - For single stocks, include EBITDA (with currency and TTM/FY label) and a long-term P/E based on EPS_norm:
+                      EPS_norm = median(EPS_t-1 ... EPS_t-7) using adjusted EPS if available; apply flooring for very small positive EPS to avoid extreme P/E.
+                      Report: EPS_norm value, years used/available, EPS type, EPS floor policy/value, P/E_longterm, earnings_yield_longterm, data-as-of date, plus EBITDA currency.
+                      If EBITDA currency is not EUR, include EBITDA converted to EUR and the FX rate used (with date).
+                    - For ETFs, include holdings-based TTM P/E computed from historical earnings of holdings:
+                      E/P_portfolio = sum(w_i * E/P_i), P/E_ttm_holdings = 1 / E/P_portfolio.
+                      Report: P/E_ttm_holdings, earnings_yield_ttm_holdings, holdings coverage (count and weight pct), holdings as-of date.
+                    - For both, include method flags: pe_method {ttm, forward, provider_weighted_avg, provider_aggregate}, pe_horizon {ttm, normalized}, neg_earnings_handling {exclude, set_null, aggregate_allows_negative}.
                 
                 
                 ISINs:
