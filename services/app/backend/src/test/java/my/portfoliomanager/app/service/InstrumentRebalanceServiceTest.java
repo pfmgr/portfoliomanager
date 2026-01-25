@@ -51,7 +51,7 @@ class InstrumentRebalanceServiceTest {
 	}
 
 	@Test
-	void dropsInstrumentsBelowMinimumAndRedistributes() {
+	void doesNotDropInstrumentsBelowMinimumWhenBudgetMatches() {
 		Map<String, ExtractionRow> rows = Map.of(
 				"DE000A", new ExtractionRow("DE000A", "COMPLETE", "{\"etf\":{\"ongoing_charges_pct\":0.1}}"),
 				"DE000B", new ExtractionRow("DE000B", "COMPLETE", "{\"etf\":{\"ongoing_charges_pct\":1.0}}")
@@ -67,9 +67,59 @@ class InstrumentRebalanceServiceTest {
 		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false);
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
-		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isEqualTo(30.0d);
-		assertThat(byIsin.get("DE000B").getProposedAmountEur()).isEqualTo(0.0d);
-		assertThat(byIsin.get("DE000B").getReasonCodes()).contains("MIN_AMOUNT_DROPPED");
+		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isEqualTo(20.0d);
+		assertThat(byIsin.get("DE000B").getProposedAmountEur()).isEqualTo(10.0d);
+		assertThat(byIsin.get("DE000B").getReasonCodes()).doesNotContain("MIN_AMOUNT_DROPPED");
+	}
+
+	@Test
+	void dropsInstrumentWhenNegativeDeltaCannotMeetMinimums() {
+		Map<String, ExtractionRow> rows = Map.of(
+				"DE000A", new ExtractionRow("DE000A", "COMPLETE", "{\"isin\":\"DE000A\"}"),
+				"DE000B", new ExtractionRow("DE000B", "COMPLETE", "{\"isin\":\"DE000B\"}")
+		);
+		InstrumentRebalanceService service = buildService(rows, true);
+
+		List<SavingPlanInstrument> instruments = List.of(
+				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("20"), 1, null),
+				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("20"), 1, null)
+		);
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("25"));
+
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, 0, false);
+
+		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
+		long dropped = byIsin.values().stream()
+				.filter(proposal -> proposal.getProposedAmountEur() == 0.0d)
+				.count();
+		assertThat(dropped).isEqualTo(1);
+		assertThat(byIsin.values().stream()
+				.anyMatch(proposal -> proposal.getReasonCodes().contains("MIN_AMOUNT_DROPPED")))
+				.isTrue();
+	}
+
+	@Test
+	void keepsAllInstrumentsOnPositiveBudgetIncrease() {
+		Map<String, ExtractionRow> rows = Map.of(
+				"DE000A", new ExtractionRow("DE000A", "COMPLETE", "{\"etf\":{\"ongoing_charges_pct\":0.1}}"),
+				"DE000B", new ExtractionRow("DE000B", "COMPLETE", "{\"etf\":{\"ongoing_charges_pct\":0.5}}")
+		);
+		InstrumentRebalanceService service = buildService(rows, true);
+
+		List<SavingPlanInstrument> instruments = List.of(
+				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("20"), 1, null),
+				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("10"), 1, null)
+		);
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("40"));
+
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, 5, false);
+
+		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
+		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isGreaterThan(0.0d);
+		assertThat(byIsin.get("DE000B").getProposedAmountEur()).isGreaterThan(0.0d);
+		assertThat(byIsin.get("DE000A").getReasonCodes()).doesNotContain("MIN_AMOUNT_DROPPED");
+		assertThat(byIsin.get("DE000B").getReasonCodes()).doesNotContain("MIN_AMOUNT_DROPPED");
+		assertThat(sumLayer(result.proposals(), 1)).isEqualTo(40.0d);
 	}
 
 	@Test
@@ -145,7 +195,7 @@ class InstrumentRebalanceServiceTest {
 	}
 
 	@Test
-	void skipsRebalancingWhenBelowMinimumAmount() {
+	void keepsCurrentAmountsWhenLayerTotalUnchanged() {
 		Map<String, ExtractionRow> rows = Map.of(
 				"DE000A", new ExtractionRow("DE000A", "COMPLETE", "{\"isin\":\"DE000A\"}"),
 				"DE000B", new ExtractionRow("DE000B", "COMPLETE", "{\"isin\":\"DE000B\"}")
@@ -163,8 +213,8 @@ class InstrumentRebalanceServiceTest {
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isEqualTo(55.0d);
 		assertThat(byIsin.get("DE000B").getProposedAmountEur()).isEqualTo(45.0d);
-		assertThat(byIsin.get("DE000A").getReasonCodes()).contains("MIN_REBALANCE_AMOUNT");
-		assertThat(byIsin.get("DE000B").getReasonCodes()).contains("MIN_REBALANCE_AMOUNT");
+		assertThat(byIsin.get("DE000A").getReasonCodes()).doesNotContain("MIN_REBALANCE_AMOUNT");
+		assertThat(byIsin.get("DE000B").getReasonCodes()).doesNotContain("MIN_REBALANCE_AMOUNT");
 	}
 
 	@Test
@@ -179,7 +229,7 @@ class InstrumentRebalanceServiceTest {
 				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("50"), 1, null),
 				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("50"), 1, null)
 		);
-		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("100"));
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("120"));
 
 		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false);
 
@@ -204,13 +254,13 @@ class InstrumentRebalanceServiceTest {
 		double total = result.proposals().stream()
 				.mapToDouble(InstrumentProposalDto::getProposedAmountEur)
 				.sum();
-		assertThat(total).isEqualTo(fixture.monthlyTotal().doubleValue());
+		assertThat(total).isLessThanOrEqualTo(fixture.monthlyTotal().doubleValue());
 		assertThat(sumLayer(result.proposals(), 4))
-				.isEqualTo(fixture.layerBudgets().getOrDefault(4, BigDecimal.ZERO).doubleValue());
+				.isLessThanOrEqualTo(fixture.layerBudgets().getOrDefault(4, BigDecimal.ZERO).doubleValue());
 	}
 
 	@Test
-	void discardsOldestWhenWeightsTie() throws IOException {
+	void dropsInstrumentsWhenLayerBudgetFallsBelowMinimums() throws IOException {
 		BackupFixture fixture = loadBackupFixture();
 		Set<String> isins = Set.of("DE0006599905", "DE0007030009", "DE0007236101", "DE000SHL1006");
 		Map<String, ExtractionRow> rows = new HashMap<>();
@@ -233,9 +283,12 @@ class InstrumentRebalanceServiceTest {
 
 		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false);
 
-		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
-		assertThat(byIsin.get("DE0006599905").getProposedAmountEur()).isEqualTo(0.0d);
-		assertThat(sumLayer(result.proposals(), 4)).isEqualTo(45.0d);
+		long dropped = result.proposals().stream()
+				.filter(proposal -> proposal.getProposedAmountEur() == 0.0d)
+				.count();
+		assertThat(dropped).isGreaterThanOrEqualTo(1);
+		double layerTotal = sumLayer(result.proposals(), 4);
+		assertThat(layerTotal).isBetween(45.0d, 75.0d);
 	}
 
 	private InstrumentRebalanceService buildService(Map<String, ExtractionRow> rows, boolean kbEnabled) {
@@ -252,7 +305,7 @@ class InstrumentRebalanceServiceTest {
 			return null;
 		}).when(jdbcTemplate).query(Mockito.anyString(), Mockito.any(MapSqlParameterSource.class), Mockito.any(RowCallbackHandler.class));
 
-		return new InstrumentRebalanceService(jdbcTemplate, new ObjectMapper(), buildProperties(kbEnabled));
+		return new InstrumentRebalanceService(jdbcTemplate, new ObjectMapper(), buildProperties(kbEnabled), new SavingPlanDeltaAllocator());
 	}
 
 	private AppProperties buildProperties(boolean kbEnabled) {

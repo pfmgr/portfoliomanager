@@ -17,7 +17,6 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -36,19 +35,21 @@ public class InstrumentRebalanceService {
 	private static final String REASON_EQUAL_WEIGHT = "EQUAL_WEIGHT";
 	private static final String REASON_LAYER_BUDGET_ZERO = "LAYER_BUDGET_ZERO";
 	private static final String WARNING_NO_INSTRUMENTS = "LAYER_NO_INSTRUMENTS";
-	private static final String WARNING_ALL_BELOW_MIN = "LAYER_ALL_BELOW_MINIMUM";
 	private static final double DEFAULT_PB_TARGET = 2.0;
 
 	private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 	private final ObjectMapper objectMapper;
 	private final AppProperties properties;
+	private final SavingPlanDeltaAllocator savingPlanDeltaAllocator;
 
 	public InstrumentRebalanceService(NamedParameterJdbcTemplate namedParameterJdbcTemplate,
 									  ObjectMapper objectMapper,
-									  AppProperties properties) {
+									  AppProperties properties,
+									  SavingPlanDeltaAllocator savingPlanDeltaAllocator) {
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
 		this.objectMapper = objectMapper;
 		this.properties = properties;
+		this.savingPlanDeltaAllocator = savingPlanDeltaAllocator;
 	}
 
 	public InstrumentProposalResult buildInstrumentProposals(List<SavingPlanInstrument> instruments,
@@ -190,83 +191,66 @@ public class InstrumentRebalanceService {
 												Integer minimumSavingPlanSize,
 												Integer minimumRebalancingAmount,
 												Map<String, KbExtraction> extractions) {
-		List<SavingPlanInstrument> remaining = new ArrayList<>(instruments);
-		Set<String> dropped = new HashSet<>();
 		Map<String, List<String>> reasonCodes = new HashMap<>();
 		List<InstrumentWarning> warnings = new ArrayList<>();
-		BigDecimal minimum = minimumSavingPlanSize == null ? null : new BigDecimal(minimumSavingPlanSize);
+		BigDecimal minSavingPlan = minimumSavingPlanSize == null ? null : new BigDecimal(minimumSavingPlanSize);
+		BigDecimal minRebalance = minimumRebalancingAmount == null ? null : new BigDecimal(minimumRebalancingAmount);
 
-		Map<String, BigDecimal> rawAmounts = Map.of();
-		Map<String, BigDecimal> proposedAmounts = new HashMap<>();
-		WeightingResult weighting = WeightingResult.equal(remaining);
-		LayerWeightingSummary weightingSummary = null;
-
-		while (!remaining.isEmpty()) {
-			weighting = computeWeights(remaining, extractions);
-			rawAmounts = allocateRawAmounts(budget, remaining, weighting.weights());
-
-			if (minimum != null && minimum.signum() > 0 && hasBelowMinimum(rawAmounts, remaining, minimum)) {
-				SavingPlanInstrument discard = selectDiscardCandidate(remaining, weighting.weights());
-				if (discard == null) {
-					break;
-				}
-				markDiscard(discard, dropped, reasonCodes);
-				remaining.remove(discard);
+		WeightingResult weighting = computeWeights(instruments, extractions);
+		List<SavingPlanDeltaAllocator.PlanInput> inputs = new ArrayList<>();
+		Map<AssessorEngine.PlanKey, String> keyToIsin = new HashMap<>();
+		for (SavingPlanInstrument instrument : instruments) {
+			if (instrument == null) {
 				continue;
 			}
-
-			Map<String, BigDecimal> rounded = roundLayerAmounts(rawAmounts, budget);
-			proposedAmounts = new HashMap<>(rounded);
-
-			if (minimumRebalancingAmount != null && minimumRebalancingAmount > 0) {
-				Map<String, List<String>> workingReasons = copyReasonCodes(reasonCodes);
-				MinimumRebalancingOutcome minOutcome = applyMinimumRebalancingAmount(remaining, proposedAmounts, minimumRebalancingAmount, workingReasons);
-				proposedAmounts = new HashMap<>(minOutcome.adjustedAmounts());
-				if (!matchesLayerBudget(proposedAmounts, remaining, budget)) {
-					SavingPlanInstrument discard = selectDiscardCandidate(remaining, weighting.weights());
-					if (discard == null) {
-						break;
-					}
-					markDiscard(discard, dropped, reasonCodes);
-					remaining.remove(discard);
-					continue;
-				}
-				reasonCodes = workingReasons;
-			}
-
-			String weightCode = weighting.weighted() ? REASON_WEIGHTED : REASON_EQUAL_WEIGHT;
-			for (SavingPlanInstrument instrument : remaining) {
-				addReasonCode(reasonCodes, instrument.isin(), weightCode);
-			}
-			weightingSummary = new LayerWeightingSummary(
-					layer,
-					remaining.size(),
-					weighting.weighted(),
-					weighting.costUsed(),
-					weighting.benchmarkUsed(),
-					weighting.regionsUsed(),
-					weighting.holdingsUsed(),
-					weighting.valuationUsed(),
-					Map.copyOf(weighting.weights())
-			);
-			break;
+			String isin = instrument.isin();
+			BigDecimal weight = weighting.weights().getOrDefault(isin, BigDecimal.ONE);
+			AssessorEngine.PlanKey key = new AssessorEngine.PlanKey(isin, null);
+			inputs.add(new SavingPlanDeltaAllocator.PlanInput(key, instrument.monthlyAmount(), weight));
+			keyToIsin.put(key, isin);
 		}
 
-		if (remaining.isEmpty()) {
-			proposedAmounts = new HashMap<>();
-			warnings.add(new InstrumentWarning(
-					WARNING_ALL_BELOW_MIN,
-					String.format("Layer %d budget could not be allocated because all instruments fall below the minimum saving plan size.",
-							layer),
-					layer
-			));
-		}
+		SavingPlanDeltaAllocator.Allocation allocation = savingPlanDeltaAllocator.allocateToTarget(
+				inputs,
+				budget,
+				minRebalance,
+				minSavingPlan
+		);
 
+		String weightCode = weighting.weighted() ? REASON_WEIGHTED : REASON_EQUAL_WEIGHT;
 		for (SavingPlanInstrument instrument : instruments) {
-			if (dropped.contains(instrument.isin())) {
-				proposedAmounts.put(instrument.isin(), BigDecimal.ZERO);
+			addReasonCode(reasonCodes, instrument.isin(), weightCode);
+		}
+		if (allocation.minRebalanceSuppressed()) {
+			for (SavingPlanInstrument instrument : instruments) {
+				addReasonCode(reasonCodes, instrument.isin(), REASON_MIN_REBALANCE);
 			}
 		}
+		for (AssessorEngine.PlanKey key : allocation.discardedPlans()) {
+			String isin = keyToIsin.get(key);
+			if (isin != null) {
+				addReasonCode(reasonCodes, isin, REASON_MIN_DROPPED);
+			}
+		}
+
+		Map<String, BigDecimal> proposedAmounts = new HashMap<>();
+		for (SavingPlanInstrument instrument : instruments) {
+			AssessorEngine.PlanKey key = new AssessorEngine.PlanKey(instrument.isin(), null);
+			BigDecimal proposed = allocation.proposedAmounts().getOrDefault(key, BigDecimal.ZERO);
+			proposedAmounts.put(instrument.isin(), proposed);
+		}
+
+		LayerWeightingSummary weightingSummary = new LayerWeightingSummary(
+				layer,
+				instruments.size(),
+				weighting.weighted(),
+				weighting.costUsed(),
+				weighting.benchmarkUsed(),
+				weighting.regionsUsed(),
+				weighting.holdingsUsed(),
+				weighting.valuationUsed(),
+				Map.copyOf(weighting.weights())
+		);
 
 		return new LayerAllocation(Map.copyOf(proposedAmounts), toReasonMap(reasonCodes), warnings, weightingSummary);
 	}

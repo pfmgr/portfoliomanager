@@ -395,3 +395,15 @@ test('layer targets can reset to default', async ({ page }) => {
   await page.getByRole('button', { name: 'Reset to Profile Default' }).click({ force: true })
   await expect(page.getByText('Layer targets reset to profile defaults.')).toBeVisible()
 })
+
+test('layer targets save custom overrides', async ({ page }) => {
+  await page.goto('/layer-targets')
+
+  await page.getByRole('checkbox', { name: 'Enable custom overrides' }).check({ force: true })
+  const firstCustomInput = page.locator('tbody tr').first().locator('input.input.compact').first()
+  await firstCustomInput.fill('0.4')
+  await page.getByRole('button', { name: 'Save' }).click({ force: true })
+
+  await expect(page.getByText('Layer targets saved.')).toBeVisible()
+  await expect(page.getByText('Custom overrides are active.')).toBeVisible()
+})
