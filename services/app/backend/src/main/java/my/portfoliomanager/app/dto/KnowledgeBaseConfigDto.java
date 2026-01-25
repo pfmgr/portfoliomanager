@@ -22,6 +22,7 @@ public record KnowledgeBaseConfigDto(
 		@JsonProperty("dossier_max_chars") Integer dossierMaxChars,
 		@JsonProperty("kb_refresh_min_days_between_runs_per_instrument") Integer kbRefreshMinDaysBetweenRunsPerInstrument,
 		@JsonProperty("run_timeout_minutes") Integer runTimeoutMinutes,
+		@JsonProperty("websearch_reasoning_effort") String websearchReasoningEffort,
 		@JsonProperty("websearch_allowed_domains") List<String> websearchAllowedDomains
 ) {
 }
