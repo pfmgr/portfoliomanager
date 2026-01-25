@@ -22,6 +22,39 @@ import java.util.Locale;
 public class LlmExtractorService implements ExtractorService {
 	private final KnowledgeBaseLlmClient llmClient;
 	private final ObjectMapper objectMapper;
+	private static final List<String> THEMATIC_KEYWORDS = List.of(
+			"theme",
+			"thematic",
+			"sector",
+			"industry",
+			"defense",
+			"defence",
+			"energy",
+			"lithium",
+			"battery",
+			"batteries",
+			"clean",
+			"renewable",
+			"semiconductor",
+			"robot",
+			"ai",
+			"artificial intelligence",
+			"cyber",
+			"cloud",
+			"biotech",
+			"healthcare",
+			"pharma",
+			"water",
+			"gold",
+			"silver",
+			"oil",
+			"gas",
+			"uranium",
+			"mining",
+			"metals",
+			"commodity",
+			"commodities"
+	);
 
 	public LlmExtractorService(KnowledgeBaseLlmClient llmClient,
 							   ObjectMapper objectMapper) {
@@ -58,6 +91,9 @@ public class LlmExtractorService implements ExtractorService {
 			layer = null;
 		}
 		String layerNotes = textOrNull(data, "layer_notes", "layerNotes");
+		ThemeLayerDecision themeDecision = forceThemeLayerIfNeeded(layer, instrumentType, name, subClass, layerNotes);
+		layer = themeDecision.layer();
+		layerNotes = themeDecision.layerNotes();
 
 		JsonNode etfNode = objectOrNull(data, "etf");
 		BigDecimal ongoingChargesPct = decimalOrNull(etfNode, "ongoing_charges_pct", "ongoingChargesPct");
@@ -354,6 +390,65 @@ public class LlmExtractorService implements ExtractorService {
 			}
 		}
 		return null;
+	}
+
+	private ThemeLayerDecision forceThemeLayerIfNeeded(Integer layer,
+													   String instrumentType,
+													   String name,
+													   String subClass,
+													   String layerNotes) {
+		if (instrumentType == null) {
+			return new ThemeLayerDecision(layer, layerNotes);
+		}
+		String type = instrumentType.toLowerCase(Locale.ROOT);
+		if (!(type.contains("etf") || type.contains("fund") || type.contains("etp"))) {
+			return new ThemeLayerDecision(layer, layerNotes);
+		}
+		String combined = String.join(" ",
+				name == null ? "" : name,
+				subClass == null ? "" : subClass,
+				layerNotes == null ? "" : layerNotes
+		).toLowerCase(Locale.ROOT);
+		for (String keyword : THEMATIC_KEYWORDS) {
+			if (combined.contains(keyword)) {
+				boolean changed = layer == null || layer != 3;
+				String updatedNotes = normalizeThemeNotes(layerNotes);
+				if (changed) {
+					updatedNotes = appendPostprocessorHint(updatedNotes);
+				}
+				return new ThemeLayerDecision(3, updatedNotes);
+			}
+		}
+		return new ThemeLayerDecision(layer, layerNotes);
+	}
+
+	private String normalizeThemeNotes(String layerNotes) {
+		if (layerNotes == null || layerNotes.isBlank()) {
+			return "Thematic ETF";
+		}
+		String normalized = layerNotes.toLowerCase(Locale.ROOT);
+		if (normalized.contains("layer 1")
+				|| normalized.contains("layer 2")
+				|| normalized.contains("core-plus")
+				|| normalized.contains("core plus")
+				|| normalized.contains("core")) {
+			return "Thematic ETF";
+		}
+		return layerNotes;
+	}
+
+	private String appendPostprocessorHint(String notes) {
+		String hint = "Layer overridden by extraction postprocessor";
+		if (notes == null || notes.isBlank()) {
+			return hint;
+		}
+		if (notes.contains(hint)) {
+			return notes;
+		}
+		return notes + " (" + hint + ")";
+	}
+
+	private record ThemeLayerDecision(Integer layer, String layerNotes) {
 	}
 
 	private Integer integerOrNull(JsonNode node, String... fields) {

@@ -56,6 +56,39 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 	private static final Pattern ISO_DATE_RE = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
 	private static final Pattern PERIOD_HINT_RE = Pattern.compile("(?i)\\b(fy|ttm|ltm|period end)\\b");
 	private static final Pattern YEAR_RE = Pattern.compile("\\b\\d{4}\\b");
+	private static final List<String> THEMATIC_KEYWORDS = List.of(
+			"theme",
+			"thematic",
+			"sector",
+			"industry",
+			"defense",
+			"defence",
+			"energy",
+			"lithium",
+			"battery",
+			"batteries",
+			"clean",
+			"renewable",
+			"semiconductor",
+			"robot",
+			"ai",
+			"artificial intelligence",
+			"cyber",
+			"cloud",
+			"biotech",
+			"healthcare",
+			"pharma",
+			"water",
+			"gold",
+			"silver",
+			"oil",
+			"gas",
+			"uranium",
+			"mining",
+			"metals",
+			"commodity",
+			"commodities"
+	);
 	private static final List<String> VALUATION_KEY_ORDER = List.of(
 			"price",
 			"pe_current",
@@ -399,9 +432,11 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		String prompt = buildDossierPrompt(normalizedIsin, context, maxChars);
 		logger.debug("Sending prompt to LLM: {}",prompt);
 		logger.info("Starting websearch for ISIN(s) {} to create dossier", isin);
+		String reasoningEffort = configService.getSnapshot().websearchReasoningEffort();
 		KnowledgeBaseLlmResponse response = withRetry(() -> llmProvider.runWebSearch(
 				prompt,
 				allowedDomains,
+				reasoningEffort,
 				"kb_dossier_websearch",
 				dossierResponseSchema
 		));
@@ -829,6 +864,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		if (researchDate == null) {
 			researchDate = LocalDate.now().toString();
 		}
+		forceThemeLayerIfNeeded(root);
 		boolean singleStock = isSingleStock(root);
 		ObjectNode valuation = objectNode(root, "valuation");
 		if (valuation != null) {
@@ -866,6 +902,76 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			}
 		}
 		return root;
+	}
+
+	private void forceThemeLayerIfNeeded(ObjectNode root) {
+		String instrumentType = textOrNull(root, "instrument_type");
+		if (instrumentType == null) {
+			return;
+		}
+		String type = instrumentType.toLowerCase(Locale.ROOT);
+		if (!(type.contains("etf") || type.contains("fund") || type.contains("etp"))) {
+			return;
+		}
+		String combined = String.join(" ",
+				Objects.toString(textOrNull(root, "name"), ""),
+				Objects.toString(textOrNull(root, "sub_class"), ""),
+				Objects.toString(textOrNull(root, "layer_notes"), "")
+		).toLowerCase(Locale.ROOT);
+		if (!containsThematicKeyword(combined)) {
+			return;
+		}
+		Integer originalLayer = null;
+		JsonNode layerNode = root.get("layer");
+		if (layerNode != null && layerNode.isInt()) {
+			originalLayer = layerNode.asInt();
+		}
+		boolean changed = originalLayer == null || originalLayer != 3;
+		if (changed) {
+			root.put("layer", 3);
+		}
+		String layerNotes = textOrNull(root, "layer_notes");
+		if (layerNotes == null || shouldOverwriteThemeNotes(layerNotes)) {
+			root.put("layer_notes", "Thematic ETF");
+		}
+		if (changed) {
+			root.put("layer_notes", appendPostprocessorHint(textOrNull(root, "layer_notes")));
+		}
+	}
+
+	private boolean containsThematicKeyword(String value) {
+		if (value == null || value.isBlank()) {
+			return false;
+		}
+		for (String keyword : THEMATIC_KEYWORDS) {
+			if (value.contains(keyword)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean shouldOverwriteThemeNotes(String value) {
+		if (value == null) {
+			return true;
+		}
+		String normalized = value.toLowerCase(Locale.ROOT);
+		return normalized.contains("layer 1")
+				|| normalized.contains("layer 2")
+				|| normalized.contains("core-plus")
+				|| normalized.contains("core plus")
+				|| normalized.contains("core");
+	}
+
+	private String appendPostprocessorHint(String notes) {
+		String hint = "Layer overridden by extraction postprocessor";
+		if (notes == null || notes.isBlank()) {
+			return hint;
+		}
+		if (notes.contains(hint)) {
+			return notes;
+		}
+		return notes + " (" + hint + ")";
 	}
 
 	private void applyAsOfFallback(ObjectNode node, String valueField, String dateField, String researchDate) {
@@ -1092,9 +1198,11 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 	public KnowledgeBaseLlmAlternativesDraft findAlternatives(String isin, List<String> allowedDomains) {
 		String normalizedIsin = normalizeIsin(isin);
 		String prompt = buildAlternativesPrompt(normalizedIsin);
+		String reasoningEffort = configService.getSnapshot().websearchReasoningEffort();
 		KnowledgeBaseLlmResponse response = withRetry(() -> llmProvider.runWebSearch(
 				prompt,
 				allowedDomains,
+				reasoningEffort,
 				"kb_alternatives_websearch",
 				alternativesResponseSchema
 		));
@@ -1203,7 +1311,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 ## Sources (numbered list)
                 
                 Additional requirements:
-                - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Satellite, 4=Single stock.
+                - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.
                 - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
                 - For exposures, provide region and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
                 - In the Exposures section, do not include valuation/template fields (e.g., holdings_weight_method, pe_method, pe_horizon); keep it to regions, sectors, holdings, and benchmark only.
@@ -1215,6 +1323,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                 - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                 - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
+                - If the ETF is thematic/sector/industry/commodity focused (e.g., defense, energy, lithium/batteries, clean tech, semiconductors, robotics/AI, healthcare subsectors, commodities), it must be Layer 3. Do not classify such ETFs as Layer 2 even if they are globally diversified.
+                - If there is any doubt between Layer 2 and Layer 3 for a thematic ETF, choose Layer 3.
+                - Practical check: if the instrument name, benchmark, or description contains a theme/sector/industry keyword (Defense, Energy, Battery, Lithium, Semiconductor, Robotics, AI, Clean, Water, Gold, Oil, Commodity, Cloud, Cyber, Biotech, Healthcare subsector), force Layer 3.
                 - For single stocks, collect the raw inputs needed for long-term P/E:
                   EBITDA (currency + TTM/FY label), share price (currency + as-of date), and annual EPS history for the last 3-7 fiscal years (include year, period end, EPS value, and whether EPS is adjusted or reported).
                   If EPS history is incomplete or only a single year is available, still report what you have and explain the gap; do not fabricate long-term P/E.

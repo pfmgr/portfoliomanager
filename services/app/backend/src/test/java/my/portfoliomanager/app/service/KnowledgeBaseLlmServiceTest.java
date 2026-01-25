@@ -309,6 +309,56 @@ class KnowledgeBaseLlmServiceTest {
 	}
 
 	@Test
+	void extractMetadata_forcesLayer3ForThematicEtf() {
+		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt) {
+				throw new UnsupportedOperationException("Use schema-based call");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt,
+														 String schemaNameArg,
+														 Map<String, Object> schema) {
+				return new KnowledgeBaseLlmResponse("""
+						{
+						  "isin": "IE0002Y8CX98",
+						  "name": "WisdomTree Europe Defence UCITS ETF",
+						  "instrument_type": "ETF",
+						  "asset_class": "Equity",
+						  "sub_class": "Europe Defence",
+						  "layer": 2,
+						  "layer_notes": "Core-Plus; Europe exposure",
+						  "etf": {
+						    "ongoing_charges_pct": 0.4,
+						    "benchmark_index": "Custom"
+						  },
+						  "risk": null,
+						  "regions": null,
+						  "top_holdings": null,
+						  "financials": null,
+						  "valuation": null,
+						  "missing_fields": [],
+						  "warnings": []
+						}
+						""", "test-model");
+			}
+		};
+		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
+		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+
+		var draft = client.extractMetadata("Research date: 2026-01-24");
+
+		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(3);
+	}
+
+	@Test
 	void extractMetadata_stripsNullChars() {
 		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
 			@Override
@@ -521,6 +571,7 @@ class KnowledgeBaseLlmServiceTest {
 				15000,
 				7,
 				30,
+				"low",
 				List.of("example.com")
 		);
 	}

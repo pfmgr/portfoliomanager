@@ -1126,6 +1126,14 @@
               <span>Run timeout (minutes)</span>
               <input type="number" min="1" v-model.number="configForm.runTimeoutMinutes" />
             </label>
+            <label class="field">
+              <span>Websearch reasoning effort</span>
+              <select class="input" v-model="configForm.websearchReasoningEffort">
+                <option value="low">Low (default)</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
           </div>
 
           <label class="field">
@@ -1186,7 +1194,8 @@ const configForm = ref({
   maxBackoffSeconds: 30,
   dossierMaxChars: 15000,
   kbRefreshMinDaysBetweenRunsPerInstrument: 7,
-  runTimeoutMinutes: 30
+  runTimeoutMinutes: 30,
+  websearchReasoningEffort: 'low'
 })
 const domainsText = ref('')
 const configBusy = ref(false)
@@ -2456,6 +2465,9 @@ function prevRunsPage() {
 }
 
 function normalizeConfig(raw) {
+  const effort = ['low', 'medium', 'high'].includes(raw.websearch_reasoning_effort)
+    ? raw.websearch_reasoning_effort
+    : 'low'
   return {
     enabled: !!raw.enabled,
     refreshIntervalDays: raw.refresh_interval_days ?? 30,
@@ -2474,6 +2486,7 @@ function normalizeConfig(raw) {
     dossierMaxChars: raw.dossier_max_chars ?? 15000,
     kbRefreshMinDaysBetweenRunsPerInstrument: raw.kb_refresh_min_days_between_runs_per_instrument ?? 7,
     runTimeoutMinutes: raw.run_timeout_minutes ?? 30,
+    websearchReasoningEffort: effort,
     websearchAllowedDomains: raw.websearch_allowed_domains || []
   }
 }
@@ -2497,6 +2510,7 @@ function toConfigPayload(form, domainsRaw) {
     dossier_max_chars: form.dossierMaxChars,
     kb_refresh_min_days_between_runs_per_instrument: form.kbRefreshMinDaysBetweenRunsPerInstrument,
     run_timeout_minutes: form.runTimeoutMinutes,
+    websearch_reasoning_effort: form.websearchReasoningEffort,
     websearch_allowed_domains: parseDomains(domainsRaw)
   }
 }

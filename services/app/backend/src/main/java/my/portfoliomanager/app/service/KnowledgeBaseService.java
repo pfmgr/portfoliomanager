@@ -201,7 +201,8 @@ public class KnowledgeBaseService {
             suggestion = llmClient.createInstrumentDossierViaWebSearch(
                     prompt,
                     "kb_bulk_dossier_websearch",
-                    bulkWebsearchSchema
+                    bulkWebsearchSchema,
+                    config.websearchReasoningEffort()
             );
             logger.info("LLM responded");
         } catch (Exception ex) {
@@ -932,6 +933,9 @@ public class KnowledgeBaseService {
                     - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                     - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                     - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
+                    - If the ETF is thematic/sector/industry/commodity focused (e.g., defense, energy, lithium/batteries, clean tech, semiconductors, robotics/AI, healthcare subsectors, commodities), it must be Layer 3. Do not classify such ETFs as Layer 2 even if they are globally diversified.
+                    - If there is any doubt between Layer 2 and Layer 3 for a thematic ETF, choose Layer 3.
+                    - Practical check: if the instrument name, benchmark, or description contains a theme/sector/industry keyword (Defense, Energy, Battery, Lithium, Semiconductor, Robotics, AI, Clean, Water, Gold, Oil, Commodity, Cloud, Cyber, Biotech, Healthcare subsector), force Layer 3.
                     - For single stocks, collect the raw inputs needed for long-term P/E:
                       EBITDA (currency + TTM/FY label), share price (currency + as-of date), and annual EPS history for the last 3-7 fiscal years (include year, period end, EPS value, and whether EPS is adjusted or reported).
                       If EPS history is incomplete or only a single year is available, still report what you have and explain the gap; do not fabricate long-term P/E.

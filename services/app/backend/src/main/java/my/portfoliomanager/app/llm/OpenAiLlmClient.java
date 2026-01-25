@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClientResponseException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
@@ -85,7 +86,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     @Override
     public LlmSuggestion createInstrumentDossierViaWebSearch(String context) {
         try {
-            KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains);
+            KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, null);
             return new LlmSuggestion(response.output(), response.model());
         } catch (LlmRequestException ex) {
             return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
@@ -95,7 +96,30 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     @Override
     public LlmSuggestion createInstrumentDossierViaWebSearch(String context, String schemaName, Map<String, Object> schema) {
         try {
-            KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, schemaName, schema);
+            KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, null, schemaName, schema);
+            return new LlmSuggestion(response.output(), response.model());
+        } catch (LlmRequestException ex) {
+            return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
+        }
+    }
+
+    @Override
+    public LlmSuggestion createInstrumentDossierViaWebSearch(String context, String reasoningEffort) {
+        try {
+            KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, reasoningEffort);
+            return new LlmSuggestion(response.output(), response.model());
+        } catch (LlmRequestException ex) {
+            return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
+        }
+    }
+
+    @Override
+    public LlmSuggestion createInstrumentDossierViaWebSearch(String context,
+                                                             String schemaName,
+                                                             Map<String, Object> schema,
+                                                             String reasoningEffort) {
+        try {
+            KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, reasoningEffort, schemaName, schema);
             return new LlmSuggestion(response.output(), response.model());
         } catch (LlmRequestException ex) {
             return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
@@ -119,7 +143,22 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 
     @Override
     public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains, String schemaName, Map<String, Object> schema) {
-        Map<String, Object> request = buildWebSearchRequest(prompt, allowedDomains, schemaName, schema);
+        Map<String, Object> request = buildWebSearchRequest(prompt, allowedDomains, schemaName, schema, null);
+        return callResponsesApi(request);
+    }
+
+    @Override
+    public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains, String reasoningEffort) {
+        return runWebSearch(prompt, allowedDomains, reasoningEffort, null, null);
+    }
+
+    @Override
+    public KnowledgeBaseLlmResponse runWebSearch(String prompt,
+                                                 List<String> allowedDomains,
+                                                 String reasoningEffort,
+                                                 String schemaName,
+                                                 Map<String, Object> schema) {
+        Map<String, Object> request = buildWebSearchRequest(prompt, allowedDomains, schemaName, schema, reasoningEffort);
         return callResponsesApi(request);
     }
 
@@ -158,8 +197,10 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     private Map<String, Object> buildWebSearchRequest(String prompt,
                                                       List<String> allowedDomains,
                                                       String schemaName,
-                                                      Map<String, Object> schema) {
+                                                      Map<String, Object> schema,
+                                                      String reasoningEffort) {
         List<String> domains = allowedDomains == null || allowedDomains.isEmpty() ? allowedWebSearchDomains : allowedDomains;
+        String effort = normalizeReasoningEffort(reasoningEffort);
         Map<String, Object> request = new HashMap<>();
         request.put("model", model);
         request.put("input", List.of(
@@ -167,7 +208,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
                 Map.of("role", "user", "content", prompt)
         ));
         request.put("tools", List.of(Map.of("type", "web_search", "filters", Map.of("allowed_domains", domains))));
-        request.put("reasoning", Map.of("effort", "low"));
+        request.put("reasoning", Map.of("effort", effort));
         if (schemaName != null && schema != null) {
             request.put("text", Map.of("format", Map.of(
                     "type", "json_schema",
@@ -177,6 +218,17 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
             )));
         }
         return request;
+    }
+
+    private String normalizeReasoningEffort(String effort) {
+        if (effort == null || effort.isBlank()) {
+            return "low";
+        }
+        String normalized = effort.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "low", "medium", "high" -> normalized;
+            default -> "low";
+        };
     }
 
     private KnowledgeBaseLlmResponse callResponsesApi(Map<String, Object> request) {

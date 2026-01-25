@@ -29,6 +29,7 @@ public class KnowledgeBaseConfigService {
 	private static final int DEFAULT_DOSSIER_MAX_CHARS = 15000;
 	private static final int DEFAULT_MIN_DAYS_BETWEEN_RUNS = 7;
 	private static final int DEFAULT_RUN_TIMEOUT_MINUTES = 30;
+	private static final String DEFAULT_WEBSEARCH_REASONING_EFFORT = "low";
 
 	private final KnowledgeBaseConfigRepository repository;
 	private final ObjectMapper objectMapper;
@@ -91,6 +92,7 @@ public class KnowledgeBaseConfigService {
 		int dossierMaxChars = positiveOrDefault(raw == null ? null : raw.dossierMaxChars(), DEFAULT_DOSSIER_MAX_CHARS);
 		int minDaysBetweenRuns = positiveOrDefault(raw == null ? null : raw.kbRefreshMinDaysBetweenRunsPerInstrument(), DEFAULT_MIN_DAYS_BETWEEN_RUNS);
 		int runTimeout = positiveOrDefault(raw == null ? null : raw.runTimeoutMinutes(), DEFAULT_RUN_TIMEOUT_MINUTES);
+		String reasoningEffort = normalizeReasoningEffort(raw == null ? null : raw.websearchReasoningEffort());
 
 		List<String> allowedDomains = normalizeDomains(raw == null ? null : raw.websearchAllowedDomains());
 		if (allowedDomains.isEmpty()) {
@@ -115,6 +117,7 @@ public class KnowledgeBaseConfigService {
 				dossierMaxChars,
 				minDaysBetweenRuns,
 				runTimeout,
+				reasoningEffort,
 				allowedDomains
 		);
 	}
@@ -144,6 +147,17 @@ public class KnowledgeBaseConfigService {
 		return cleaned;
 	}
 
+	private String normalizeReasoningEffort(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return DEFAULT_WEBSEARCH_REASONING_EFFORT;
+		}
+		String normalized = raw.trim().toLowerCase(Locale.ROOT);
+		return switch (normalized) {
+			case "low", "medium", "high" -> normalized;
+			default -> DEFAULT_WEBSEARCH_REASONING_EFFORT;
+		};
+	}
+
 	private KnowledgeBaseConfigDto toDto(KnowledgeBaseConfigSnapshot snapshot) {
 		return new KnowledgeBaseConfigDto(
 				snapshot.enabled(),
@@ -163,6 +177,7 @@ public class KnowledgeBaseConfigService {
 				snapshot.dossierMaxChars(),
 				snapshot.kbRefreshMinDaysBetweenRunsPerInstrument(),
 				snapshot.runTimeoutMinutes(),
+				snapshot.websearchReasoningEffort(),
 				List.copyOf(snapshot.websearchAllowedDomains())
 		);
 	}
@@ -185,6 +200,7 @@ public class KnowledgeBaseConfigService {
 			int dossierMaxChars,
 			int kbRefreshMinDaysBetweenRunsPerInstrument,
 			int runTimeoutMinutes,
+			String websearchReasoningEffort,
 			List<String> websearchAllowedDomains
 	) {
 	}
