@@ -1,12 +1,12 @@
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '4.0.1'
+	id 'org.springframework.boot' version '4.0.2'
 	id 'io.spring.dependency-management' version '1.1.7'
 	id 'jacoco'
 }
 
 group = 'my.portfoliomanager'
-version = '0.0.1-SNAPSHOT'
+version = '0.1.0'
 description = 'Portfolio manager for multiple depot types'
 
 java {
