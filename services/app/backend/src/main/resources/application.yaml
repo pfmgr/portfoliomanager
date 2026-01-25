@@ -39,8 +39,8 @@ app:
       api-key: ${LLM_PROVIDER_API_KEY:${OPENAI_API_KEY:}}
       base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}
       model: ${LLM_PROVIDER_MODEL:gpt-5-mini}
-      connect-timeout-seconds: ${LLM_PROVIDER_CONNECT_TIMEOUT_SECONDS:10}
-      read-timeout-seconds: ${LLM_PROVIDER_READ_TIMEOUT_SECONDS:120}
+      connect-timeout-seconds: ${LLM_PROVIDER_CONNECT_TIMEOUT_SECONDS:300}
+      read-timeout-seconds: ${LLM_PROVIDER_READ_TIMEOUT_SECONDS:300}
   kb:
     enabled: ${KB_ENABLED:true}
     llm-enabled: ${KB_LLM_ENABLED:false}

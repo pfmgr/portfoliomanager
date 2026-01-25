@@ -24,6 +24,7 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 	void createDossierDraftsViaWebsearchBulk_usesSchemaAndParsesOutput() {
 		AtomicReference<String> schemaName = new AtomicReference<>();
 		AtomicReference<Map<String, Object>> schema = new AtomicReference<>();
+		AtomicReference<String> reasoningEffort = new AtomicReference<>();
 		LlmClient llmClient = new LlmClient() {
 			@Override
 			public LlmSuggestion suggestReclassification(String context) {
@@ -38,9 +39,11 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 			@Override
 			public LlmSuggestion createInstrumentDossierViaWebSearch(String context,
 																	 String schemaNameArg,
-																	 Map<String, Object> schemaArg) {
+																	 Map<String, Object> schemaArg,
+																	 String reasoningEffortArg) {
 				schemaName.set(schemaNameArg);
 				schema.set(schemaArg);
+				reasoningEffort.set(reasoningEffortArg);
 				return new LlmSuggestion("""
 						{
 						  "items": [
@@ -88,6 +91,7 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 
 		assertThat(schemaName.get()).isEqualTo("kb_bulk_dossier_websearch");
 		assertThat(schema.get()).isNotNull();
+		assertThat(reasoningEffort.get()).isEqualTo("low");
 		assertThat(result.items()).hasSize(1);
 		assertThat(result.items().getFirst().isin()).isEqualTo("DE0000000001");
 		assertThat(result.items().getFirst().contentMd()).contains("# DE0000000001");
@@ -113,6 +117,7 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 				15000,
 				7,
 				30,
+				"low",
 				List.of("example.com")
 		);
 	}

@@ -95,7 +95,7 @@ class AssessorInstrumentSuggestionServiceTest {
 						25,
 						10,
 						25,
-						Map.of(1, 5),
+						Map.of(1, 2),
 						Set.of(),
 						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
 				)
@@ -143,7 +143,7 @@ class AssessorInstrumentSuggestionServiceTest {
 						25,
 						10,
 						25,
-						Map.of(1, 5),
+						Map.of(1, 2),
 						Set.of(),
 						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
 				)
@@ -157,6 +157,448 @@ class AssessorInstrumentSuggestionServiceTest {
 				.map(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::amount)
 				.reduce(BigDecimal.ZERO, BigDecimal::add);
 		assertThat(total).isEqualByComparingTo(new BigDecimal("50"));
+	}
+
+	@Test
+	void suggestsSavingPlansWhenNoExistingCoverage() throws Exception {
+		insertExtraction(buildPayload(
+				"CAND1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayload(
+				"CAND2",
+				"Quality Equity ETF",
+				1,
+				"quality",
+				"quality thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Quality",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Microsoft", new BigDecimal("4")))
+		));
+
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						List.of(),
+						Set.of(),
+						Map.of(1, new BigDecimal("40")),
+						Map.of(),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).isNotEmpty();
+		assertThat(result.savingPlanSuggestions())
+				.extracting(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::layer)
+				.containsOnly(1);
+		BigDecimal total = result.savingPlanSuggestions().stream()
+				.map(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::amount)
+				.reduce(BigDecimal.ZERO, BigDecimal::add);
+		assertThat(total).isEqualByComparingTo(new BigDecimal("40"));
+	}
+
+	@Test
+	void prefersCandidateWithStrongerValuationSignals() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND1",
+				"Tech Innovators ETF A",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6"))),
+				buildValuation(new BigDecimal("0.15"), new BigDecimal("8.0"), new BigDecimal("8000000000"))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND2",
+				"Tech Innovators ETF B",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6"))),
+				buildValuation(new BigDecimal("0.005"), new BigDecimal("100.0"), new BigDecimal("1000"))
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).hasSize(1);
+		assertThat(result.savingPlanSuggestions().get(0).isin()).isEqualTo("CAND1");
+	}
+
+	@Test
+	void prefersEtfWithHigherHoldingsYield() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND1",
+				"Quality Equity ETF",
+				1,
+				"quality",
+				"quality thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Quality",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Microsoft", new BigDecimal("4"))),
+				buildValuationWithHoldingsYield(new BigDecimal("0.08"), "provider_weighted_avg", "ttm", "exclude")
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND2",
+				"Quality Equity ETF B",
+				1,
+				"quality",
+				"quality thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Quality",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Microsoft", new BigDecimal("4"))),
+				buildValuationWithHoldingsYield(new BigDecimal("0.02"), "provider_weighted_avg", "ttm", "exclude")
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).hasSize(1);
+		assertThat(result.savingPlanSuggestions().get(0).isin()).isEqualTo("CAND1");
+	}
+
+	@Test
+	void prefersCandidateWithHigherPeQualityFlags() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND1",
+				"Quality Equity ETF A",
+				1,
+				"quality",
+				"quality thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Quality",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Microsoft", new BigDecimal("4"))),
+				buildValuationWithHoldingsYield(new BigDecimal("0.06"), "provider_aggregate", "ttm", "aggregate_allows_negative")
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND2",
+				"Quality Equity ETF B",
+				1,
+				"quality",
+				"quality thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Quality",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Microsoft", new BigDecimal("4"))),
+				buildValuationWithHoldingsYield(new BigDecimal("0.06"), "provider_weighted_avg", "normalized", "exclude")
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).hasSize(1);
+		assertThat(result.savingPlanSuggestions().get(0).isin()).isEqualTo("CAND2");
+	}
+
+	@Test
+	void prefersCandidateWithBetterDataQuality() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayloadWithMissingFields(
+				"CAND1",
+				"Tech Innovators ETF A",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6"))),
+				3,
+				1
+		));
+		insertExtraction(buildPayload(
+				"CAND2",
+				"Tech Innovators ETF B",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6")))
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).hasSize(1);
+		assertThat(result.savingPlanSuggestions().get(0).isin()).isEqualTo("CAND2");
+	}
+
+	@Test
+	void prefersCandidateWithLowerCurrentPeWhenLongtermMissing() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND1",
+				"Real Estate Fund A",
+				1,
+				"real estate",
+				"real estate thematic accumulating",
+				new BigDecimal("0.12"),
+				"Global REIT Index",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Example REIT", new BigDecimal("6"))),
+				buildValuationWithCurrentPe(new BigDecimal("10.0"))
+		));
+		insertExtraction(buildPayloadWithValuation(
+				"CAND2",
+				"Real Estate Fund B",
+				1,
+				"real estate",
+				"real estate thematic accumulating",
+				new BigDecimal("0.12"),
+				"Global REIT Index",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Example REIT", new BigDecimal("6"))),
+				buildValuationWithCurrentPe(new BigDecimal("25.0"))
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).hasSize(1);
+		assertThat(result.savingPlanSuggestions().get(0).isin()).isEqualTo("CAND1");
+	}
+
+	@Test
+	void savingPlanSuggestionsSkipLowSeverityWhenOneTimeBudgetPresent() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF Dist",
+				1,
+				"global equity",
+				"core global distribution",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayload(
+				"CAND1",
+				"Global Core ETF Acc",
+				1,
+				"global equity",
+				"core global accumulating",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("100")),
+						25,
+						10,
+						25,
+						Map.of(1, 3),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).isEmpty();
+		assertThat(result.oneTimeSuggestions()).hasSize(1);
+		assertThat(result.oneTimeSuggestions().get(0).isin()).isEqualTo("CAND1");
+	}
+
+	@Test
+	void savingPlanSuggestionsSkipSingleStockInCoreLayers() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildStockPayload(
+				"STOCK1",
+				"Single Stock A",
+				1,
+				"single stock",
+				"single stock exposure",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("100"))),
+				List.of()
+		));
+
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				new AssessorEngine.SavingPlanItem("EXIST1", 1L, new BigDecimal("50"), 1)
+		);
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						plans,
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(),
+						25,
+						10,
+						25,
+						Map.of(1, 3),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions()).isEmpty();
 	}
 
 	@Test
@@ -495,5 +937,134 @@ class AssessorInstrumentSuggestionServiceTest {
 				null,
 				null
 		);
+	}
+
+	private InstrumentDossierExtractionPayload buildPayloadWithValuation(String isin,
+																		 String name,
+																		 int layer,
+																		 String subClass,
+																		 String notes,
+																		 BigDecimal ter,
+																		 String benchmark,
+																		 List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions,
+																		 List<InstrumentDossierExtractionPayload.HoldingPayload> holdings,
+																		 InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		return new InstrumentDossierExtractionPayload(
+				isin,
+				name,
+				"ETF",
+				"Equity",
+				subClass,
+				layer,
+				notes,
+				new InstrumentDossierExtractionPayload.EtfPayload(ter, benchmark),
+				null,
+				regions,
+				holdings,
+				null,
+				valuation,
+				null,
+				null,
+				null
+		);
+	}
+
+	private InstrumentDossierExtractionPayload buildPayloadWithMissingFields(String isin,
+																			 String name,
+																			 int layer,
+																			 String subClass,
+																			 String notes,
+																			 BigDecimal ter,
+																			 String benchmark,
+																			 List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions,
+																			 List<InstrumentDossierExtractionPayload.HoldingPayload> holdings,
+																			 int missingFields,
+																			 int warnings) {
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing = new java.util.ArrayList<>();
+		for (int i = 0; i < missingFields; i++) {
+			missing.add(new InstrumentDossierExtractionPayload.MissingFieldPayload("field_" + i, "missing"));
+		}
+		List<InstrumentDossierExtractionPayload.WarningPayload> warningList = new java.util.ArrayList<>();
+		for (int i = 0; i < warnings; i++) {
+			warningList.add(new InstrumentDossierExtractionPayload.WarningPayload("warning_" + i));
+		}
+		return new InstrumentDossierExtractionPayload(
+				isin,
+				name,
+				"ETF",
+				"Equity",
+				subClass,
+				layer,
+				notes,
+				new InstrumentDossierExtractionPayload.EtfPayload(ter, benchmark),
+				null,
+				regions,
+				holdings,
+				null,
+				null,
+				null,
+				missing,
+				warningList
+		);
+	}
+
+	private InstrumentDossierExtractionPayload buildStockPayload(String isin,
+																 String name,
+																 int layer,
+																 String subClass,
+																 String notes,
+																 List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions,
+																 List<InstrumentDossierExtractionPayload.HoldingPayload> holdings) {
+		return new InstrumentDossierExtractionPayload(
+				isin,
+				name,
+				"Equity share",
+				"Equity",
+				subClass,
+				layer,
+				notes,
+				null,
+				null,
+				regions,
+				holdings,
+				null,
+				null,
+				null,
+				null,
+				null
+		);
+	}
+
+	private InstrumentDossierExtractionPayload.ValuationPayload buildValuation(BigDecimal earningsYield,
+																			   BigDecimal evToEbitda,
+																			   BigDecimal ebitdaEur) {
+		return objectMapper.convertValue(Map.of(
+				"earnings_yield_ttm_holdings", earningsYield,
+				"earnings_yield_longterm", earningsYield,
+				"ev_to_ebitda", evToEbitda,
+				"ebitda_eur", ebitdaEur,
+				"ebitda_currency", "EUR",
+				"pe_method", "provider_weighted_avg",
+				"pe_horizon", "ttm",
+				"neg_earnings_handling", "exclude"
+		), InstrumentDossierExtractionPayload.ValuationPayload.class);
+	}
+
+	private InstrumentDossierExtractionPayload.ValuationPayload buildValuationWithCurrentPe(BigDecimal peCurrent) {
+		return objectMapper.convertValue(Map.of(
+				"pe_current", peCurrent
+		), InstrumentDossierExtractionPayload.ValuationPayload.class);
+	}
+
+	private InstrumentDossierExtractionPayload.ValuationPayload buildValuationWithHoldingsYield(BigDecimal holdingsYield,
+																								String peMethod,
+																								String peHorizon,
+																								String negHandling) {
+		return objectMapper.convertValue(Map.of(
+				"earnings_yield_ttm_holdings", holdingsYield,
+				"pe_method", peMethod,
+				"pe_horizon", peHorizon,
+				"neg_earnings_handling", negHandling
+		), InstrumentDossierExtractionPayload.ValuationPayload.class);
 	}
 }
