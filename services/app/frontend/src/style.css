@@ -366,6 +366,19 @@ button.secondary {
   margin: 0.8rem 0 1rem;
 }
 
+.kb-glossary {
+  margin-top: 0.6rem;
+}
+
+.kb-glossary summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.kb-glossary .reason-legend {
+  margin-top: 0.5rem;
+}
+
 .reason-legend {
   margin: 0.6rem 0 0;
   display: grid;

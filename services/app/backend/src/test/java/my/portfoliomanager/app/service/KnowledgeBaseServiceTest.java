@@ -215,6 +215,7 @@ class KnowledgeBaseServiceTest {
 				current.dossierMaxChars(),
 				current.kbRefreshMinDaysBetweenRunsPerInstrument(),
 				current.runTimeoutMinutes(),
+				current.websearchReasoningEffort(),
 				current.websearchAllowedDomains()
 		);
 		configService.updateConfig(updated);

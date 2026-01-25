@@ -26,8 +26,8 @@ public class LlmConfig {
 		if (model == null || model.isBlank()) {
 			model = "gpt-5-mini";
 		}
-		int connectTimeout = connectTimeoutSeconds == null ? 10 : Math.max(1, connectTimeoutSeconds);
-		int readTimeout = readTimeoutSeconds == null ? 120 : Math.max(1, readTimeoutSeconds);
+		int connectTimeout = connectTimeoutSeconds == null ? 300 : Math.max(300, connectTimeoutSeconds);
+		int readTimeout = readTimeoutSeconds == null ? 300 : Math.max(300, readTimeoutSeconds);
 		logger.info("LLM client enabled (provider=openai, model={}).", model);
 		return new OpenAiLlmClient(baseUrl, apiKey, model,
 				java.time.Duration.ofSeconds(connectTimeout),

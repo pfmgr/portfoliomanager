@@ -15,7 +15,18 @@ public interface LlmClient {
 		return new LlmSuggestion("", "LLM websearch not supported");
 	}
 
+	default LlmSuggestion createInstrumentDossierViaWebSearch(String context, String reasoningEffort) {
+		return createInstrumentDossierViaWebSearch(context);
+	}
+
 	default LlmSuggestion createInstrumentDossierViaWebSearch(String context, String schemaName, Map<String, Object> schema) {
 		return createInstrumentDossierViaWebSearch(context);
+	}
+
+	default LlmSuggestion createInstrumentDossierViaWebSearch(String context,
+															 String schemaName,
+															 Map<String, Object> schema,
+															 String reasoningEffort) {
+		return createInstrumentDossierViaWebSearch(context, schemaName, schema);
 	}
 }

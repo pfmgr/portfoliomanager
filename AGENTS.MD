@@ -191,6 +191,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
     - `cd services/app/backend`
     - `GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test`
 - Frontend (Vitest):
+  - Preferred: `services/app/frontend/scripts/run-unit-tests.sh`
   - `cd services/app/frontend`
   - `npm test`
 - Frontend tooling expects Node `v25.3.0`; keep local runtimes and Docker build images aligned with this version.
@@ -394,6 +395,7 @@ Findings (3-10):
 
 - Knowledge Base endpoints are gated by `KB_ENABLED=true` and a configured LLM provider; when LLM is not configured, `/api/kb/**` returns 503.
 - Test profile disables the KB refresh scheduler via `app.kb.refresh-scheduler-enabled=false` in `services/app/backend/src/test/resources/application-test.yaml`.
+- Default KB websearch allowed domains live in `services/app/backend/src/main/resources/kb_websearch_allowed_domains.json` and are seeded into `kb_config` only when the table is empty.
 - Backup/import now includes `instrument_dossiers`, `instrument_dossier_extractions`, `instrument_facts`, `kb_config`, `kb_runs`, and `kb_alternatives` in the import order/sequence reset lists; keep BackupService in sync when KB schema changes.
 - Knowledge base dossiers no longer require a matching instrument; unknown ISINs are allowed and may not exist in `instruments`.
 - Knowledge Base UI can generate a dossier draft via async websearch jobs:

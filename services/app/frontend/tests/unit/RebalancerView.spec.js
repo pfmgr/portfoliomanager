@@ -142,5 +142,6 @@ describe('RebalancerView', () => {
     expect(narrativeHtml).toContain('<ul>')
     expect(narrativeHtml).toContain('<strong>Instrument highlights</strong>')
     expect(narrativeHtml).toContain('KB weighting')
+    expect(text.toLowerCase()).toContain('valuation')
   })
 })
