@@ -122,6 +122,28 @@ class LayerTargetConfigServiceTest {
 	}
 
 	@Test
+	void saveConfigAppliesCustomOverrides() {
+		when(jdbcTemplate.update(anyString())).thenReturn(1);
+		when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+		when(jdbcTemplate.execute(any(ConnectionCallback.class))).thenReturn(false);
+		when(resourceLoader.getResource(anyString())).thenReturn(new ClassPathResource("layer_targets.json"));
+
+		LayerTargetConfigResponseDto response = layerTargetConfigService.saveConfig(new LayerTargetConfigRequestDto(
+				"BALANCED",
+				true,
+				Map.of(1, 0.4, 2, 0.3, 3, 0.2, 4, 0.1, 5, 0.0),
+				1.5,
+				20,
+				10,
+				Map.of(1, 10, 2, 10, 3, 10, 4, 10, 5, 10)
+		));
+
+		assertThat(response.isCustomOverridesEnabled()).isTrue();
+		assertThat(response.getCustomLayerTargets().get(1)).isEqualTo(0.4);
+		assertThat(response.getEffectiveLayerTargets().get(1)).isEqualTo(0.4);
+	}
+
+	@Test
 	void saveConfigIgnoresInvalidEntriesAndDefaultsVariance() {
 		when(jdbcTemplate.update(anyString())).thenReturn(1);
 		when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);

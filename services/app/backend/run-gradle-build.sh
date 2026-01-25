@@ -16,4 +16,11 @@ trap cleanup EXIT
 
 docker compose -f "${COMPOSE_FILE}" up -d
 
+for i in {1..30}; do
+  if docker compose -f "${COMPOSE_FILE}" exec -T postgres pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
 (cd "${BACKEND_DIR}" && ./gradlew clean build)

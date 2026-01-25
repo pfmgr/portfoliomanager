@@ -346,8 +346,9 @@
           <dl class="reason-legend">
             <dt>KB-weighted</dt>
             <dd>
-              Weights favor lower TER and lower overlap (benchmark, regions, top holdings) to reduce
-              redundancy. Scores are normalized within each layer.
+              Weights favor lower TER, lower overlap (benchmark, regions, top holdings), and stronger
+              valuation signals (earnings yield, EV/EBITDA, profitability in EUR, and P/B when available). Scores are normalized
+              within each layer. See the valuation glossary below for definitions.
             </dd>
             <dt>Equal weight</dt>
             <dd>Used when KB factors are missing or only one instrument is in the layer.</dd>
@@ -363,6 +364,23 @@
             <dt>No change (below minimum rebalancing)</dt>
             <dd>Adjustments below the minimum rebalancing amount are not proposed.</dd>
           </dl>
+          <details class="note kb-glossary">
+            <summary>Valuation glossary</summary>
+            <dl class="reason-legend">
+              <dt>Earnings yield (LT/current)</dt>
+              <dd>
+                Inverse of long-term P/E (smoothed EPS) or current P/E; higher implies cheaper valuation.
+              </dd>
+              <dt>EV/EBITDA</dt>
+              <dd>Enterprise value divided by EBITDA; lower implies cheaper valuation.</dd>
+              <dt>Profitability (EUR)</dt>
+              <dd>EBITDA, AFFO, FFO, NOI, or net rent normalized to EUR for cross-currency comparisons.</dd>
+              <dt>P/B (current)</dt>
+              <dd>Price-to-book ratio when available; lower implies cheaper valuation.</dd>
+              <dt>P/E (TTM holdings)</dt>
+              <dd>Holdings-weighted P/E based on trailing twelve months earnings.</dd>
+            </dl>
+          </details>
         </div>
         <div v-if="instrumentProposals.length" class="actions">
           <label class="field">

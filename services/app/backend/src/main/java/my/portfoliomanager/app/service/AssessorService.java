@@ -45,6 +45,7 @@ public class AssessorService {
 	private final AssessorEngine assessorEngine;
 	private final AssessorInstrumentSuggestionService instrumentSuggestionService;
 	private final LlmNarrativeService llmNarrativeService;
+	private final SavingPlanDeltaAllocator savingPlanDeltaAllocator;
 	private final boolean llmEnabled;
 
 	public AssessorService(SavingPlanRepository savingPlanRepository,
@@ -53,7 +54,8 @@ public class AssessorService {
 						   AppProperties properties,
 						   AssessorEngine assessorEngine,
 						   AssessorInstrumentSuggestionService instrumentSuggestionService,
-						   LlmNarrativeService llmNarrativeService) {
+						   LlmNarrativeService llmNarrativeService,
+						   SavingPlanDeltaAllocator savingPlanDeltaAllocator) {
 		this.savingPlanRepository = savingPlanRepository;
 		this.layerTargetConfigService = layerTargetConfigService;
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
@@ -61,6 +63,7 @@ public class AssessorService {
 		this.assessorEngine = assessorEngine;
 		this.instrumentSuggestionService = instrumentSuggestionService;
 		this.llmNarrativeService = llmNarrativeService;
+		this.savingPlanDeltaAllocator = savingPlanDeltaAllocator;
 		this.llmEnabled = llmNarrativeService != null && llmNarrativeService.isEnabled();
 	}
 
@@ -1418,7 +1421,6 @@ public class AssessorService {
 		List<AssessorEngine.SavingPlanSuggestion> weightedSuggestions = buildWeightedSavingPlanSuggestions(
 				savingPlanSnapshot.plans(),
 				effectiveTargets,
-				currentAmounts,
 				newInstrumentTotals,
 				planWeights,
 				BigDecimal.valueOf(minRebalance),
@@ -1633,7 +1635,6 @@ public class AssessorService {
 	private List<AssessorEngine.SavingPlanSuggestion> buildWeightedSavingPlanSuggestions(
 			List<AssessorEngine.SavingPlanItem> plans,
 			Map<Integer, BigDecimal> targets,
-			Map<Integer, BigDecimal> currentAmounts,
 			Map<Integer, BigDecimal> newInstrumentTotals,
 			Map<AssessorEngine.PlanKey, BigDecimal> planWeights,
 			BigDecimal minimumRebalancing,
@@ -1658,20 +1659,31 @@ public class AssessorService {
 				continue;
 			}
 			BigDecimal target = targets.getOrDefault(layer, BigDecimal.ZERO);
-			BigDecimal current = currentAmounts.getOrDefault(layer, BigDecimal.ZERO);
 			BigDecimal reserved = newInstrumentTotals.getOrDefault(layer, BigDecimal.ZERO);
 			BigDecimal existingTarget = target.subtract(reserved);
-			BigDecimal delta = existingTarget.subtract(current);
-			if (delta.signum() == 0) {
-				continue;
+			if (existingTarget.signum() < 0) {
+				existingTarget = BigDecimal.ZERO;
 			}
-			Map<AssessorEngine.PlanKey, BigDecimal> deltas = allocatePlanDeltasByWeights(
-					layerPlans,
-					delta,
-					planWeights,
+
+			List<SavingPlanDeltaAllocator.PlanInput> inputs = new ArrayList<>();
+			for (AssessorEngine.SavingPlanItem plan : layerPlans) {
+				if (plan == null) {
+					continue;
+				}
+				AssessorEngine.PlanKey key = new AssessorEngine.PlanKey(normalizeIsin(plan.isin()), plan.depotId());
+				BigDecimal weight = planWeights == null ? null : planWeights.get(key);
+				if (weight == null || weight.signum() <= 0) {
+					weight = BigDecimal.ONE;
+				}
+				inputs.add(new SavingPlanDeltaAllocator.PlanInput(key, safeAmount(plan.amount()), weight));
+			}
+
+			SavingPlanDeltaAllocator.Allocation allocation = savingPlanDeltaAllocator.allocateToTarget(
+					inputs,
+					existingTarget,
 					minimumRebalancing,
 					minimumSavingPlanSize);
-			for (Map.Entry<AssessorEngine.PlanKey, BigDecimal> entry : deltas.entrySet()) {
+			for (Map.Entry<AssessorEngine.PlanKey, BigDecimal> entry : allocation.deltas().entrySet()) {
 				BigDecimal planDelta = entry.getValue();
 				if (planDelta == null || planDelta.signum() == 0) {
 					continue;
@@ -1681,7 +1693,7 @@ public class AssessorService {
 					continue;
 				}
 				BigDecimal oldAmount = safeAmount(plan.amount());
-				BigDecimal newAmount = oldAmount.add(planDelta);
+				BigDecimal newAmount = allocation.proposedAmounts().getOrDefault(entry.getKey(), oldAmount);
 				if (newAmount.compareTo(BigDecimal.ZERO) < 0) {
 					newAmount = BigDecimal.ZERO;
 					planDelta = newAmount.subtract(oldAmount);
@@ -1704,262 +1716,11 @@ public class AssessorService {
 		return List.copyOf(suggestions);
 	}
 
-	Map<AssessorEngine.PlanKey, BigDecimal> allocatePlanDeltasByWeights(
-			List<AssessorEngine.SavingPlanItem> plans,
-			BigDecimal delta,
-			Map<AssessorEngine.PlanKey, BigDecimal> planWeights,
-			BigDecimal minimumRebalancing,
-			BigDecimal minimumSavingPlanSize) {
-		if (plans == null || plans.isEmpty() || delta == null || delta.signum() == 0) {
-			return Map.of();
-		}
-		List<PlanCandidate> candidates = new ArrayList<>();
-		for (AssessorEngine.SavingPlanItem plan : plans) {
-			if (plan == null) {
-				continue;
-			}
-			AssessorEngine.PlanKey key = new AssessorEngine.PlanKey(normalizeIsin(plan.isin()), plan.depotId());
-			BigDecimal weight = planWeights == null ? null : planWeights.get(key);
-			if (weight == null || weight.signum() <= 0) {
-				weight = BigDecimal.ONE;
-			}
-			candidates.add(new PlanCandidate(key, weight, safeAmount(plan.amount())));
-		}
-		candidates.sort(Comparator.comparing(PlanCandidate::weight).reversed()
-				.thenComparing(candidate -> candidate.key().isin()));
-		if (delta.signum() > 0) {
-			if (minimumRebalancing != null && minimumRebalancing.signum() > 0
-					&& delta.compareTo(minimumRebalancing) < 0) {
-				return Map.of();
-			}
-			return allocatePositivePlanDeltas(candidates, delta, minimumRebalancing);
-		}
-		return allocateNegativePlanDeltas(candidates, delta.abs(), minimumRebalancing, minimumSavingPlanSize);
-	}
-
-	private Map<AssessorEngine.PlanKey, BigDecimal> allocatePositivePlanDeltas(List<PlanCandidate> candidates,
-																			  BigDecimal total,
-																			  BigDecimal minimumRebalancing) {
-		List<PlanCandidate> remaining = new ArrayList<>(candidates);
-		int guard = 0;
-		while (!remaining.isEmpty() && guard < 12) {
-			guard += 1;
-			Map<AssessorEngine.PlanKey, BigDecimal> allocations = allocatePlanDeltasByWeight(remaining, total);
-			boolean valid = true;
-			if (minimumRebalancing != null && minimumRebalancing.signum() > 0) {
-				for (BigDecimal value : allocations.values()) {
-					if (value.signum() != 0 && value.compareTo(minimumRebalancing) < 0) {
-						valid = false;
-						break;
-					}
-				}
-			}
-			if (valid) {
-				return allocations;
-			}
-			PlanCandidate toRemove = null;
-			for (int i = remaining.size() - 1; i >= 0; i--) {
-				PlanCandidate candidate = remaining.get(i);
-				BigDecimal value = allocations.getOrDefault(candidate.key(), BigDecimal.ZERO);
-				if (value.signum() != 0 && minimumRebalancing != null
-						&& value.compareTo(minimumRebalancing) < 0) {
-					toRemove = candidate;
-					break;
-				}
-			}
-			if (toRemove == null) {
-				break;
-			}
-			remaining.remove(toRemove);
-		}
-		return Map.of();
-	}
-
-	private Map<AssessorEngine.PlanKey, BigDecimal> allocateNegativePlanDeltas(List<PlanCandidate> candidates,
-																			  BigDecimal total,
-																			  BigDecimal minimumRebalancing,
-																			  BigDecimal minimumSavingPlanSize) {
-		if (candidates == null || candidates.isEmpty() || total == null || total.signum() <= 0) {
-			return Map.of();
-		}
-		BigDecimal minRebalance = normalizeMinimum(minimumRebalancing);
-		BigDecimal minSaving = normalizeMinimum(minimumSavingPlanSize);
-		List<ReductionCandidate> reductionCandidates = new ArrayList<>();
-		BigDecimal maxReduction = BigDecimal.ZERO;
-		for (PlanCandidate candidate : candidates) {
-			BigDecimal amount = candidate.amount();
-			BigDecimal capacity = amount.subtract(minSaving);
-			if (capacity.signum() < 0) {
-				capacity = BigDecimal.ZERO;
-			}
-			BigDecimal eligibleCapacity = capacity;
-			if (minRebalance.signum() > 0 && eligibleCapacity.compareTo(minRebalance) < 0) {
-				eligibleCapacity = BigDecimal.ZERO;
-			}
-			reductionCandidates.add(new ReductionCandidate(candidate.key(), candidate.weight(), amount, capacity, eligibleCapacity));
-			maxReduction = maxReduction.add(eligibleCapacity);
-		}
-		List<ReductionCandidate> discards = selectDiscardsForNegativeDelta(reductionCandidates, total, maxReduction);
-		Map<AssessorEngine.PlanKey, BigDecimal> reductions = new LinkedHashMap<>();
-		BigDecimal disabledTotal = BigDecimal.ZERO;
-		Set<AssessorEngine.PlanKey> discardKeys = new HashSet<>();
-		for (ReductionCandidate discard : discards) {
-			reductions.put(discard.key(), discard.amount());
-			disabledTotal = disabledTotal.add(discard.amount());
-			discardKeys.add(discard.key());
-		}
-		BigDecimal remainingTotal = total.subtract(disabledTotal);
-		if (remainingTotal.signum() < 0) {
-			remainingTotal = BigDecimal.ZERO;
-		}
-		if (remainingTotal.signum() > 0) {
-			List<ReductionCandidate> remaining = new ArrayList<>();
-			for (ReductionCandidate candidate : reductionCandidates) {
-				if (!discardKeys.contains(candidate.key())) {
-					remaining.add(candidate);
-				}
-			}
-			Map<AssessorEngine.PlanKey, BigDecimal> allocations =
-					allocateNegativePlanDeltasWithCaps(remaining, remainingTotal, minRebalance);
-			reductions.putAll(allocations);
-		}
-		Map<AssessorEngine.PlanKey, BigDecimal> signed = new LinkedHashMap<>();
-		for (Map.Entry<AssessorEngine.PlanKey, BigDecimal> entry : reductions.entrySet()) {
-			if (entry.getValue().signum() != 0) {
-				signed.put(entry.getKey(), entry.getValue().negate());
-			}
-		}
-		return signed;
-	}
-
-	private Map<AssessorEngine.PlanKey, BigDecimal> allocateNegativePlanDeltasWithCaps(
-			List<ReductionCandidate> candidates,
-			BigDecimal total,
-			BigDecimal minimumRebalancing) {
-		if (candidates == null || candidates.isEmpty() || total == null || total.signum() <= 0) {
-			return Map.of();
-		}
-		BigDecimal minRebalance = normalizeMinimum(minimumRebalancing);
-		List<ReductionCandidate> remaining = new ArrayList<>(candidates);
-		remaining.sort(Comparator.comparing(ReductionCandidate::weight).reversed()
-				.thenComparing(candidate -> candidate.key().isin()));
-		int guard = 0;
-		while (!remaining.isEmpty() && guard < 12) {
-			guard += 1;
-			Map<AssessorEngine.PlanKey, BigDecimal> allocations = allocateReductionDeltasByWeight(remaining, total);
-			boolean valid = true;
-			for (ReductionCandidate candidate : remaining) {
-				BigDecimal allocation = allocations.getOrDefault(candidate.key(), BigDecimal.ZERO);
-				if (allocation.signum() == 0) {
-					continue;
-				}
-				if (allocation.compareTo(candidate.capacity()) > 0) {
-					valid = false;
-					break;
-				}
-				if (minRebalance.signum() > 0 && allocation.compareTo(minRebalance) < 0) {
-					valid = false;
-					break;
-				}
-			}
-			if (valid) {
-				return allocations;
-			}
-			ReductionCandidate toRemove = null;
-			for (int i = remaining.size() - 1; i >= 0; i--) {
-				ReductionCandidate candidate = remaining.get(i);
-				BigDecimal allocation = allocations.getOrDefault(candidate.key(), BigDecimal.ZERO);
-				if (allocation.signum() == 0) {
-					continue;
-				}
-				if (allocation.compareTo(candidate.capacity()) > 0
-						|| (minRebalance.signum() > 0 && allocation.compareTo(minRebalance) < 0)) {
-					toRemove = candidate;
-					break;
-				}
-			}
-			if (toRemove == null) {
-				break;
-			}
-			remaining.remove(toRemove);
-		}
-		return Map.of();
-	}
-
-	private List<ReductionCandidate> selectDiscardsForNegativeDelta(List<ReductionCandidate> candidates,
-																   BigDecimal total,
-																   BigDecimal maxReduction) {
-		if (candidates == null || candidates.isEmpty() || total == null || total.signum() <= 0) {
-			return List.of();
-		}
-		BigDecimal excess = total.subtract(maxReduction);
-		if (excess.signum() <= 0) {
-			return List.of();
-		}
-		List<ReductionCandidate> ordered = new ArrayList<>(candidates);
-		ordered.sort(Comparator.comparing((ReductionCandidate candidate) -> candidate.amount().subtract(candidate.eligibleCapacity()))
-				.reversed()
-				.thenComparing(ReductionCandidate::weight)
-				.thenComparing(candidate -> candidate.key().isin()));
-		List<ReductionCandidate> discards = new ArrayList<>();
-		BigDecimal covered = BigDecimal.ZERO;
-		for (ReductionCandidate candidate : ordered) {
-			if (covered.compareTo(excess) >= 0) {
-				break;
-			}
-			discards.add(candidate);
-			covered = covered.add(candidate.amount().subtract(candidate.eligibleCapacity()));
-		}
-		return discards;
-	}
-
-	private Map<AssessorEngine.PlanKey, BigDecimal> allocateReductionDeltasByWeight(List<ReductionCandidate> candidates,
-																					BigDecimal total) {
-		if (candidates == null || candidates.isEmpty() || total == null || total.signum() <= 0) {
-			return Map.of();
-		}
-		List<DeltaCandidate> deltaCandidates = new ArrayList<>();
-		List<AssessorEngine.PlanKey> keys = new ArrayList<>();
-		for (int i = 0; i < candidates.size(); i++) {
-			ReductionCandidate candidate = candidates.get(i);
-			deltaCandidates.add(new DeltaCandidate(i, candidate.weight()));
-			keys.add(candidate.key());
-		}
-		Map<Integer, BigDecimal> allocated = allocateDeltasByWeight(deltaCandidates, total);
-		Map<AssessorEngine.PlanKey, BigDecimal> mapped = new LinkedHashMap<>();
-		for (int i = 0; i < keys.size(); i++) {
-			BigDecimal value = allocated.getOrDefault(i, BigDecimal.ZERO);
-			mapped.put(keys.get(i), value);
-		}
-		return mapped;
-	}
-
 	private BigDecimal normalizeMinimum(BigDecimal value) {
 		if (value == null || value.signum() <= 0) {
 			return BigDecimal.ZERO;
 		}
 		return value;
-	}
-
-	private Map<AssessorEngine.PlanKey, BigDecimal> allocatePlanDeltasByWeight(List<PlanCandidate> candidates,
-																			   BigDecimal total) {
-		if (candidates == null || candidates.isEmpty() || total == null || total.signum() <= 0) {
-			return Map.of();
-		}
-		List<DeltaCandidate> deltaCandidates = new ArrayList<>();
-		List<AssessorEngine.PlanKey> keys = new ArrayList<>();
-		for (int i = 0; i < candidates.size(); i++) {
-			PlanCandidate candidate = candidates.get(i);
-			deltaCandidates.add(new DeltaCandidate(i, candidate.weight()));
-			keys.add(candidate.key());
-		}
-		Map<Integer, BigDecimal> allocated = allocateDeltasByWeight(deltaCandidates, total);
-		Map<AssessorEngine.PlanKey, BigDecimal> mapped = new LinkedHashMap<>();
-		for (int i = 0; i < keys.size(); i++) {
-			BigDecimal value = allocated.getOrDefault(i, BigDecimal.ZERO);
-			mapped.put(keys.get(i), value);
-		}
-		return mapped;
 	}
 
 	private String determinePlanType(BigDecimal oldAmount, BigDecimal newAmount) {
@@ -2195,16 +1956,6 @@ public class AssessorService {
 	}
 
 	private record DeltaCandidate(int index, BigDecimal weight) {
-	}
-
-	private record PlanCandidate(AssessorEngine.PlanKey key, BigDecimal weight, BigDecimal amount) {
-	}
-
-	private record ReductionCandidate(AssessorEngine.PlanKey key,
-									  BigDecimal weight,
-									  BigDecimal amount,
-									  BigDecimal capacity,
-									  BigDecimal eligibleCapacity) {
 	}
 
 	private record SavingPlanAllocation(Map<Integer, BigDecimal> targetLayerAmounts,
