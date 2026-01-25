@@ -1,6 +1,8 @@
 package my.portfoliomanager.app.llm;
 
 import org.jspecify.annotations.NonNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -8,6 +10,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -15,7 +18,8 @@ import java.util.Locale;
 import java.util.Map;
 
 public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
-    private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofMinutes(3);
+    private static final Logger logger = LoggerFactory.getLogger(OpenAiLlmClient.class);
+    private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofMinutes(5);
     private static final Duration DEFAULT_READ_TIMEOUT = Duration.ofMinutes(5);
     public static final List<String> allowedWebSearchDomains = List.of("justetf.com", "ishares.com", "vanguard.com", "ssga.com",
             "spdrs.com", "amundietf.com", "wisdomtree.eu", "invesco.com", "vaneck.com",
@@ -34,8 +38,8 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 
     public OpenAiLlmClient(String baseUrl, String apiKey, String model, Duration connectTimeout, Duration readTimeout) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(connectTimeout == null ? DEFAULT_CONNECT_TIMEOUT : connectTimeout);
-        requestFactory.setReadTimeout(readTimeout == null ? DEFAULT_READ_TIMEOUT : readTimeout);
+        requestFactory.setConnectTimeout(ensureMinimumTimeout(connectTimeout, DEFAULT_CONNECT_TIMEOUT));
+        requestFactory.setReadTimeout(ensureMinimumTimeout(readTimeout, DEFAULT_READ_TIMEOUT));
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(requestFactory)
@@ -236,10 +240,13 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         try {
             response = restClient.post().uri("/responses").body(request).retrieve().body(Map.class);
         } catch (RestClientResponseException ex) {
+            logResponseError(ex, request);
             throw new LlmRequestException(safeMessage(ex), ex.getStatusCode().value(), isRetryable(ex), ex);
         } catch (ResourceAccessException ex) {
+            logRequestError(ex, request);
             throw new LlmRequestException(safeMessage(ex), null, true, ex);
         } catch (Exception ex) {
+            logRequestError(ex, request);
             throw new LlmRequestException(safeMessage(ex), null, false, ex);
         }
         String text = extractOutputText(response);
@@ -297,6 +304,63 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         }
         int status = ex.getStatusCode().value();
         return status == 408 || status == 429 || status >= 500;
+    }
+
+    private Duration ensureMinimumTimeout(Duration value, Duration minimum) {
+        if (value == null) {
+            return minimum;
+        }
+        if (value.compareTo(minimum) < 0) {
+            return minimum;
+        }
+        return value;
+    }
+
+    private void logResponseError(RestClientResponseException ex, Map<String, Object> request) {
+        String contentType = ex.getResponseHeaders() == null || ex.getResponseHeaders().getContentType() == null
+                ? "unknown"
+                : ex.getResponseHeaders().getContentType().toString();
+        String bodyPreview = responseBodyPreview(ex.getResponseBodyAsByteArray(), contentType);
+        String effort = extractReasoningEffort(request);
+        int status = ex.getStatusCode() == null ? 0 : ex.getStatusCode().value();
+        logger.error("OpenAI responses API error (model={}, effort={}, status={}, contentType={}, body={})",
+                model, effort, status, contentType, bodyPreview, ex);
+    }
+
+    private void logRequestError(Exception ex, Map<String, Object> request) {
+        String effort = extractReasoningEffort(request);
+        logger.error("OpenAI responses API request failed (model={}, effort={}, error={})",
+                model, effort, safeMessage(ex), ex);
+    }
+
+    private String extractReasoningEffort(Map<String, Object> request) {
+        if (request == null) {
+            return "unknown";
+        }
+        Object reasoning = request.get("reasoning");
+        if (!(reasoning instanceof Map<?, ?> map)) {
+            return "unknown";
+        }
+        Object effort = map.get("effort");
+        return effort == null ? "unknown" : effort.toString();
+    }
+
+    private String responseBodyPreview(byte[] body, String contentType) {
+        if (body == null || body.length == 0) {
+            return "<empty>";
+        }
+        String normalizedType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+        if (normalizedType.contains("octet-stream")) {
+            return "<binary length=" + body.length + ">";
+        }
+        String text = new String(body, StandardCharsets.UTF_8).trim();
+        if (text.isBlank()) {
+            return "<blank length=" + body.length + ">";
+        }
+        if (text.length() > 500) {
+            return text.substring(0, 500) + "...";
+        }
+        return text;
     }
 
     private String safeMessage(Exception ex) {
