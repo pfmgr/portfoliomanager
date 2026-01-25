@@ -28,6 +28,30 @@ public class AssessorInstrumentSuggestionService {
 	private static final Set<String> COMPLETE_STATUSES = Set.of("COMPLETE", "APPROVED", "APPLIED");
 	private static final int MAX_SUGGESTIONS_PER_LAYER = 3;
 	private static final double EXISTING_BONUS = 0.2;
+	private static final double GAP_WEIGHT_SUB_CLASS = 1.0;
+	private static final double GAP_WEIGHT_THEME = 0.6;
+	private static final double GAP_WEIGHT_THEME_SECONDARY = 0.2;
+	private static final double GAP_WEIGHT_LOCALE = 1.0;
+	private static final double GAP_WEIGHT_DISTRIBUTION = 0.2;
+	private static final double GAP_SELECTION_BONUS = 0.12;
+	private static final double MIN_SAVING_PLAN_GAP_SEVERITY = 0.6;
+	private static final double DATA_QUALITY_MISSING_WEIGHT = 0.01;
+	private static final double DATA_QUALITY_WARNING_WEIGHT = 0.05;
+	private static final double MAX_DATA_QUALITY_PENALTY = 0.25;
+	private static final double ETF_HOLDINGS_YIELD_WEIGHT = 0.65;
+	private static final double ETF_CURRENT_YIELD_WEIGHT = 0.20;
+	private static final double ETF_PB_WEIGHT = 0.10;
+	private static final double ETF_DIVIDEND_WEIGHT = 0.05;
+	private static final double STOCK_LONGTERM_YIELD_WEIGHT = 0.50;
+	private static final double STOCK_CURRENT_YIELD_WEIGHT = 0.20;
+	private static final double STOCK_EV_WEIGHT = 0.20;
+	private static final double STOCK_DIVIDEND_WEIGHT = 0.05;
+	private static final double STOCK_PB_WEIGHT = 0.05;
+	private static final double REIT_LONGTERM_YIELD_WEIGHT = 0.40;
+	private static final double REIT_CURRENT_YIELD_WEIGHT = 0.20;
+	private static final double REIT_EV_WEIGHT = 0.20;
+	private static final double REIT_PB_WEIGHT = 0.10;
+	private static final double REIT_PROFITABILITY_WEIGHT = 0.10;
 	private static final Pattern ACC_PATTERN = Pattern.compile("\\bacc(?:umulating)?\\b", Pattern.CASE_INSENSITIVE);
 	private static final Pattern DIST_PATTERN = Pattern.compile("\\bdist(?:ributing|ribution)?\\b", Pattern.CASE_INSENSITIVE);
 	private static final List<LocaleKeyword> LOCALE_KEYWORDS = List.of(
@@ -63,6 +87,8 @@ public class AssessorInstrumentSuggestionService {
 			"infra",
 			"infrastructure"
 	);
+	private static final BigDecimal DEFAULT_EPS_FLOOR = new BigDecimal("0.10");
+	private static final double DEFAULT_PB_TARGET = 2.0;
 
 	private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 	private final ObjectMapper objectMapper;
@@ -130,6 +156,7 @@ public class AssessorInstrumentSuggestionService {
 		List<NewInstrumentSuggestion> oneTimeSuggestions = new ArrayList<>();
 
 		for (int layer = 1; layer <= 5; layer++) {
+			int layerIndex = layer;
 			List<InstrumentProfile> layerCandidates = candidatesByLayer.getOrDefault(layer, List.of());
 			if (layerCandidates.isEmpty()) {
 				continue;
@@ -143,11 +170,18 @@ public class AssessorInstrumentSuggestionService {
 					? MissingCategories.from(existing, available)
 					: MissingCategories.from(savingPlanExisting, available);
 			MissingCategories oneTimeMissing = MissingCategories.from(existing, available);
+			savingPlanMissing = savingPlanMissing.forLayer(layerIndex);
+			oneTimeMissing = oneTimeMissing.forLayer(layerIndex);
 			boolean skipSavingPlanSuggestions = savingPlanMissing.isEmpty() && !needsBaselinePlan;
 			List<InstrumentProfile> savingPlanCandidates = layerCandidates;
 			if (!savingPlanIsins.isEmpty()) {
 				savingPlanCandidates = layerCandidates.stream()
 						.filter(profile -> profile != null && !savingPlanIsins.contains(profile.isin()))
+						.filter(profile -> !isSingleStockDisallowed(profile, layerIndex))
+						.toList();
+			} else {
+				savingPlanCandidates = layerCandidates.stream()
+						.filter(profile -> !isSingleStockDisallowed(profile, layerIndex))
 						.toList();
 			}
 
@@ -155,12 +189,15 @@ public class AssessorInstrumentSuggestionService {
 				BigDecimal budget = savingPlanBudgets.get(layer);
 				int savingPlanMinimumAmount = resolveSavingPlanMinimumAmount(request.minimumSavingPlanSize(),
 						request.minimumRebalancingAmount());
+				boolean preferOneTime = !needsBaselinePlan
+						&& oneTimeBudgets.containsKey(layerIndex)
+						&& savingPlanMissing.severityScore(layerIndex) < MIN_SAVING_PLAN_GAP_SEVERITY;
 				Integer maxPlans = maxSavingPlansPerLayer.getOrDefault(layer, 0);
 				int currentCount = savingPlanCounts.getOrDefault(layer, 0);
 				int availableSlots = Math.max(0, maxPlans - currentCount);
 				int maxByBudget = resolveMaxByBudget(budget, savingPlanMinimumAmount);
 				int maxSuggestions = Math.min(MAX_SUGGESTIONS_PER_LAYER, Math.min(availableSlots, maxByBudget));
-				if (maxSuggestions > 0) {
+				if (maxSuggestions > 0 && !preferOneTime) {
 					List<NewInstrumentSuggestion> suggestions = savingPlanMissing.isEmpty()
 							? selectSuggestionsWithoutGaps(savingPlanCandidates,
 							existingByLayer.getOrDefault(layer, List.of()),
@@ -180,6 +217,9 @@ public class AssessorInstrumentSuggestionService {
 							.filter(profile -> profile != null && !excludedSnapshotIsins.contains(profile.isin()))
 							.toList();
 				}
+				oneTimeCandidates = oneTimeCandidates.stream()
+						.filter(profile -> !isSingleStockDisallowed(profile, layerIndex))
+						.toList();
 				if (oneTimeCandidates.isEmpty()) {
 					continue;
 				}
@@ -260,6 +300,7 @@ public class AssessorInstrumentSuggestionService {
 			MissingCategories missing = gapPolicy == AssessorGapDetectionPolicy.PORTFOLIO_GAPS
 					? MissingCategories.from(existing, available)
 					: MissingCategories.from(savingPlanExisting, available);
+			missing = missing.forLayer(layer);
 			Map<String, BigDecimal> layerWeights = new LinkedHashMap<>();
 			List<InstrumentProfile> savingPlanLayerProfiles = savingPlanProfiles.values().stream()
 					.filter(profile -> profile != null && profile.layer() == layerIndex)
@@ -362,24 +403,41 @@ public class AssessorInstrumentSuggestionService {
 		if (candidates == null || candidates.isEmpty() || maxSuggestions <= 0) {
 			return List.of();
 		}
-		List<CoverageGap> gaps = missing.toGapList();
-		gaps.sort(Comparator.comparing(CoverageGap::type));
 		Set<String> selectedIsins = new HashSet<>();
 		List<SelectedSuggestion> selected = new ArrayList<>();
-		for (CoverageGap gap : gaps) {
-			if (selected.size() >= maxSuggestions) {
+		MissingCategories remaining = missing == null ? MissingCategories.empty() : missing;
+		boolean hasExisting = existingProfiles != null && !existingProfiles.isEmpty();
+		int guard = 0;
+		while (!remaining.isEmpty() && selected.size() < maxSuggestions && guard < 12) {
+			guard += 1;
+			InstrumentProfile bestCandidate = null;
+			double bestScore = Double.NEGATIVE_INFINITY;
+			List<CoverageGap> bestCovered = List.of();
+			for (InstrumentProfile candidate : candidates) {
+				if (candidate == null || selectedIsins.contains(candidate.isin())) {
+					continue;
+				}
+				double coverageWeight = remaining.coverageWeight(candidate, candidate.layer());
+				if (coverageWeight <= 0) {
+					continue;
+				}
+				double score = scoreCandidate(candidate, existingProfiles, remaining, preferredIsins);
+				double combined = score + coverageWeight * GAP_SELECTION_BONUS;
+				if (bestCandidate == null || combined > bestScore) {
+					bestCandidate = candidate;
+					bestScore = combined;
+					bestCovered = remaining.coveredBy(candidate);
+				}
+			}
+			if (bestCandidate == null) {
 				break;
 			}
-			InstrumentProfile selectedCandidate = selectCandidateForGap(candidates, existingProfiles,
-					missing, gap, selectedIsins, preferredIsins);
-			if (selectedCandidate == null) {
-				continue;
-			}
-			selectedIsins.add(selectedCandidate.isin());
-			boolean hasExisting = existingProfiles != null && !existingProfiles.isEmpty();
-			double redundancy = computeRedundancy(selectedCandidate, existingProfiles);
-			String rationale = buildRationale(selectedCandidate, missing.coveredBy(selectedCandidate), gap, redundancy, hasExisting);
-			selected.add(new SelectedSuggestion(selectedCandidate, rationale));
+			selectedIsins.add(bestCandidate.isin());
+			CoverageGap primaryGap = bestCovered.isEmpty() ? null : bestCovered.get(0);
+			double redundancy = computeRedundancy(bestCandidate, existingProfiles);
+			String rationale = buildRationale(bestCandidate, bestCovered, primaryGap, redundancy, hasExisting);
+			selected.add(new SelectedSuggestion(bestCandidate, rationale));
+			remaining = remaining.withoutCovered(bestCandidate, bestCandidate.layer());
 		}
 		if (selected.isEmpty()) {
 			return List.of();
@@ -520,11 +578,14 @@ public class AssessorInstrumentSuggestionService {
 				: 1.0 / (1.0 + candidate.ongoingChargesPct().doubleValue());
 		double redundancy = computeRedundancy(candidate, existingProfiles);
 		double uniquenessScore = 1.0 - redundancy;
+		double valuationScore = computeValuationScore(candidate);
 		double typeScore = isPreferredInstrument(candidate) ? 0.3 : 0.0;
 		double penalty = (candidate.singleStock() && candidate.layer() <= 3) ? 0.4 : 0.0;
-		int gapCoverage = missing.coverageCount(candidate);
-		double gapScore = Math.min(0.4, gapCoverage * 0.1);
-		return (costScore * 0.4) + (uniquenessScore * 0.4) + typeScore + gapScore - penalty;
+		double gapCoverage = missing.coverageWeight(candidate, candidate.layer());
+		double gapScore = Math.min(0.4, gapCoverage * 0.15);
+		double dataPenalty = computeDataQualityPenalty(candidate);
+		return (costScore * 0.35) + (uniquenessScore * 0.35) + (valuationScore * 0.15) + typeScore + gapScore
+				- penalty - dataPenalty;
 	}
 
 	private double scoreCandidate(InstrumentProfile candidate,
@@ -536,6 +597,16 @@ public class AssessorInstrumentSuggestionService {
 			score += EXISTING_BONUS;
 		}
 		return score;
+	}
+
+	private double computeDataQualityPenalty(InstrumentProfile candidate) {
+		if (candidate == null) {
+			return 0.0;
+		}
+		int missing = Math.max(0, candidate.missingFieldCount());
+		int warnings = Math.max(0, candidate.warningCount());
+		double penalty = (missing * DATA_QUALITY_MISSING_WEIGHT) + (warnings * DATA_QUALITY_WARNING_WEIGHT);
+		return Math.min(MAX_DATA_QUALITY_PENALTY, penalty);
 	}
 
 	private double computeRedundancy(InstrumentProfile candidate, java.util.Collection<InstrumentProfile> existing) {
@@ -556,13 +627,19 @@ public class AssessorInstrumentSuggestionService {
 			sum += (double) matches / (double) existing.size();
 		}
 
-		double regionOverlap = averageOverlap(candidate.regions(), existing, InstrumentProfile::regions);
+		double regionOverlap = averageWeightedOverlap(candidate.regionWeights(), existing, InstrumentProfile::regionWeights);
+		if (regionOverlap < 0) {
+			regionOverlap = averageOverlap(candidate.regions(), existing, InstrumentProfile::regions);
+		}
 		if (regionOverlap >= 0) {
 			components += 1;
 			sum += regionOverlap;
 		}
 
-		double holdingOverlap = averageOverlap(candidate.holdings(), existing, InstrumentProfile::holdings);
+		double holdingOverlap = averageWeightedOverlap(candidate.holdingWeights(), existing, InstrumentProfile::holdingWeights);
+		if (holdingOverlap < 0) {
+			holdingOverlap = averageOverlap(candidate.holdings(), existing, InstrumentProfile::holdings);
+		}
 		if (holdingOverlap >= 0) {
 			components += 1;
 			sum += holdingOverlap;
@@ -572,6 +649,172 @@ public class AssessorInstrumentSuggestionService {
 			return 0.0;
 		}
 		return sum / components;
+	}
+
+	private double computeValuationScore(InstrumentProfile candidate) {
+		if (candidate == null) {
+			return 0.0;
+		}
+		double longtermYieldScore = scoreEarningsYield(candidate.earningsYieldLongterm());
+		double holdingsYieldScore = scoreEarningsYield(candidate.earningsYieldHoldings());
+		double currentYieldScore = scoreEarningsYield(candidate.earningsYieldCurrent());
+		double dividendYieldScore = scoreDividendYield(candidate.dividendYield());
+		double evScore = scoreEvToEbitda(candidate.evToEbitda());
+		double profitabilityScore = scoreEbitdaEur(candidate.ebitdaEur());
+		double pbScore = scorePriceToBook(candidate.priceToBook());
+		double weightSum = 0.0;
+		double scoreSum = 0.0;
+		if (isEtf(candidate)) {
+			if (holdingsYieldScore > 0) {
+				scoreSum += holdingsYieldScore * ETF_HOLDINGS_YIELD_WEIGHT;
+				weightSum += ETF_HOLDINGS_YIELD_WEIGHT;
+			}
+			if (currentYieldScore > 0) {
+				scoreSum += currentYieldScore * ETF_CURRENT_YIELD_WEIGHT;
+				weightSum += ETF_CURRENT_YIELD_WEIGHT;
+			}
+			if (pbScore > 0) {
+				scoreSum += pbScore * ETF_PB_WEIGHT;
+				weightSum += ETF_PB_WEIGHT;
+			}
+			if (dividendYieldScore > 0) {
+				scoreSum += dividendYieldScore * ETF_DIVIDEND_WEIGHT;
+				weightSum += ETF_DIVIDEND_WEIGHT;
+			}
+		} else if (isReit(candidate)) {
+			if (longtermYieldScore > 0) {
+				scoreSum += longtermYieldScore * REIT_LONGTERM_YIELD_WEIGHT;
+				weightSum += REIT_LONGTERM_YIELD_WEIGHT;
+			}
+			if (currentYieldScore > 0) {
+				scoreSum += currentYieldScore * REIT_CURRENT_YIELD_WEIGHT;
+				weightSum += REIT_CURRENT_YIELD_WEIGHT;
+			}
+			if (evScore > 0) {
+				scoreSum += evScore * REIT_EV_WEIGHT;
+				weightSum += REIT_EV_WEIGHT;
+			}
+			if (pbScore > 0) {
+				scoreSum += pbScore * REIT_PB_WEIGHT;
+				weightSum += REIT_PB_WEIGHT;
+			}
+			if (profitabilityScore > 0) {
+				scoreSum += profitabilityScore * REIT_PROFITABILITY_WEIGHT;
+				weightSum += REIT_PROFITABILITY_WEIGHT;
+			}
+		} else {
+			if (longtermYieldScore > 0) {
+				scoreSum += longtermYieldScore * STOCK_LONGTERM_YIELD_WEIGHT;
+				weightSum += STOCK_LONGTERM_YIELD_WEIGHT;
+			}
+			if (currentYieldScore > 0) {
+				scoreSum += currentYieldScore * STOCK_CURRENT_YIELD_WEIGHT;
+				weightSum += STOCK_CURRENT_YIELD_WEIGHT;
+			}
+			if (evScore > 0) {
+				scoreSum += evScore * STOCK_EV_WEIGHT;
+				weightSum += STOCK_EV_WEIGHT;
+			}
+			if (dividendYieldScore > 0) {
+				scoreSum += dividendYieldScore * STOCK_DIVIDEND_WEIGHT;
+				weightSum += STOCK_DIVIDEND_WEIGHT;
+			}
+			if (pbScore > 0) {
+				scoreSum += pbScore * STOCK_PB_WEIGHT;
+				weightSum += STOCK_PB_WEIGHT;
+			}
+		}
+		if (weightSum <= 0) {
+			return 0.0;
+		}
+		double baseScore = scoreSum / weightSum;
+		return baseScore * valuationQualityMultiplier(candidate.peMethod(), candidate.peHorizon(), candidate.negEarningsHandling());
+	}
+
+	private double scoreEarningsYield(BigDecimal earningsYield) {
+		if (earningsYield == null) {
+			return 0.0;
+		}
+		double value = earningsYield.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 0.20;
+		return Math.min(value / cap, 1.0);
+	}
+
+	private double scoreEvToEbitda(BigDecimal evToEbitda) {
+		if (evToEbitda == null) {
+			return 0.0;
+		}
+		double value = evToEbitda.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double target = 12.0;
+		return Math.min(target / value, 1.0);
+	}
+
+	private double scoreDividendYield(BigDecimal dividendYield) {
+		if (dividendYield == null) {
+			return 0.0;
+		}
+		double value = dividendYield.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 0.08;
+		return Math.min(value / cap, 1.0);
+	}
+
+	private double scorePriceToBook(BigDecimal priceToBook) {
+		if (priceToBook == null) {
+			return 0.0;
+		}
+		double value = priceToBook.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		return Math.min(DEFAULT_PB_TARGET / value, 1.0);
+	}
+
+	private double scoreEbitdaEur(BigDecimal ebitdaEur) {
+		if (ebitdaEur == null) {
+			return 0.0;
+		}
+		double value = ebitdaEur.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 10_000_000_000d;
+		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
+		return Math.max(0.0, Math.min(scaled, 1.0));
+	}
+
+	private double scoreNetIncomeEur(BigDecimal netIncomeEur) {
+		if (netIncomeEur == null) {
+			return 0.0;
+		}
+		double value = netIncomeEur.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 20_000_000_000d;
+		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
+		return Math.max(0.0, Math.min(scaled, 1.0));
+	}
+
+	private double scoreRevenueEur(BigDecimal revenueEur) {
+		if (revenueEur == null) {
+			return 0.0;
+		}
+		double value = revenueEur.doubleValue();
+		if (value <= 0) {
+			return 0.0;
+		}
+		double cap = 200_000_000_000d;
+		double scaled = Math.log10(1.0 + Math.min(value, cap)) / Math.log10(1.0 + cap);
+		return Math.max(0.0, Math.min(scaled, 1.0));
 	}
 
 	private double averageOverlap(Set<String> base,
@@ -606,6 +849,44 @@ public class AssessorInstrumentSuggestionService {
 		return sum / (double) count;
 	}
 
+	private double averageWeightedOverlap(Map<String, BigDecimal> base,
+										  java.util.Collection<InstrumentProfile> existing,
+										  java.util.function.Function<InstrumentProfile, Map<String, BigDecimal>> extractor) {
+		if (base == null || base.isEmpty() || existing == null || existing.isEmpty()) {
+			return -1.0;
+		}
+		double sum = 0.0;
+		int count = 0;
+		for (InstrumentProfile profile : existing) {
+			Map<String, BigDecimal> other = extractor.apply(profile);
+			if (other == null || other.isEmpty()) {
+				continue;
+			}
+			double baseTotal = base.values().stream().mapToDouble(value -> value == null ? 0.0 : value.doubleValue()).sum();
+			double otherTotal = other.values().stream().mapToDouble(value -> value == null ? 0.0 : value.doubleValue()).sum();
+			if (baseTotal <= 0.0 || otherTotal <= 0.0) {
+				continue;
+			}
+			double overlap = 0.0;
+			for (Map.Entry<String, BigDecimal> entry : base.entrySet()) {
+				BigDecimal otherValue = other.get(entry.getKey());
+				if (otherValue == null) {
+					continue;
+				}
+				double left = entry.getValue() == null ? 0.0 : entry.getValue().doubleValue();
+				double right = otherValue.doubleValue();
+				overlap += Math.min(left, right);
+			}
+			double denom = Math.max(baseTotal, otherTotal);
+			sum += denom <= 0.0 ? 0.0 : overlap / denom;
+			count += 1;
+		}
+		if (count == 0) {
+			return -1.0;
+		}
+		return sum / (double) count;
+	}
+
 	private boolean isPreferredInstrument(InstrumentProfile candidate) {
 		if (candidate == null) {
 			return false;
@@ -614,6 +895,66 @@ public class AssessorInstrumentSuggestionService {
 		String asset = normalizeLabel(candidate.assetClass());
 		return (type != null && (type.contains("etf") || type.contains("ucits")))
 				|| (asset != null && asset.contains("fund"));
+	}
+
+	private boolean isEtf(InstrumentProfile profile) {
+		if (profile == null) {
+			return false;
+		}
+		String type = normalizeLabel(profile.instrumentType());
+		String asset = normalizeLabel(profile.assetClass());
+		return (type != null && (type.contains("etf") || type.contains("ucits")))
+				|| (asset != null && asset.contains("fund"));
+	}
+
+	private boolean isReit(InstrumentProfile profile) {
+		if (profile == null) {
+			return false;
+		}
+		String type = normalizeLabel(profile.instrumentType());
+		String sub = normalizeLabel(profile.subClass());
+		String notes = normalizeLabel(profile.layerNotes());
+		return (type != null && type.contains("reit"))
+				|| (sub != null && sub.contains("reit"))
+				|| (notes != null && notes.contains("reit"));
+	}
+
+	private double valuationQualityMultiplier(String peMethod, String peHorizon, String negHandling) {
+		double multiplier = 1.0;
+		String method = normalizeLabel(peMethod);
+		if (method == null) {
+			multiplier *= 0.95;
+		} else {
+			switch (method) {
+				case "ttm" -> multiplier *= 1.0;
+				case "forward" -> multiplier *= 0.90;
+				case "provider_weighted_avg" -> multiplier *= 0.95;
+				case "provider_aggregate" -> multiplier *= 0.90;
+				default -> multiplier *= 0.92;
+			}
+		}
+		String horizon = normalizeLabel(peHorizon);
+		if (horizon == null) {
+			multiplier *= 0.95;
+		} else if (horizon.contains("normalized")) {
+			multiplier *= 1.0;
+		} else if (horizon.contains("ttm")) {
+			multiplier *= 0.95;
+		} else {
+			multiplier *= 0.92;
+		}
+		String handling = normalizeLabel(negHandling);
+		if (handling == null) {
+			multiplier *= 0.97;
+		} else {
+			switch (handling) {
+				case "exclude" -> multiplier *= 1.0;
+				case "set_null" -> multiplier *= 0.95;
+				case "aggregate_allows_negative" -> multiplier *= 0.90;
+				default -> multiplier *= 0.92;
+			}
+		}
+		return Math.min(1.0, Math.max(0.7, multiplier));
 	}
 
 	private String buildRationale(InstrumentProfile candidate,
@@ -773,7 +1114,8 @@ public class AssessorInstrumentSuggestionService {
 			Set<String> locales = extractLocales(name, subClass, layerNotes, Set.of());
 			boolean singleStock = isSingleStock(instrumentType, subClass, layerNotes);
 			InstrumentProfile profile = new InstrumentProfile(isin, name, layer, instrumentType, assetClass, subClass,
-					layerNotes, null, null, Set.of(), Set.of(), distribution, themes, locales, singleStock);
+					layerNotes, null, null, Set.of(), Set.of(), Map.of(), Map.of(), distribution, themes, locales, singleStock,
+					null, null, null, null, null, null, null, null, null, null, null, null, 0, 0);
 			profiles.put(isin, profile);
 		});
 		return profiles;
@@ -802,18 +1144,320 @@ public class AssessorInstrumentSuggestionService {
 			String layerNotes = trimToNull(payload.layerNotes());
 			BigDecimal ter = payload.etf() == null ? null : payload.etf().ongoingChargesPct();
 			String benchmark = payload.etf() == null ? null : trimToNull(payload.etf().benchmarkIndex());
+			Map<String, BigDecimal> regionWeights = normalizeRegionWeights(payload.regions());
+			Map<String, BigDecimal> holdingWeights = normalizeHoldingWeights(payload.topHoldings());
 			Set<String> regions = normalizeRegionNames(payload.regions());
 			Set<String> holdings = normalizeHoldingNames(payload.topHoldings());
+			BigDecimal earningsYieldLongterm = extractLongtermEarningsYield(payload);
+			BigDecimal earningsYieldHoldings = extractHoldingsEarningsYield(payload);
+			BigDecimal earningsYieldCurrent = extractCurrentEarningsYield(payload);
+			BigDecimal dividendYield = extractDividendYield(payload);
+			BigDecimal priceToBook = extractPriceToBook(payload);
+			BigDecimal evToEbitda = extractEvToEbitda(payload);
+			BigDecimal ebitdaEur = extractEbitdaEur(payload);
+			BigDecimal netIncomeEur = extractNetIncomeEur(payload);
+			BigDecimal revenueEur = extractRevenueEur(payload);
+			String peMethod = payload.valuation() == null ? null : trimToNull(payload.valuation().peMethod());
+			String peHorizon = payload.valuation() == null ? null : trimToNull(payload.valuation().peHorizon());
+			String negEarningsHandling = payload.valuation() == null ? null : trimToNull(payload.valuation().negEarningsHandling());
 			String distribution = inferDistribution(name, layerNotes);
 			Set<String> themes = extractThemes(subClass, layerNotes);
 			Set<String> locales = extractLocales(name, subClass, layerNotes, regions);
 			boolean singleStock = isSingleStock(instrumentType, subClass, layerNotes);
+			int missingFieldCount = payload.missingFields() == null ? 0 : payload.missingFields().size();
+			int warningCount = payload.warnings() == null ? 0 : payload.warnings().size();
 			return new InstrumentProfile(isin, name, layer, instrumentType, assetClass, subClass, layerNotes, ter,
-					benchmark, regions, holdings, distribution, themes, locales, singleStock);
+					benchmark, regions, holdings, regionWeights, holdingWeights, distribution, themes, locales, singleStock,
+					earningsYieldLongterm, earningsYieldHoldings, earningsYieldCurrent, dividendYield, priceToBook, evToEbitda,
+					ebitdaEur, netIncomeEur, revenueEur, peMethod, peHorizon, negEarningsHandling, missingFieldCount, warningCount);
 		} catch (Exception ex) {
 			logger.debug("Failed to parse KB extraction payload for {}: {}", isin, ex.getMessage());
 			return null;
 		}
+	}
+
+	private BigDecimal extractLongtermEarningsYield(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		BigDecimal yield = valuation.earningsYieldLongterm();
+		if (yield != null) {
+			return yield;
+		}
+		BigDecimal pe = valuation.peLongterm();
+		if (pe != null && pe.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(pe, 8, RoundingMode.HALF_UP);
+		}
+		BigDecimal computedYield = computeLongtermEarningsYield(valuation);
+		if (computedYield != null) {
+			return computedYield;
+		}
+		return null;
+	}
+
+	private BigDecimal extractHoldingsEarningsYield(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		BigDecimal yield = valuation.earningsYieldTtmHoldings();
+		if (yield != null) {
+			return yield;
+		}
+		BigDecimal peHoldings = valuation.peTtmHoldings();
+		if (peHoldings != null && peHoldings.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(peHoldings, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractCurrentEarningsYield(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		BigDecimal peCurrent = valuation.peCurrent();
+		if (peCurrent != null && peCurrent.compareTo(BigDecimal.ZERO) > 0) {
+			return BigDecimal.ONE.divide(peCurrent, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractPriceToBook(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		return payload.valuation().pbCurrent();
+	}
+
+	private BigDecimal computeLongtermEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal epsNorm = computeEpsNormFromHistory(valuation);
+		BigDecimal price = extractPrice(valuation);
+		if (epsNorm == null || price == null) {
+			return null;
+		}
+		if (epsNorm.compareTo(BigDecimal.ZERO) <= 0 || price.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		return epsNorm.divide(price, 8, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal computeEpsNormFromHistory(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		List<InstrumentDossierExtractionPayload.EpsHistoryPayload> history = valuation.epsHistory();
+		if (history == null || history.isEmpty()) {
+			return null;
+		}
+		List<InstrumentDossierExtractionPayload.EpsHistoryPayload> selected = selectPreferredEpsHistory(history);
+		List<BigDecimal> values = new ArrayList<>();
+		selected.stream()
+				.filter(entry -> entry != null && entry.year() != null && entry.eps() != null)
+				.sorted(Comparator.comparing(InstrumentDossierExtractionPayload.EpsHistoryPayload::year).reversed())
+				.limit(7)
+				.forEach(entry -> values.add(applyEpsFloor(entry.eps(), valuation)));
+		if (values.size() < 3) {
+			return null;
+		}
+		values.sort(Comparator.naturalOrder());
+		int mid = values.size() / 2;
+		if (values.size() % 2 == 1) {
+			return values.get(mid);
+		}
+		return values.get(mid - 1).add(values.get(mid)).divide(BigDecimal.valueOf(2), 8, RoundingMode.HALF_UP);
+	}
+
+	private List<InstrumentDossierExtractionPayload.EpsHistoryPayload> selectPreferredEpsHistory(
+			List<InstrumentDossierExtractionPayload.EpsHistoryPayload> history) {
+		boolean hasAdjusted = history.stream().anyMatch(entry -> isAdjustedEpsType(entry == null ? null : entry.epsType()));
+		if (!hasAdjusted) {
+			return history;
+		}
+		return history.stream()
+				.filter(entry -> isAdjustedEpsType(entry == null ? null : entry.epsType()))
+				.toList();
+	}
+
+	private boolean isAdjustedEpsType(String epsType) {
+		if (epsType == null || epsType.isBlank()) {
+			return false;
+		}
+		String normalized = epsType.trim().toLowerCase(Locale.ROOT);
+		return normalized.contains("adjusted")
+				|| normalized.contains("normalized")
+				|| normalized.contains("non-gaap")
+				|| normalized.contains("non gaap");
+	}
+
+	private BigDecimal applyEpsFloor(BigDecimal value, InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (value == null) {
+			return null;
+		}
+		if (value.compareTo(BigDecimal.ZERO) <= 0) {
+			return value;
+		}
+		if (!shouldApplyEpsFloor(valuation == null ? null : valuation.epsFloorPolicy())) {
+			return value;
+		}
+		BigDecimal floor = valuation == null || valuation.epsFloorValue() == null
+				? DEFAULT_EPS_FLOOR
+				: valuation.epsFloorValue();
+		if (floor == null || floor.compareTo(BigDecimal.ZERO) <= 0) {
+			return value;
+		}
+		return value.compareTo(floor) < 0 ? floor : value;
+	}
+
+	private boolean shouldApplyEpsFloor(String policy) {
+		if (policy == null || policy.isBlank()) {
+			return true;
+		}
+		String normalized = policy.trim().toLowerCase(Locale.ROOT);
+		return !(normalized.equals("none") || normalized.equals("off") || normalized.equals("no_floor"));
+	}
+
+	private BigDecimal extractPrice(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal price = valuation.price();
+		if (price != null) {
+			return price;
+		}
+		BigDecimal marketCap = valuation.marketCap();
+		BigDecimal shares = valuation.sharesOutstanding();
+		if (marketCap != null && shares != null && shares.compareTo(BigDecimal.ZERO) > 0) {
+			return marketCap.divide(shares, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractEvToEbitda(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		BigDecimal evToEbitda = valuation.evToEbitda();
+		if (evToEbitda != null) {
+			return evToEbitda;
+		}
+		BigDecimal enterpriseValue = valuation.enterpriseValue();
+		BigDecimal ebitda = valuation.ebitda();
+		if (enterpriseValue != null && ebitda != null && ebitda.compareTo(BigDecimal.ZERO) > 0) {
+			return enterpriseValue.divide(ebitda, 8, RoundingMode.HALF_UP);
+		}
+		return null;
+	}
+
+	private BigDecimal extractEbitdaEur(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.valuation() == null) {
+			return null;
+		}
+		return extractProfitabilityEur(payload.valuation());
+	}
+
+	private BigDecimal extractProfitabilityEur(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null) {
+			return null;
+		}
+		BigDecimal ebitdaEur = valuation.ebitdaEur();
+		if (ebitdaEur != null) {
+			return ebitdaEur;
+		}
+		BigDecimal ebitda = convertMetricToEur(valuation.ebitda(), valuation.ebitdaCurrency(), valuation.fxRateToEur());
+		if (ebitda != null) {
+			return ebitda;
+		}
+		BigDecimal affo = convertMetricToEur(valuation.affo(), valuation.affoCurrency(), valuation.fxRateToEur());
+		if (affo != null) {
+			return affo;
+		}
+		BigDecimal ffo = convertMetricToEur(valuation.ffo(), valuation.ffoCurrency(), valuation.fxRateToEur());
+		if (ffo != null) {
+			return ffo;
+		}
+		BigDecimal noi = convertMetricToEur(valuation.noi(), valuation.noiCurrency(), valuation.fxRateToEur());
+		if (noi != null) {
+			return noi;
+		}
+		return convertMetricToEur(valuation.netRent(), valuation.netRentCurrency(), valuation.fxRateToEur());
+	}
+
+	private BigDecimal extractNetIncomeEur(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.financials() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+		if (financials.netIncomeEur() != null) {
+			return financials.netIncomeEur();
+		}
+		BigDecimal fxRate = resolveFinancialsFxRate(financials, payload);
+		return convertMetricToEur(financials.netIncome(), financials.netIncomeCurrency(), fxRate);
+	}
+
+	private BigDecimal extractRevenueEur(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.financials() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+		if (financials.revenueEur() != null) {
+			return financials.revenueEur();
+		}
+		BigDecimal fxRate = resolveFinancialsFxRate(financials, payload);
+		return convertMetricToEur(financials.revenue(), financials.revenueCurrency(), fxRate);
+	}
+
+	private BigDecimal extractDividendYield(InstrumentDossierExtractionPayload payload) {
+		if (payload == null || payload.financials() == null || payload.valuation() == null) {
+			return null;
+		}
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+		BigDecimal dividend = financials.dividendPerShare();
+		if (dividend == null || dividend.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		BigDecimal price = extractPrice(payload.valuation());
+		if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		String dividendCcy = financials.dividendCurrency();
+		String priceCcy = payload.valuation().priceCurrency();
+		if (dividendCcy != null && priceCcy != null && !dividendCcy.equalsIgnoreCase(priceCcy)) {
+			BigDecimal fxDividend = resolveFinancialsFxRate(financials, payload);
+			BigDecimal dividendEur = convertMetricToEur(dividend, dividendCcy, fxDividend);
+			BigDecimal priceEur = convertMetricToEur(price, priceCcy, payload.valuation().fxRateToEur());
+			if (dividendEur == null || priceEur == null || priceEur.compareTo(BigDecimal.ZERO) <= 0) {
+				return null;
+			}
+			return dividendEur.divide(priceEur, 8, RoundingMode.HALF_UP);
+		}
+		return dividend.divide(price, 8, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal resolveFinancialsFxRate(InstrumentDossierExtractionPayload.FinancialsPayload financials,
+											   InstrumentDossierExtractionPayload payload) {
+		if (financials != null && financials.fxRateToEur() != null) {
+			return financials.fxRateToEur();
+		}
+		if (payload != null && payload.valuation() != null) {
+			return payload.valuation().fxRateToEur();
+		}
+		return null;
+	}
+
+	private BigDecimal convertMetricToEur(BigDecimal value, String currency, BigDecimal fxRate) {
+		if (value == null) {
+			return null;
+		}
+		if (currency == null || currency.isBlank() || currency.equalsIgnoreCase("EUR")) {
+			return value;
+		}
+		if (fxRate == null || fxRate.compareTo(BigDecimal.ZERO) <= 0) {
+			return null;
+		}
+		return value.multiply(fxRate);
 	}
 
 	private Map<Integer, LayerCoverage> buildCoverage(java.util.Collection<InstrumentProfile> profiles) {
@@ -873,6 +1517,24 @@ public class AssessorInstrumentSuggestionService {
 		return normalized;
 	}
 
+	private Map<String, BigDecimal> normalizeRegionWeights(List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions) {
+		if (regions == null || regions.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+		for (InstrumentDossierExtractionPayload.RegionExposurePayload region : regions) {
+			String name = normalizeLabel(region == null ? null : region.name());
+			if (name == null) {
+				continue;
+			}
+			BigDecimal weight = normalizeWeightPct(region.weightPct());
+			if (weight != null) {
+				normalized.put(name, weight);
+			}
+		}
+		return normalized;
+	}
+
 	private Set<String> normalizeHoldingNames(List<InstrumentDossierExtractionPayload.HoldingPayload> holdings) {
 		if (holdings == null || holdings.isEmpty()) {
 			return Set.of();
@@ -887,11 +1549,42 @@ public class AssessorInstrumentSuggestionService {
 		return normalized;
 	}
 
+	private Map<String, BigDecimal> normalizeHoldingWeights(List<InstrumentDossierExtractionPayload.HoldingPayload> holdings) {
+		if (holdings == null || holdings.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+		for (InstrumentDossierExtractionPayload.HoldingPayload holding : holdings) {
+			String name = normalizeLabel(holding == null ? null : holding.name());
+			if (name == null) {
+				continue;
+			}
+			BigDecimal weight = normalizeWeightPct(holding.weightPct());
+			if (weight != null) {
+				normalized.put(name, weight);
+			}
+		}
+		return normalized;
+	}
+
 	private boolean isComplete(String status) {
 		if (status == null) {
 			return false;
 		}
 		return COMPLETE_STATUSES.contains(status.toUpperCase(Locale.ROOT));
+	}
+
+	private BigDecimal normalizeWeightPct(BigDecimal weight) {
+		if (weight == null || weight.signum() <= 0) {
+			return null;
+		}
+		BigDecimal normalized = weight.compareTo(BigDecimal.ONE) > 0
+				? weight.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP)
+				: weight;
+		if (normalized.compareTo(BigDecimal.ONE) > 0) {
+			normalized = BigDecimal.ONE;
+		}
+		return normalized;
 	}
 
 	private String inferDistribution(String name, String layerNotes) {
@@ -955,6 +1648,13 @@ public class AssessorInstrumentSuggestionService {
 			return true;
 		}
 		return type != null && (type.contains("share") || type.contains("equity")) && (type.contains("etf") == false);
+	}
+
+	private boolean isSingleStockDisallowed(InstrumentProfile profile, int layer) {
+		if (profile == null) {
+			return false;
+		}
+		return profile.singleStock() && layer > 0 && layer <= 3;
 	}
 
 	private static String normalizeIsin(String isin) {
@@ -1031,17 +1731,33 @@ public class AssessorInstrumentSuggestionService {
 									 String name,
 									 Integer layer,
 									 String instrumentType,
-									 String assetClass,
-									 String subClass,
-									 String layerNotes,
-									 BigDecimal ongoingChargesPct,
-									 String benchmarkIndex,
-									 Set<String> regions,
-									 Set<String> holdings,
-									 String distribution,
-									 Set<String> themes,
-									 Set<String> locales,
-									 boolean singleStock) {
+	 String assetClass,
+	 String subClass,
+	 String layerNotes,
+	 BigDecimal ongoingChargesPct,
+	 String benchmarkIndex,
+	 Set<String> regions,
+	 Set<String> holdings,
+	 Map<String, BigDecimal> regionWeights,
+	 Map<String, BigDecimal> holdingWeights,
+	 String distribution,
+	 Set<String> themes,
+	 Set<String> locales,
+	 boolean singleStock,
+	 BigDecimal earningsYieldLongterm,
+	 BigDecimal earningsYieldHoldings,
+	 BigDecimal earningsYieldCurrent,
+	 BigDecimal dividendYield,
+	 BigDecimal priceToBook,
+	 BigDecimal evToEbitda,
+	 BigDecimal ebitdaEur,
+	 BigDecimal netIncomeEur,
+	 BigDecimal revenueEur,
+	 String peMethod,
+	 String peHorizon,
+	 String negEarningsHandling,
+	 int missingFieldCount,
+	 int warningCount) {
 		boolean matchesGap(CoverageGap gap) {
 			if (gap == null || gap.value() == null) {
 				return false;
@@ -1082,8 +1798,87 @@ public class AssessorInstrumentSuggestionService {
 			return new MissingCategories(Set.of(), Set.of(), Set.of(), Set.of());
 		}
 
+		MissingCategories forLayer(int layer) {
+			if (layer == 3) {
+				return this;
+			}
+			return new MissingCategories(subClasses, Set.of(), locales, distributions);
+		}
+
 		boolean isEmpty() {
 			return subClasses.isEmpty() && themes.isEmpty() && locales.isEmpty() && distributions.isEmpty();
+		}
+
+		double severityScore(int layer) {
+			double themeWeight = layer == 3 ? GAP_WEIGHT_THEME : GAP_WEIGHT_THEME_SECONDARY;
+			return (subClasses.size() * GAP_WEIGHT_SUB_CLASS)
+					+ (themes.size() * themeWeight)
+					+ (locales.size() * GAP_WEIGHT_LOCALE)
+					+ (distributions.size() * GAP_WEIGHT_DISTRIBUTION);
+		}
+
+		double coverageWeight(InstrumentProfile profile, Integer layer) {
+			if (profile == null) {
+				return 0.0;
+			}
+			double score = 0.0;
+			String sub = normalize(profile.subClass());
+			if (sub != null && subClasses.contains(sub)) {
+				score += GAP_WEIGHT_SUB_CLASS;
+			}
+			double themeWeight = layer != null && layer == 3 ? GAP_WEIGHT_THEME : GAP_WEIGHT_THEME_SECONDARY;
+			if (themeWeight > 0 && profile.themes() != null) {
+				for (String theme : profile.themes()) {
+					if (themes.contains(theme)) {
+						score += themeWeight;
+						break;
+					}
+				}
+			}
+			double localeScore = 0.0;
+			if (profile.locales() != null) {
+				for (String locale : profile.locales()) {
+					if (!locales.contains(locale)) {
+						continue;
+					}
+					localeScore += GAP_WEIGHT_LOCALE * resolveLocaleWeight(profile, locale);
+				}
+			}
+			score += Math.min(1.0, localeScore);
+			String dist = normalize(profile.distribution());
+			if (dist != null && distributions.contains(dist)) {
+				score += GAP_WEIGHT_DISTRIBUTION;
+			}
+			return score;
+		}
+
+		MissingCategories withoutCovered(InstrumentProfile profile, Integer layer) {
+			if (profile == null) {
+				return this;
+			}
+			Set<String> subRemaining = new LinkedHashSet<>(subClasses);
+			String sub = normalize(profile.subClass());
+			if (sub != null) {
+				subRemaining.remove(sub);
+			}
+			Set<String> themeRemaining = new LinkedHashSet<>(themes);
+			if (layer != null && layer == 3 && profile.themes() != null) {
+				for (String theme : profile.themes()) {
+					themeRemaining.remove(theme);
+				}
+			}
+			Set<String> localeRemaining = new LinkedHashSet<>(locales);
+			if (profile.locales() != null) {
+				for (String locale : profile.locales()) {
+					localeRemaining.remove(locale);
+				}
+			}
+			Set<String> distRemaining = new LinkedHashSet<>(distributions);
+			String dist = normalize(profile.distribution());
+			if (dist != null) {
+				distRemaining.remove(dist);
+			}
+			return new MissingCategories(subRemaining, themeRemaining, localeRemaining, distRemaining);
 		}
 
 		List<CoverageGap> toGapList() {
@@ -1134,7 +1929,7 @@ public class AssessorInstrumentSuggestionService {
 			if (sub != null && subClasses.contains(sub)) {
 				covered.add(new CoverageGap(GapType.SUB_CLASS, sub));
 			}
-			if (profile.themes() != null) {
+			if (profile.themes() != null && profile.layer() != null && profile.layer() == 3) {
 				for (String theme : profile.themes()) {
 					if (themes.contains(theme)) {
 						covered.add(new CoverageGap(GapType.THEME, theme));
@@ -1176,6 +1971,21 @@ public class AssessorInstrumentSuggestionService {
 				return null;
 			}
 			return value.trim().toLowerCase(Locale.ROOT);
+		}
+
+		private static double resolveLocaleWeight(InstrumentProfile profile, String locale) {
+			if (profile == null || locale == null || profile.regionWeights() == null) {
+				return 1.0;
+			}
+			BigDecimal weight = profile.regionWeights().get(locale);
+			if (weight == null || weight.signum() <= 0) {
+				return 1.0;
+			}
+			double value = weight.doubleValue();
+			if (value <= 0.0) {
+				return 1.0;
+			}
+			return Math.min(value, 1.0);
 		}
 	}
 

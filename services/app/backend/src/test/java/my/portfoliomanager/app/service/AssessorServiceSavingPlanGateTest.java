@@ -9,7 +9,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AssessorServiceSavingPlanGateTest {
-	private final AssessorService service = new AssessorService(null, null, null, null, null, null, null);
+	private final AssessorService service = new AssessorService(null, null, null, null, null, null, null, new SavingPlanDeltaAllocator());
+	private final SavingPlanDeltaAllocator allocator = new SavingPlanDeltaAllocator();
 
 	@Test
 	void shiftsSmallLayerDeltasUpwardToMeetGate() {
@@ -35,22 +36,17 @@ class AssessorServiceSavingPlanGateTest {
 
 	@Test
 	void allocatesNegativeDeltasWithoutSubMinimumRebalance() {
-		List<AssessorEngine.SavingPlanItem> plans = List.of(
-				new AssessorEngine.SavingPlanItem("AAA111", 1L, new BigDecimal("50"), 1),
-				new AssessorEngine.SavingPlanItem("BBB222", 1L, new BigDecimal("30"), 1)
+		List<SavingPlanDeltaAllocator.PlanInput> inputs = List.of(
+				new SavingPlanDeltaAllocator.PlanInput(new AssessorEngine.PlanKey("AAA111", 1L), new BigDecimal("50"), BigDecimal.ONE),
+				new SavingPlanDeltaAllocator.PlanInput(new AssessorEngine.PlanKey("BBB222", 1L), new BigDecimal("30"), BigDecimal.ONE)
 		);
-		Map<AssessorEngine.PlanKey, BigDecimal> weights = Map.of(
-				new AssessorEngine.PlanKey("AAA111", 1L), BigDecimal.ONE,
-				new AssessorEngine.PlanKey("BBB222", 1L), BigDecimal.ONE
-		);
-
-		Map<AssessorEngine.PlanKey, BigDecimal> deltas = service.allocatePlanDeltasByWeights(
-				plans,
-				new BigDecimal("-20"),
-				weights,
+		SavingPlanDeltaAllocator.Allocation allocation = allocator.allocateToTarget(
+				inputs,
+				new BigDecimal("60"),
 				new BigDecimal("10"),
 				new BigDecimal("15")
 		);
+		Map<AssessorEngine.PlanKey, BigDecimal> deltas = allocation.deltas();
 
 		assertThat(deltas.values())
 				.allMatch(value -> value.signum() < 0)
@@ -61,22 +57,17 @@ class AssessorServiceSavingPlanGateTest {
 
 	@Test
 	void discardsPlanWhenReductionDropsBelowMinimumSize() {
-		List<AssessorEngine.SavingPlanItem> plans = List.of(
-				new AssessorEngine.SavingPlanItem("AAA111", 1L, new BigDecimal("20"), 1),
-				new AssessorEngine.SavingPlanItem("BBB222", 1L, new BigDecimal("20"), 1)
+		List<SavingPlanDeltaAllocator.PlanInput> inputs = List.of(
+				new SavingPlanDeltaAllocator.PlanInput(new AssessorEngine.PlanKey("AAA111", 1L), new BigDecimal("20"), new BigDecimal("2")),
+				new SavingPlanDeltaAllocator.PlanInput(new AssessorEngine.PlanKey("BBB222", 1L), new BigDecimal("20"), BigDecimal.ONE)
 		);
-		Map<AssessorEngine.PlanKey, BigDecimal> weights = Map.of(
-				new AssessorEngine.PlanKey("AAA111", 1L), new BigDecimal("2"),
-				new AssessorEngine.PlanKey("BBB222", 1L), BigDecimal.ONE
-		);
-
-		Map<AssessorEngine.PlanKey, BigDecimal> deltas = service.allocatePlanDeltasByWeights(
-				plans,
-				new BigDecimal("-15"),
-				weights,
+		SavingPlanDeltaAllocator.Allocation allocation = allocator.allocateToTarget(
+				inputs,
+				new BigDecimal("25"),
 				new BigDecimal("10"),
 				new BigDecimal("15")
 		);
+		Map<AssessorEngine.PlanKey, BigDecimal> deltas = allocation.deltas();
 
 		assertThat(deltas)
 				.containsEntry(new AssessorEngine.PlanKey("BBB222", 1L), new BigDecimal("-20"));

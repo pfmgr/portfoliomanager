@@ -6,8 +6,20 @@ import java.util.Map;
 public interface KnowledgeBaseLlmProvider {
 	KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains);
 
+	default KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains, String reasoningEffort) {
+		return runWebSearch(prompt, allowedDomains);
+	}
+
 	default KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains, String schemaName, Map<String, Object> schema) {
 		return runWebSearch(prompt, allowedDomains);
+	}
+
+	default KnowledgeBaseLlmResponse runWebSearch(String prompt,
+												 List<String> allowedDomains,
+												 String reasoningEffort,
+												 String schemaName,
+												 Map<String, Object> schema) {
+		return runWebSearch(prompt, allowedDomains, schemaName, schema);
 	}
 
 	KnowledgeBaseLlmResponse runJsonPrompt(String prompt);

@@ -351,11 +351,32 @@
                     <span v-if="latestExtraction.autoApproved">(auto-approved)</span>
                   </p>
                   <dl class="kb-dl">
-                    <template v-for="field in extractionFields" :key="field.label">
-                      <dt>{{ field.label }}</dt>
+                    <template v-for="field in extractionBaseFields" :key="field.label">
+                      <dt>
+                        <abbr v-if="field.title" :title="field.title">{{ field.label }}</abbr>
+                        <template v-else>{{ field.label }}</template>
+                      </dt>
                       <dd>{{ field.value }}</dd>
                     </template>
                   </dl>
+                  <details class="section kb-details kb-valuation">
+                    <summary>Valuation metrics</summary>
+                    <p class="hint">
+                      Long-term P/E uses smoothed EPS. Holdings P/E aggregates trailing earnings from
+                      the ETF's holdings. Current P/E and P/B may be used when history is missing.
+                      EBITDA and REIT profitability metrics are normalized to EUR when FX rates are available.
+                    </p>
+                    <p v-if="!hasValuationData" class="hint">No valuation data found in this extraction.</p>
+                    <dl v-else class="kb-dl">
+                      <template v-for="field in extractionValuationFields" :key="field.label">
+                        <dt>
+                          <abbr v-if="field.title" :title="field.title">{{ field.label }}</abbr>
+                          <template v-else>{{ field.label }}</template>
+                        </dt>
+                        <dd>{{ field.value }}</dd>
+                      </template>
+                    </dl>
+                  </details>
                   <details class="section">
                     <summary>Raw extraction JSON</summary>
                     <pre class="code-block">{{ formattedExtraction }}</pre>
@@ -1105,6 +1126,14 @@
               <span>Run timeout (minutes)</span>
               <input type="number" min="1" v-model.number="configForm.runTimeoutMinutes" />
             </label>
+            <label class="field">
+              <span>Websearch reasoning effort</span>
+              <select class="input" v-model="configForm.websearchReasoningEffort">
+                <option value="low">Low (default)</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
           </div>
 
           <label class="field">
@@ -1165,7 +1194,8 @@ const configForm = ref({
   maxBackoffSeconds: 30,
   dossierMaxChars: 15000,
   kbRefreshMinDaysBetweenRunsPerInstrument: 7,
-  runTimeoutMinutes: 30
+  runTimeoutMinutes: 30,
+  websearchReasoningEffort: 'low'
 })
 const domainsText = ref('')
 const configBusy = ref(false)
@@ -1367,7 +1397,17 @@ const extractionWarnings = computed(() => {
   if (!latestExtraction.value) return []
   return (latestExtraction.value.warningsJson || []).map((entry) => entry.message || entry)
 })
-const extractionFields = computed(() => {
+const formatFieldValue = (value) => {
+  if (value === null || value === undefined) {
+    return '-'
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return '-'
+  }
+  return value
+}
+
+const extractionBaseFields = computed(() => {
   const payload = latestExtraction.value?.extractedJson || {}
   const etf = payload.etf || {}
   const risk = payload.risk || {}
@@ -1383,6 +1423,201 @@ const extractionFields = computed(() => {
     { label: 'ETF benchmark', value: etf.benchmark_index || etf.benchmarkIndex || '-' },
     { label: 'SRI', value: sri.value ?? '-' }
   ]
+})
+
+const extractionValuationFields = computed(() => {
+  const payload = latestExtraction.value?.extractedJson || {}
+  const valuation = payload.valuation || {}
+  return [
+    {
+      label: 'EBITDA',
+      title: 'Earnings before interest, taxes, depreciation, and amortization',
+      value: formatFieldValue(valuation.ebitda)
+    },
+    {
+      label: 'EBITDA (ccy)',
+      title: 'EBITDA reporting currency',
+      value: formatFieldValue(valuation.ebitda_currency || valuation.ebitdaCurrency)
+    },
+    {
+      label: 'EBITDA (EUR)',
+      title: 'EBITDA normalized to EUR using FX rate',
+      value: formatFieldValue(valuation.ebitda_eur ?? valuation.ebitdaEur)
+    },
+    {
+      label: 'FX→EUR',
+      title: 'FX rate used to convert EBITDA to EUR',
+      value: formatFieldValue(valuation.fx_rate_to_eur ?? valuation.fxRateToEur)
+    },
+    {
+      label: 'EV/EBITDA',
+      title: 'Enterprise value divided by EBITDA',
+      value: formatFieldValue(valuation.ev_to_ebitda ?? valuation.evToEbitda)
+    },
+    {
+      label: 'Net rent',
+      title: 'Net rental income (real estate)',
+      value: formatFieldValue(valuation.net_rent ?? valuation.netRent)
+    },
+    {
+      label: 'Net rent (ccy)',
+      title: 'Net rent reporting currency',
+      value: formatFieldValue(valuation.net_rent_currency ?? valuation.netRentCurrency)
+    },
+    {
+      label: 'Net rent period',
+      title: 'Net rent period end or fiscal year',
+      value: formatFieldValue(valuation.net_rent_period_end ?? valuation.netRentPeriodEnd)
+    },
+    {
+      label: 'Net rent period type',
+      title: 'Net rent period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.net_rent_period_type ?? valuation.netRentPeriodType)
+    },
+    {
+      label: 'NOI',
+      title: 'Net operating income (real estate)',
+      value: formatFieldValue(valuation.noi)
+    },
+    {
+      label: 'NOI (ccy)',
+      title: 'NOI reporting currency',
+      value: formatFieldValue(valuation.noi_currency ?? valuation.noiCurrency)
+    },
+    {
+      label: 'NOI period',
+      title: 'NOI period end or fiscal year',
+      value: formatFieldValue(valuation.noi_period_end ?? valuation.noiPeriodEnd)
+    },
+    {
+      label: 'NOI period type',
+      title: 'NOI period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.noi_period_type ?? valuation.noiPeriodType)
+    },
+    {
+      label: 'AFFO',
+      title: 'Adjusted funds from operations',
+      value: formatFieldValue(valuation.affo)
+    },
+    {
+      label: 'AFFO (ccy)',
+      title: 'AFFO reporting currency',
+      value: formatFieldValue(valuation.affo_currency ?? valuation.affoCurrency)
+    },
+    {
+      label: 'AFFO period',
+      title: 'AFFO period end or fiscal year',
+      value: formatFieldValue(valuation.affo_period_end ?? valuation.affoPeriodEnd)
+    },
+    {
+      label: 'AFFO period type',
+      title: 'AFFO period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.affo_period_type ?? valuation.affoPeriodType)
+    },
+    {
+      label: 'FFO',
+      title: 'Funds from operations',
+      value: formatFieldValue(valuation.ffo)
+    },
+    {
+      label: 'FFO (ccy)',
+      title: 'FFO reporting currency',
+      value: formatFieldValue(valuation.ffo_currency ?? valuation.ffoCurrency)
+    },
+    {
+      label: 'FFO period',
+      title: 'FFO period end or fiscal year',
+      value: formatFieldValue(valuation.ffo_period_end ?? valuation.ffoPeriodEnd)
+    },
+    {
+      label: 'FFO period type',
+      title: 'FFO period type (e.g., TTM or FY)',
+      value: formatFieldValue(valuation.ffo_period_type ?? valuation.ffoPeriodType)
+    },
+    {
+      label: 'FFO type',
+      title: 'FFO variant (e.g., FFO I)',
+      value: formatFieldValue(valuation.ffo_type ?? valuation.ffoType)
+    },
+    {
+      label: 'P/E (LT)',
+      title: 'Long-term P/E using smoothed EPS',
+      value: formatFieldValue(valuation.pe_longterm ?? valuation.peLongterm)
+    },
+    {
+      label: 'Earnings yield (LT)',
+      title: 'Inverse of long-term P/E using smoothed EPS',
+      value: formatFieldValue(valuation.earnings_yield_longterm ?? valuation.earningsYieldLongterm)
+    },
+    {
+      label: 'P/E (current)',
+      title: 'Current price-to-earnings ratio (TTM/forward as stated)',
+      value: formatFieldValue(valuation.pe_current ?? valuation.peCurrent)
+    },
+    {
+      label: 'P/E (current) as-of',
+      title: 'As-of date for current P/E',
+      value: formatFieldValue(valuation.pe_current_asof ?? valuation.peCurrentAsOf)
+    },
+    {
+      label: 'P/B (current)',
+      title: 'Current price-to-book ratio',
+      value: formatFieldValue(valuation.pb_current ?? valuation.pbCurrent)
+    },
+    {
+      label: 'P/B as-of',
+      title: 'As-of date for current P/B',
+      value: formatFieldValue(valuation.pb_current_asof ?? valuation.pbCurrentAsOf)
+    },
+    {
+      label: 'P/E (TTM holdings)',
+      title: 'Holdings-based P/E using trailing twelve months earnings',
+      value: formatFieldValue(valuation.pe_ttm_holdings ?? valuation.peTtmHoldings)
+    },
+    {
+      label: 'Earnings yield (TTM)',
+      title: 'Holdings-based earnings yield using trailing twelve months earnings',
+      value: formatFieldValue(valuation.earnings_yield_ttm_holdings ?? valuation.earningsYieldTtmHoldings)
+    },
+    {
+      label: 'Coverage wt %',
+      title: 'Percent of holdings weight with earnings data',
+      value: formatFieldValue(valuation.holdings_coverage_weight_pct ?? valuation.holdingsCoverageWeightPct)
+    },
+    {
+      label: 'Coverage count',
+      title: 'Number of holdings with earnings data',
+      value: formatFieldValue(valuation.holdings_coverage_count ?? valuation.holdingsCoverageCount)
+    },
+    {
+      label: 'P/E method',
+      title: 'Method used to calculate P/E',
+      value: formatFieldValue(valuation.pe_method || valuation.peMethod)
+    },
+    {
+      label: 'P/E horizon',
+      title: 'Valuation horizon (e.g., long-term, TTM, forward)',
+      value: formatFieldValue(valuation.pe_horizon || valuation.peHorizon)
+    },
+    {
+      label: 'Neg earnings',
+      title: 'Handling of negative earnings in P/E calculations',
+      value: formatFieldValue(valuation.neg_earnings_handling || valuation.negEarningsHandling)
+    }
+  ]
+})
+
+const hasValuationData = computed(() => {
+  const valuation = latestExtraction.value?.extractedJson?.valuation || {}
+  return Object.values(valuation).some((value) => {
+    if (value === null || value === undefined) {
+      return false
+    }
+    if (typeof value === 'string') {
+      return value.trim() !== ''
+    }
+    return true
+  })
 })
 
 const dossierSources = computed(() => {
@@ -2230,6 +2465,9 @@ function prevRunsPage() {
 }
 
 function normalizeConfig(raw) {
+  const effort = ['low', 'medium', 'high'].includes(raw.websearch_reasoning_effort)
+    ? raw.websearch_reasoning_effort
+    : 'low'
   return {
     enabled: !!raw.enabled,
     refreshIntervalDays: raw.refresh_interval_days ?? 30,
@@ -2248,6 +2486,7 @@ function normalizeConfig(raw) {
     dossierMaxChars: raw.dossier_max_chars ?? 15000,
     kbRefreshMinDaysBetweenRunsPerInstrument: raw.kb_refresh_min_days_between_runs_per_instrument ?? 7,
     runTimeoutMinutes: raw.run_timeout_minutes ?? 30,
+    websearchReasoningEffort: effort,
     websearchAllowedDomains: raw.websearch_allowed_domains || []
   }
 }
@@ -2271,6 +2510,7 @@ function toConfigPayload(form, domainsRaw) {
     dossier_max_chars: form.dossierMaxChars,
     kb_refresh_min_days_between_runs_per_instrument: form.kbRefreshMinDaysBetweenRunsPerInstrument,
     run_timeout_minutes: form.runTimeoutMinutes,
+    websearch_reasoning_effort: form.websearchReasoningEffort,
     websearch_allowed_domains: parseDomains(domainsRaw)
   }
 }
@@ -2783,6 +3023,15 @@ function formatExtractionFreshness(freshness) {
 
 .kb-dl dd {
   margin: 0;
+}
+
+.kb-dl abbr[title] {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+.kb-valuation {
+  margin-top: 0.6rem;
 }
 
 .kb-settings {
