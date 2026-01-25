@@ -868,7 +868,11 @@ public class KnowledgeBaseService {
         if (contentMd == null || contentMd.isBlank()) {
             throw new IllegalArgumentException("Content must be provided");
         }
-        return contentMd.trim();
+        String sanitized = contentMd.replace("\u0000", "");
+        if (sanitized.isBlank()) {
+            throw new IllegalArgumentException("Content must be provided");
+        }
+        return sanitized.trim();
     }
 
 
@@ -914,14 +918,15 @@ public class KnowledgeBaseService {
                 	## Sources (numbered list)
                 
                 	Additional requirements:
-                	- Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.   
-                	- When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
-                	- If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
-                	- Output JSON only. Do not wrap in Markdown code fences.
-                	- Provide exactly one items[] entry for each ISIN, in the same order as given.
-                	- If you cannot complete an ISIN, set contentMd=null, displayName=null, citations=[], error="<reason>".
+                    - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.   
+                    - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
+                    - For exposures, provide region and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
+                    - If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
+                    - Output JSON only. Do not wrap in Markdown code fences.
+                    - Provide exactly one items[] entry for each ISIN, in the same order as given.
+                    - If you cannot complete an ISIN, set contentMd=null, displayName=null, citations=[], error="<reason>".
                     - Keep each dossier concise but complete (under %d characters).
-                    - Single Stocks should always be classified as layer 4= Single Stock.
+                    - Single Stocks should always be classified as layer 4= Single Stock. REITs are single stocks unless explicitly a fund/ETF; classify REIT equities as layer 4.
                     - To qualify as Layer 1 = Global-Core, an instrument must be an ETF or fund that diversifies across industries and themes worldwide, but not only across individual countries and continents. World wide diversified Core-Umbrella fonds, Core-Multi Asset-ETFs and/or Bond-ETFs are allowed in this layer, too.
                     - ETFs/Fonds focussing on instruments from single continents, countries and/or only one country/continent are NOT allowed for Layer 1!
                     - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
@@ -932,6 +937,64 @@ public class KnowledgeBaseService {
                       If EPS history is incomplete or only a single year is available, still report what you have and explain the gap; do not fabricate long-term P/E.
                       If EBITDA currency is not EUR, include EBITDA converted to EUR and the FX rate used (with date).
                       If available, include market cap and shares outstanding so price can be derived.
+                      If enterprise value, net debt, or EV/EBITDA are stated, capture them with currency and as-of/period end.
+                    - In the Valuation & profitability section, use explicit key/value bullets with numeric values and as-of dates (e.g., "price: 254.20 EUR (as of 2026-01-16)"). Do not defer to sources or say "see source" when a number exists; list the number(s). Avoid ranges and vague qualifiers. If multiple values exist across sources, pick the latest as-of date and report a single numeric value. If only a range is available, compute the midpoint value and note the range in parentheses.
+                    - The Valuation & profitability section must be a key/value list with one metric per bullet. Use the exact keys (when applicable): price, pe_current, pb_current, dividend_per_share, revenue, net_income, ebitda, enterprise_value, net_debt, ev_to_ebitda, market_cap, shares_outstanding, eps_history (list years), eps_norm, pe_longterm, earnings_yield_longterm, pe_ttm_holdings, earnings_yield_ttm_holdings, holdings_coverage_weight_pct, holdings_coverage_count, holdings_asof, holdings_weight_method, pe_method, pe_horizon, neg_earnings_handling, net_rent, noi, affo, ffo (and ffo_type). If a metric is unavailable, write "unknown" for that key (do not omit the key).
+                    - The Valuation & profitability section must contain ONLY the template block below. Do not add extra sentences, notes, or metrics in that section.
+                    - For unknown values, write exactly "unknown" with no explanation.
+                    - Use numeric values as stated in sources (B/M abbreviations are acceptable if that is how the source reports them).
+                    - If you cite a source for a valuation metric, include its numeric value in the template (do not cite without a number).
+                    - For enum fields (holdings_weight_method, pe_method, pe_horizon, neg_earnings_handling), use exactly one allowed value or "unknown".
+                    - Single stocks (including REIT equities) must provide numeric values for price, pe_current, pb_current, and market_cap when available from market-data sources; do not leave these as unknown if a market-data page is cited.
+                    - ETFs must provide numeric values for price (NAV/market price), pe_current, pb_current, and holdings_asof when available from issuer sources.
+                    - REITs: if company materials list net_rent, NOI, AFFO, or FFO, include those numeric values.
+                    - Single stock data source priority: local listing market data first (e.g., Boerse/StockAnalysis ETR, finance.yahoo.com local listing), then companiesmarketcap.com and justetf.com stock profile, then macrotrends.net for EPS history. Use at least one of these and extract numeric values for price, pe_current, pb_current, market_cap, and eps_history. Do not leave them unknown if present on the cited page.
+                    - For single stocks/REITs, set pe_method to ttm or forward (not provider_*), set pe_horizon to ttm, and set pe_ttm_holdings, earnings_yield_ttm_holdings, holdings_coverage_weight_pct, holdings_coverage_count, holdings_asof, and holdings_weight_method to unknown.
+                    - Use pe_horizon=normalized only when eps_norm and pe_longterm are explicitly provided.
+                    - For ISINs with DE/FR/IE/GB prefixes, use the local listing and local currency (EUR/GBP) for price, P/E, P/B, and market cap. If local listings are missing or lack the metric, you may use ADR/OTC USD listings as fallback, but convert to EUR and include the FX rate and date. If both local and ADR data are unavailable, set the metric to unknown.
+                    - Use this exact template for the Valuation & profitability section (copy and fill; keep order):
+                      - price: <number> <currency> (as of YYYY-MM-DD)
+                      - pe_current: <number> (as of YYYY-MM-DD, ttm|forward if stated)
+                      - pb_current: <number> (as of YYYY-MM-DD)
+                      - dividend_per_share: <number> <currency> (as of YYYY-MM-DD)
+                      - revenue: <number> <currency> (FY/TTM, period end YYYY-MM-DD)
+                      - net_income: <number> <currency> (FY/TTM, period end YYYY-MM-DD)
+                      - ebitda: <number> <currency> (TTM/FY, period end YYYY-MM-DD)
+                      - enterprise_value: <number> <currency> (as of YYYY-MM-DD)
+                      - net_debt: <number> <currency> (as of YYYY-MM-DD)
+                      - ev_to_ebitda: <number> (as of YYYY-MM-DD)
+                      - market_cap: <number> <currency> (as of YYYY-MM-DD)
+                      - shares_outstanding: <number> (as of YYYY-MM-DD)
+                      - eps_history:
+                        - 2024: <number> <currency> (period end YYYY-MM-DD, adjusted|reported)
+                        - 2023: <number> <currency> (period end YYYY-MM-DD, adjusted|reported)
+                      - eps_norm: <number> <currency> (period end YYYY-MM-DD, years used N)
+                      - pe_longterm: <number> (as of YYYY-MM-DD)
+                      - earnings_yield_longterm: <number> (decimal, as of YYYY-MM-DD)
+                      - pe_ttm_holdings: <number>
+                      - earnings_yield_ttm_holdings: <number>
+                      - holdings_coverage_weight_pct: <number>
+                      - holdings_coverage_count: <number>
+                      - holdings_asof: YYYY-MM-DD
+                      - holdings_weight_method: provider_weighted_avg|provider_aggregate
+                      - pe_method: ttm|forward|provider_weighted_avg|provider_aggregate
+                      - pe_horizon: ttm|normalized
+                      - neg_earnings_handling: exclude|set_null|aggregate_allows_negative
+                      - net_rent: <number> <currency> (TTM/FY, period end YYYY-MM-DD)
+                      - noi: <number> <currency> (TTM/FY, period end YYYY-MM-DD)
+                      - affo: <number> <currency> (TTM/FY, period end YYYY-MM-DD)
+                      - ffo: <number> <currency> (TTM/FY, period end YYYY-MM-DD, ffo_type=FFO I|FFO II if stated)
+                    - Use ISO dates (YYYY-MM-DD). Never include numeric ranges in the valuation list; if a source provides a range, compute the midpoint and report a single numeric value, optionally noting the range in parentheses.
+                    - Do not label a metric "unknown" if you provide a numeric value.
+                    - Only use the keys listed above; do not introduce new keys.
+                    - Only use dividend_per_share for absolute per-share cash amounts (not yields/percentages). If only yield is available, set dividend_per_share to unknown.
+                    - If a valuation metric lacks an explicit as-of/period-end date in sources, use the dossier research date as the as-of date.
+                    - For ETFs, treat NAV or market price per share as the price when provided in issuer/factsheet sources.
+                    - For EPS history, list each year with the numeric EPS value and period end (e.g., "eps_2024: 9.56 EUR (FY, 2024-09-30, adjusted)").
+                    - If issuer materials do not provide valuation metrics, use market-data sources (e.g., finance.yahoo.com, stockanalysis.com, macrotrends.net, morningstar.com) to extract the numeric values and dates.
+                    - For single stocks, always include at least one market-data source (Yahoo Finance, StockAnalysis, Macrotrends, Morningstar) for price/P-E/EPS and list the numeric values with dates. If the local listing lacks a metric, ADR/OTC data can be used as fallback with FX conversion to EUR and the FX rate/date noted.
+                    - EPS history can come from ADR/OTC sources when local listings lack EPS history; keep eps_currency as reported or convert to EUR with the FX rate and date noted in the dossier.
+                    - For ETFs, always use the issuer/factsheet pages for P/E, P/B, yield, and as-of dates; provide explicit numbers (no ranges).
                     - Always capture the current P/E (TTM/forward as stated) with an as-of date, even when long-term metrics are available.
                     - If EBITDA is stated, capture it with currency, period type (TTM/FY), and period end.
                     - If revenue or net income are stated, capture them with currency, period type (TTM/FY), and period end; include EUR conversion and FX rate when not in EUR.
@@ -940,7 +1003,7 @@ public class KnowledgeBaseService {
                     - For real estate/REITs, capture net rent, NOI, AFFO, and FFO (label FFO I if specified), including currency, period type (TTM/FY), and period end/as-of date.
                     - For ETFs, include holdings-based TTM P/E computed from historical earnings of holdings:
                       E/P_portfolio = sum(w_i * E/P_i), P/E_ttm_holdings = 1 / E/P_portfolio.
-                      Report: P/E_ttm_holdings, earnings_yield_ttm_holdings, holdings coverage (count and weight pct), holdings as-of date.
+                      Report: P/E_ttm_holdings, earnings_yield_ttm_holdings, holdings coverage (count and weight pct), holdings as-of date, holdings weight method (provider_weighted_avg vs provider_aggregate).
                     - For both, include method flags: pe_method {ttm, forward, provider_weighted_avg, provider_aggregate}, pe_horizon {ttm, normalized}, neg_earnings_handling {exclude, set_null, aggregate_allows_negative}.
                 
                 

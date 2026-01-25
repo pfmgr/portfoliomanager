@@ -41,7 +41,7 @@ class KnowledgeBaseAllowedDomainsSeederTest {
 		assertThat(allowedDomains.isArray()).isTrue();
 		List<String> domains = new ArrayList<>();
 		allowedDomains.forEach(node -> domains.add(node.asText()));
-		assertThat(domains).contains("marketscreener.com", "statista.com", "finbox.com");
+		assertThat(domains).contains("finance.yahoo.com", "stockanalysis.com", "stooq.com");
 	}
 
 	@Test

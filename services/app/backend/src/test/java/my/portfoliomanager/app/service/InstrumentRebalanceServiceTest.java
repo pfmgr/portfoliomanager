@@ -229,7 +229,141 @@ class InstrumentRebalanceServiceTest {
 				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("50"), 1, null),
 				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("50"), 1, null)
 		);
-		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("120"));
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
+
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false);
+
+		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
+		assertThat(byIsin.get("DE000A").getProposedAmountEur())
+				.isGreaterThan(byIsin.get("DE000B").getProposedAmountEur());
+	}
+
+	@Test
+	void prefersHigherHoldingsYieldForEtfWeights() throws Exception {
+		ObjectMapper mapper = new ObjectMapper();
+		String jsonA = mapper.writeValueAsString(Map.of(
+				"instrument_type", "ETF",
+				"asset_class", "Equity",
+				"etf", Map.of("ongoing_charges_pct", 0.2),
+				"valuation", Map.of(
+						"earnings_yield_ttm_holdings", 0.08,
+						"pe_method", "provider_weighted_avg",
+						"pe_horizon", "ttm",
+						"neg_earnings_handling", "exclude"
+				)
+		));
+		String jsonB = mapper.writeValueAsString(Map.of(
+				"instrument_type", "ETF",
+				"asset_class", "Equity",
+				"etf", Map.of("ongoing_charges_pct", 0.2),
+				"valuation", Map.of(
+						"earnings_yield_ttm_holdings", 0.02,
+						"pe_method", "provider_weighted_avg",
+						"pe_horizon", "ttm",
+						"neg_earnings_handling", "exclude"
+				)
+		));
+		Map<String, ExtractionRow> rows = Map.of(
+				"DE000A", new ExtractionRow("DE000A", "COMPLETE", jsonA),
+				"DE000B", new ExtractionRow("DE000B", "COMPLETE", jsonB)
+		);
+		InstrumentRebalanceService service = buildService(rows, true);
+
+		List<SavingPlanInstrument> instruments = List.of(
+				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("50"), 1, null),
+				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("50"), 1, null)
+		);
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
+
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false);
+
+		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
+		assertThat(byIsin.get("DE000A").getProposedAmountEur())
+				.isGreaterThan(byIsin.get("DE000B").getProposedAmountEur());
+	}
+
+	@Test
+	void prefersHigherPeQualityFlagsInValuationWeights() throws Exception {
+		ObjectMapper mapper = new ObjectMapper();
+		String jsonA = mapper.writeValueAsString(Map.of(
+				"instrument_type", "ETF",
+				"asset_class", "Equity",
+				"etf", Map.of("ongoing_charges_pct", 0.2),
+				"valuation", Map.of(
+						"earnings_yield_ttm_holdings", 0.05,
+						"pe_method", "provider_aggregate",
+						"pe_horizon", "ttm",
+						"neg_earnings_handling", "aggregate_allows_negative"
+				)
+		));
+		String jsonB = mapper.writeValueAsString(Map.of(
+				"instrument_type", "ETF",
+				"asset_class", "Equity",
+				"etf", Map.of("ongoing_charges_pct", 0.2),
+				"valuation", Map.of(
+						"earnings_yield_ttm_holdings", 0.05,
+						"pe_method", "provider_weighted_avg",
+						"pe_horizon", "normalized",
+						"neg_earnings_handling", "exclude"
+				)
+		));
+		Map<String, ExtractionRow> rows = Map.of(
+				"DE000A", new ExtractionRow("DE000A", "COMPLETE", jsonA),
+				"DE000B", new ExtractionRow("DE000B", "COMPLETE", jsonB)
+		);
+		InstrumentRebalanceService service = buildService(rows, true);
+
+		List<SavingPlanInstrument> instruments = List.of(
+				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("50"), 1, null),
+				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("50"), 1, null)
+		);
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
+
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false);
+
+		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
+		assertThat(byIsin.get("DE000B").getProposedAmountEur())
+				.isGreaterThan(byIsin.get("DE000A").getProposedAmountEur());
+	}
+
+	@Test
+	void penalizesLowerDataQualityInWeights() throws Exception {
+		ObjectMapper mapper = new ObjectMapper();
+		String jsonA = mapper.writeValueAsString(Map.of(
+				"instrument_type", "ETF",
+				"asset_class", "Equity",
+				"etf", Map.of("ongoing_charges_pct", 0.2),
+				"valuation", Map.of(
+						"earnings_yield_ttm_holdings", 0.05,
+						"pe_method", "provider_weighted_avg",
+						"pe_horizon", "ttm",
+						"neg_earnings_handling", "exclude"
+				)
+		));
+		String jsonB = mapper.writeValueAsString(Map.of(
+				"instrument_type", "ETF",
+				"asset_class", "Equity",
+				"etf", Map.of("ongoing_charges_pct", 0.2),
+				"valuation", Map.of(
+						"earnings_yield_ttm_holdings", 0.05,
+						"pe_method", "provider_weighted_avg",
+						"pe_horizon", "ttm",
+						"neg_earnings_handling", "exclude"
+				),
+				"missing_fields", List.of(Map.of("field", "valuation", "reason", "missing")),
+				"warnings", List.of(Map.of("message", "range"))
+		));
+		Map<String, ExtractionRow> rows = Map.of(
+				"DE000A", new ExtractionRow("DE000A", "COMPLETE", jsonA),
+				"DE000B", new ExtractionRow("DE000B", "COMPLETE", jsonB)
+		);
+		InstrumentRebalanceService service = buildService(rows, true);
+
+		List<SavingPlanInstrument> instruments = List.of(
+				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("50"), 1, null),
+				new SavingPlanInstrument("DE000B", "Beta Fund", new BigDecimal("50"), 1, null)
+		);
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
 
 		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false);
 
