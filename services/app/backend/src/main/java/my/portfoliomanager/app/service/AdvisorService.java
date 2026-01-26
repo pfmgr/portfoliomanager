@@ -508,7 +508,7 @@ public class AdvisorService {
 				: warningDetails.stream().map(InstrumentRebalanceService.InstrumentWarning::code).toList();
 		List<InstrumentDiscard> instrumentDiscards = buildInstrumentDiscards(instrumentProposals);
 		boolean minimumRebalancingTriggered = minimumRebalancingApplied || hasReasonCode(instrumentProposals, "MIN_REBALANCE_AMOUNT");
-		proposalAmounts = reconcileProposalAmountsWithInstruments(proposalAmounts, instrumentProposals);
+		proposalAmounts = reconcileProposalAmountsWithInstruments(proposalAmounts, instrumentProposals, monthlyTotal);
 		BigDecimal proposalTotal = sumAmounts(proposalAmounts);
 		Map<Integer, BigDecimal> proposedDistribution = computeDistribution(proposalAmounts, proposalTotal);
 		Map<Integer, Double> proposedDistributionPct = toPercentageMap(proposedDistribution);
@@ -1199,7 +1199,8 @@ public class AdvisorService {
 	}
 
 	private Map<Integer, BigDecimal> reconcileProposalAmountsWithInstruments(Map<Integer, BigDecimal> proposalAmounts,
-																			 List<InstrumentProposalDto> instrumentProposals) {
+																			 List<InstrumentProposalDto> instrumentProposals,
+																			 BigDecimal expectedTotal) {
 		if (proposalAmounts == null || proposalAmounts.isEmpty() || instrumentProposals == null || instrumentProposals.isEmpty()) {
 			return proposalAmounts;
 		}
@@ -1219,6 +1220,14 @@ public class AdvisorService {
 			counts.merge(layer, 1, Integer::sum);
 		}
 		if (totals.isEmpty()) {
+			return proposalAmounts;
+		}
+		BigDecimal baseline = expectedTotal == null ? sumAmounts(proposalAmounts) : expectedTotal;
+		BigDecimal instrumentTotal = sumAmounts(totals);
+		if (baseline == null) {
+			baseline = sumAmounts(proposalAmounts);
+		}
+		if (instrumentTotal.subtract(baseline).abs().compareTo(new BigDecimal("0.01")) > 0) {
 			return proposalAmounts;
 		}
 		Map<Integer, BigDecimal> adjusted = new LinkedHashMap<>(proposalAmounts);

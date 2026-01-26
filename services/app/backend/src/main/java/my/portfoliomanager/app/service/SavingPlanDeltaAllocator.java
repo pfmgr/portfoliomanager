@@ -159,7 +159,7 @@ public class SavingPlanDeltaAllocator {
 			reductionCandidates.add(new ReductionCandidate(candidate.key(), candidate.weight(), amount, capacity, eligibleCapacity));
 			maxReduction = maxReduction.add(eligibleCapacity);
 		}
-		List<ReductionCandidate> discards = selectDiscardsForNegativeDelta(reductionCandidates, total, maxReduction);
+		List<ReductionCandidate> discards = selectDiscardsForNegativeDelta(reductionCandidates, total, maxReduction, minRebalance);
 		Map<AssessorEngine.PlanKey, BigDecimal> reductions = new LinkedHashMap<>();
 		BigDecimal disabledTotal = BigDecimal.ZERO;
 		Set<AssessorEngine.PlanKey> discardKeys = new HashSet<>();
@@ -248,7 +248,8 @@ public class SavingPlanDeltaAllocator {
 
 	private List<ReductionCandidate> selectDiscardsForNegativeDelta(List<ReductionCandidate> candidates,
 																   BigDecimal total,
-																   BigDecimal maxReduction) {
+																   BigDecimal maxReduction,
+																   BigDecimal minimumRebalancing) {
 		if (candidates == null || candidates.isEmpty() || total == null || total.signum() <= 0) {
 			return List.of();
 		}
@@ -256,21 +257,133 @@ public class SavingPlanDeltaAllocator {
 		if (excess.signum() <= 0) {
 			return List.of();
 		}
-		List<ReductionCandidate> ordered = new ArrayList<>(candidates);
-		ordered.sort(Comparator.comparing((ReductionCandidate candidate) -> candidate.amount().subtract(candidate.eligibleCapacity()))
-				.reversed()
-				.thenComparing(ReductionCandidate::weight)
-				.thenComparing(candidate -> candidate.key().isin()));
-		List<ReductionCandidate> discards = new ArrayList<>();
-		BigDecimal covered = BigDecimal.ZERO;
-		for (ReductionCandidate candidate : ordered) {
-			if (covered.compareTo(excess) >= 0) {
-				break;
+		List<ReductionCandidate> ordered = new ArrayList<>();
+		for (ReductionCandidate candidate : candidates) {
+			BigDecimal gain = candidate.amount().subtract(candidate.eligibleCapacity());
+			if (gain.signum() > 0) {
+				ordered.add(candidate);
 			}
-			discards.add(candidate);
-			covered = covered.add(candidate.amount().subtract(candidate.eligibleCapacity()));
+		}
+		if (ordered.isEmpty()) {
+			return List.of();
+		}
+		ordered.sort(Comparator.comparing(candidate -> candidate.key().isin()));
+		int size = ordered.size();
+		BigDecimal[] gains = new BigDecimal[size];
+		BigDecimal[] amounts = new BigDecimal[size];
+		BigDecimal[] weights = new BigDecimal[size];
+		List<String> isins = new ArrayList<>(size);
+		for (int i = 0; i < size; i++) {
+			ReductionCandidate candidate = ordered.get(i);
+			gains[i] = candidate.amount().subtract(candidate.eligibleCapacity());
+			amounts[i] = candidate.amount();
+			weights[i] = candidate.weight() == null ? BigDecimal.ZERO : candidate.weight();
+			isins.add(candidate.key().isin());
+		}
+		int bestMask = -1;
+		int bestCount = Integer.MAX_VALUE;
+		BigDecimal bestWeight = null;
+		BigDecimal bestOvershoot = null;
+		String bestKey = null;
+		int limit = 1 << size;
+		for (int mask = 1; mask < limit; mask++) {
+			int count = Integer.bitCount(mask);
+			if (count > bestCount) {
+				continue;
+			}
+			BigDecimal gainSum = BigDecimal.ZERO;
+			BigDecimal weightSum = BigDecimal.ZERO;
+			BigDecimal discardTotal = BigDecimal.ZERO;
+			for (int i = 0; i < size; i++) {
+				if ((mask & (1 << i)) == 0) {
+					continue;
+				}
+				gainSum = gainSum.add(gains[i]);
+				weightSum = weightSum.add(weights[i]);
+				discardTotal = discardTotal.add(amounts[i]);
+			}
+			if (gainSum.compareTo(excess) < 0) {
+				continue;
+			}
+			BigDecimal remainingTotal = total.subtract(discardTotal);
+			if (remainingTotal.signum() < 0) {
+				remainingTotal = BigDecimal.ZERO;
+			}
+			if (remainingTotal.signum() > 0) {
+				List<ReductionCandidate> remaining = new ArrayList<>();
+				for (int i = 0; i < size; i++) {
+					if ((mask & (1 << i)) == 0) {
+						remaining.add(ordered.get(i));
+					}
+				}
+				Map<AssessorEngine.PlanKey, BigDecimal> reductions =
+						allocateNegativePlanDeltasWithCaps(remaining, remainingTotal, minimumRebalancing);
+				if (reductions.isEmpty()) {
+					continue;
+				}
+			}
+			boolean better = false;
+			if (count < bestCount) {
+				better = true;
+			} else if (count == bestCount) {
+				if (bestWeight == null || weightSum.compareTo(bestWeight) < 0) {
+					better = true;
+				} else if (bestWeight != null && weightSum.compareTo(bestWeight) == 0) {
+					BigDecimal overshoot = discardTotal.subtract(total);
+					if (overshoot.signum() < 0) {
+						overshoot = BigDecimal.ZERO;
+					}
+					if (bestOvershoot == null || overshoot.compareTo(bestOvershoot) < 0) {
+						better = true;
+					} else if (bestOvershoot != null && overshoot.compareTo(bestOvershoot) == 0) {
+						String key = buildSubsetKey(mask, isins);
+						if (bestKey == null || key.compareTo(bestKey) < 0) {
+							better = true;
+						}
+					}
+				} else if (bestWeight == null) {
+					String key = buildSubsetKey(mask, isins);
+					if (bestKey == null || key.compareTo(bestKey) < 0) {
+						better = true;
+					}
+				}
+			}
+			if (better) {
+				bestMask = mask;
+				bestCount = count;
+				bestWeight = weightSum;
+				BigDecimal overshoot = discardTotal.subtract(total);
+				if (overshoot.signum() < 0) {
+					overshoot = BigDecimal.ZERO;
+				}
+				bestOvershoot = overshoot;
+				bestKey = buildSubsetKey(mask, isins);
+			}
+		}
+		if (bestMask < 0) {
+			return List.of();
+		}
+		List<ReductionCandidate> discards = new ArrayList<>();
+		for (int i = 0; i < size; i++) {
+			if ((bestMask & (1 << i)) != 0) {
+				discards.add(ordered.get(i));
+			}
 		}
 		return discards;
+	}
+
+	private String buildSubsetKey(int mask, List<String> isins) {
+		StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < isins.size(); i++) {
+			if ((mask & (1 << i)) == 0) {
+				continue;
+			}
+			if (builder.length() > 0) {
+				builder.append('|');
+			}
+			builder.append(isins.get(i));
+		}
+		return builder.toString();
 	}
 
 	private Map<AssessorEngine.PlanKey, BigDecimal> allocateReductionDeltasByWeight(List<ReductionCandidate> candidates,
