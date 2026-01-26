@@ -36,7 +36,7 @@ public class InstrumentOverride {
 	@Column(name = "layer_notes", columnDefinition = "TEXT")
 	private String layerNotes;
 
-	@Column(name = "updated_at")
+	@Column(name = "updated_at", nullable = false)
 	private LocalDateTime updatedAt;
 
 	public String getIsin() {
