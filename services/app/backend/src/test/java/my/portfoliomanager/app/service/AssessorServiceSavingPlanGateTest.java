@@ -70,7 +70,29 @@ class AssessorServiceSavingPlanGateTest {
 		Map<AssessorEngine.PlanKey, BigDecimal> deltas = allocation.deltas();
 
 		assertThat(deltas)
-				.containsEntry(new AssessorEngine.PlanKey("BBB222", 1L), new BigDecimal("-20"));
-		assertThat(deltas).doesNotContainKey(new AssessorEngine.PlanKey("AAA111", 1L));
+				.containsEntry(new AssessorEngine.PlanKey("BBB222", 1L), new BigDecimal("-20"))
+				.containsEntry(new AssessorEngine.PlanKey("AAA111", 1L), new BigDecimal("5"));
+		assertThat(deltas.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add))
+				.isEqualByComparingTo(new BigDecimal("-15"));
+	}
+
+	@Test
+	void reducesWithoutDiscardWhenCapacityAllows() {
+		List<SavingPlanDeltaAllocator.PlanInput> inputs = List.of(
+				new SavingPlanDeltaAllocator.PlanInput(new AssessorEngine.PlanKey("AAA111", 1L), new BigDecimal("40"), new BigDecimal("10")),
+				new SavingPlanDeltaAllocator.PlanInput(new AssessorEngine.PlanKey("BBB222", 1L), new BigDecimal("20"), BigDecimal.ONE),
+				new SavingPlanDeltaAllocator.PlanInput(new AssessorEngine.PlanKey("CCC333", 1L), new BigDecimal("20"), new BigDecimal("2"))
+		);
+		SavingPlanDeltaAllocator.Allocation allocation = allocator.allocateToTarget(
+				inputs,
+				new BigDecimal("50"),
+				new BigDecimal("10"),
+				new BigDecimal("15")
+		);
+		Map<AssessorEngine.PlanKey, BigDecimal> deltas = allocation.deltas();
+
+		assertThat(allocation.discardedPlans()).isEmpty();
+		assertThat(deltas.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add))
+				.isEqualByComparingTo(new BigDecimal("-30"));
 	}
 }
