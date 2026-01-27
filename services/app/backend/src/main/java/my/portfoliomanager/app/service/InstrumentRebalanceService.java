@@ -216,6 +216,7 @@ public class InstrumentRebalanceService {
 		WeightingResult weighting = computeWeights(instruments, extractions);
 		List<SavingPlanDeltaAllocator.PlanInput> inputs = new ArrayList<>();
 		Map<AssessorEngine.PlanKey, String> keyToIsin = new HashMap<>();
+		Map<String, BigDecimal> currentByIsin = new HashMap<>();
 		for (SavingPlanInstrument instrument : instruments) {
 			if (instrument == null) {
 				continue;
@@ -225,6 +226,7 @@ public class InstrumentRebalanceService {
 			AssessorEngine.PlanKey key = new AssessorEngine.PlanKey(isin, null);
 			inputs.add(new SavingPlanDeltaAllocator.PlanInput(key, instrument.monthlyAmount(), weight));
 			keyToIsin.put(key, isin);
+			currentByIsin.put(isin, instrument.monthlyAmount() == null ? BigDecimal.ZERO : instrument.monthlyAmount());
 		}
 
 		SavingPlanDeltaAllocator.Allocation allocation = savingPlanDeltaAllocator.allocateToTarget(
@@ -238,9 +240,18 @@ public class InstrumentRebalanceService {
 		for (SavingPlanInstrument instrument : instruments) {
 			addReasonCode(reasonCodes, instrument.isin(), weightCode);
 		}
-		if (allocation.minRebalanceSuppressed()) {
-			for (SavingPlanInstrument instrument : instruments) {
-				addReasonCode(reasonCodes, instrument.isin(), REASON_MIN_REBALANCE);
+		if (minRebalance != null && minRebalance.signum() > 0) {
+			for (Map.Entry<AssessorEngine.PlanKey, BigDecimal> entry : allocation.proposedAmounts().entrySet()) {
+				String isin = keyToIsin.get(entry.getKey());
+				if (isin == null) {
+					continue;
+				}
+				BigDecimal current = currentByIsin.getOrDefault(isin, BigDecimal.ZERO);
+				BigDecimal proposed = entry.getValue() == null ? BigDecimal.ZERO : entry.getValue();
+				BigDecimal delta = proposed.subtract(current);
+				if (delta.signum() != 0 && delta.abs().compareTo(minRebalance) < 0) {
+					addReasonCode(reasonCodes, isin, REASON_MIN_REBALANCE);
+				}
 			}
 		}
 		for (AssessorEngine.PlanKey key : allocation.discardedPlans()) {
