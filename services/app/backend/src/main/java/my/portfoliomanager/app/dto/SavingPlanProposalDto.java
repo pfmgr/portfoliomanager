@@ -3,12 +3,12 @@ package my.portfoliomanager.app.dto;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
 import io.swagger.v3.oas.annotations.media.Schema;
-
 import java.util.List;
 import java.util.Map;
+import lombok.Getter;
 
+@Getter
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class SavingPlanProposalDto {
 	private final Double totalMonthlyAmountEur;
@@ -80,83 +80,4 @@ public class SavingPlanProposalDto {
 		this.selectedProfileDisplayName = selectedProfileDisplayName;
 	}
 
-	public Double getTotalMonthlyAmountEur() {
-		return totalMonthlyAmountEur;
-	}
-
-	public Double getTargetWeightTotalPct() {
-		return targetWeightTotalPct;
-	}
-
-	public String getSource() {
-		return source;
-	}
-
-	public String getNarrative() {
-		return narrative;
-	}
-
-	public List<String> getNotes() {
-		return notes;
-	}
-
-	public List<SavingPlanProposalLayerDto> getLayers() {
-		return layers;
-	}
-
-	public Map<Integer, Double> getActualDistributionByLayer() {
-		return actualDistributionByLayer;
-	}
-
-	public Map<Integer, Double> getTargetDistributionByLayer() {
-		return targetDistributionByLayer;
-	}
-
-	public Map<Integer, Double> getProposedDistributionByLayer() {
-		return proposedDistributionByLayer;
-	}
-
-	public Map<Integer, Double> getLayerBudgets() {
-		return layerBudgets;
-	}
-
-	public List<InstrumentProposalDto> getInstrumentProposals() {
-		return instrumentProposals;
-	}
-
-	public List<String> getInstrumentWarnings() {
-		return instrumentWarnings;
-	}
-
-	public List<String> getInstrumentWarningCodes() {
-		return instrumentWarningCodes;
-	}
-
-	public InstrumentProposalGatingDto getGating() {
-		return gating;
-	}
-
-	public Map<Integer, Double> getDeviationsByLayer() {
-		return deviationsByLayer;
-	}
-
-	public boolean isWithinTolerance() {
-		return withinTolerance;
-	}
-
-	public List<ConstraintResultDto> getConstraints() {
-		return constraints;
-	}
-
-	public String getRecommendation() {
-		return recommendation;
-	}
-
-	public String getSelectedProfileKey() {
-		return selectedProfileKey;
-	}
-
-	public String getSelectedProfileDisplayName() {
-		return selectedProfileDisplayName;
-	}
 }

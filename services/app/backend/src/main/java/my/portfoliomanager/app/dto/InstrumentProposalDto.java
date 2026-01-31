@@ -4,9 +4,10 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
-
 import java.util.List;
+import lombok.Getter;
 
+@Getter
 @JsonIgnoreProperties(ignoreUnknown = true)
 @Schema(description = "Instrument-level saving plan proposal.")
 public class InstrumentProposalDto {
@@ -42,31 +43,4 @@ public class InstrumentProposalDto {
 		this.reasonCodes = reasonCodes;
 	}
 
-	public String getIsin() {
-		return isin;
-	}
-
-	public String getInstrumentName() {
-		return instrumentName;
-	}
-
-	public Double getCurrentAmountEur() {
-		return currentAmountEur;
-	}
-
-	public Double getProposedAmountEur() {
-		return proposedAmountEur;
-	}
-
-	public Double getDeltaEur() {
-		return deltaEur;
-	}
-
-	public Integer getLayer() {
-		return layer;
-	}
-
-	public List<String> getReasonCodes() {
-		return reasonCodes;
-	}
 }

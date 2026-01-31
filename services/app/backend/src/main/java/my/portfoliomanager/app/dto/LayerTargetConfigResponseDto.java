@@ -2,7 +2,9 @@ package my.portfoliomanager.app.dto;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
+import lombok.Getter;
 
+@Getter
 public class LayerTargetConfigResponseDto {
 	private final String activeProfileKey;
 	private final String activeProfileDisplayName;
@@ -58,74 +60,7 @@ public class LayerTargetConfigResponseDto {
 		this.updatedAt = updatedAt;
 	}
 
-	public String getActiveProfileKey() {
-		return activeProfileKey;
-	}
-
-	public String getActiveProfileDisplayName() {
-		return activeProfileDisplayName;
-	}
-
-	public String getActiveProfileDescription() {
-		return activeProfileDescription;
-	}
-
-	public Map<String, LayerTargetProfileDto> getProfiles() {
-		return profiles;
-	}
-
-	public Map<String, LayerTargetProfileDto> getSeedProfiles() {
-		return seedProfiles;
-	}
-
-	public Map<Integer, Double> getEffectiveLayerTargets() {
-		return effectiveLayerTargets;
-	}
-
-	public Double getAcceptableVariancePct() {
-		return acceptableVariancePct;
-	}
-
-	public Integer getMinimumSavingPlanSize() {
-		return minimumSavingPlanSize;
-	}
-
-	public Integer getMinimumRebalancingAmount() {
-		return minimumRebalancingAmount;
-	}
-
-	public Map<Integer, String> getLayerNames() {
-		return layerNames;
-	}
-
-	public Map<Integer, Integer> getMaxSavingPlansPerLayer() {
-		return maxSavingPlansPerLayer;
-	}
-
-	public boolean isCustomOverridesEnabled() {
-		return customOverridesEnabled;
-	}
-
-	public Map<Integer, Double> getCustomLayerTargets() {
-		return customLayerTargets;
-	}
-
-	public Double getCustomAcceptableVariancePct() {
-		return customAcceptableVariancePct;
-	}
-
-	public Integer getCustomMinimumSavingPlanSize() {
-		return customMinimumSavingPlanSize;
-	}
-
-	public Integer getCustomMinimumRebalancingAmount() {
-		return customMinimumRebalancingAmount;
-	}
-
-	public OffsetDateTime getUpdatedAt() {
-		return updatedAt;
-	}
-
+	@Getter
 	public static class LayerTargetProfileDto {
 		private final String displayName;
 		private final String description;
@@ -154,36 +89,5 @@ public class LayerTargetConfigResponseDto {
 			this.riskThresholds = riskThresholds;
 		}
 
-		public String getDisplayName() {
-			return displayName;
-		}
-
-		public String getDescription() {
-			return description;
-		}
-
-		public Map<Integer, Double> getLayerTargets() {
-			return layerTargets;
-		}
-
-		public Double getAcceptableVariancePct() {
-			return acceptableVariancePct;
-		}
-
-		public Integer getMinimumSavingPlanSize() {
-			return minimumSavingPlanSize;
-		}
-
-		public Integer getMinimumRebalancingAmount() {
-			return minimumRebalancingAmount;
-		}
-
-		public Map<String, Double> getConstraints() {
-			return constraints;
-		}
-
-		public LayerTargetRiskThresholdsDto getRiskThresholds() {
-			return riskThresholds;
-		}
 	}
 }
