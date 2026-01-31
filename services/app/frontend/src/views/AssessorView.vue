@@ -318,6 +318,7 @@
                 <th scope="col">Name</th>
                 <th scope="col">Layer</th>
                 <th scope="col" class="num">Score</th>
+                <th scope="col">Score breakdown</th>
                 <th scope="col" class="num">Allocation €</th>
               </tr>
             </thead>
@@ -328,6 +329,21 @@
                 <td>{{ row.layer ? layerLabel(row.layer) : '—' }}</td>
                 <td class="num">
                   <span :class="['badge', row.score >= instrumentScoreCutoff ? 'warn' : 'ok']">{{ row.score }}</span>
+                </td>
+                <td>
+                  <div
+                    v-if="scoreComponentEntries(row.score_components ?? row.scoreComponents).length"
+                    class="score-breakdown"
+                  >
+                    <span
+                      v-for="entry in scoreComponentEntries(row.score_components ?? row.scoreComponents)"
+                      :key="entry.text"
+                      :class="['score-breakdown__item', entry.levelClass]"
+                    >
+                      {{ entry.text }}
+                    </span>
+                  </div>
+                  <span v-else>—</span>
                 </td>
                 <td class="num">{{ formatAmount(row.allocation ?? 0) }}</td>
               </tr>
@@ -818,6 +834,41 @@ function layerLabel(layer) {
   return layerNames.value?.[layer] ?? `Layer ${layer}`
 }
 
+function scoreComponentEntries(components) {
+  if (!Array.isArray(components) || components.length === 0) {
+    return []
+  }
+  return components
+    .map((component) => {
+      const label = component?.criterion ?? ''
+      if (!label) {
+        return null
+      }
+      const value = Number(component?.points ?? 0)
+      const numeric = Number.isNaN(value) ? 0 : value
+      const formatted = formatAmount(Math.abs(numeric))
+      const sign = numeric > 0 ? '+' : numeric < 0 ? '-' : ''
+      return {
+        text: `${label} ${sign}${formatted}`.trim(),
+        levelClass: scoreComponentLevelClass(numeric)
+      }
+    })
+    .filter((entry) => entry)
+}
+
+function scoreComponentLevelClass(value) {
+  if (value <= 0) {
+    return 'is-neutral'
+  }
+  if (value <= 5) {
+    return 'is-low'
+  }
+  if (value <= 15) {
+    return 'is-medium'
+  }
+  return 'is-high'
+}
+
 function formatAmount(value) {
   const num = Number(value ?? 0)
   if (Number.isNaN(num)) {
@@ -987,5 +1038,54 @@ function formatNarrative(text) {
   text-transform: uppercase;
   color: #4b4b4b;
   cursor: help;
+}
+
+.score-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.score-breakdown__item {
+  background: #f7f2e8;
+  border: 1px solid #e6e3dc;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #3b3732;
+  white-space: nowrap;
+}
+
+.score-breakdown__item.is-neutral {
+  background: #f1f0eb;
+  border-color: #d9d6cc;
+  color: #5a544c;
+}
+
+.score-breakdown__item.is-low {
+  background: #e6f5d7;
+  border-color: #b9e3a1;
+  color: #2d5c28;
+}
+
+.score-breakdown__item.is-medium {
+  background: #f8e6c7;
+  border-color: #e7c28c;
+  color: #6d4a14;
+}
+
+.score-breakdown__item.is-high {
+  background: #fde6e4;
+  border-color: #f2b1a7;
+  color: #7a1f1c;
+}
+
+@media (max-width: 720px) {
+  .score-breakdown {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 </style>

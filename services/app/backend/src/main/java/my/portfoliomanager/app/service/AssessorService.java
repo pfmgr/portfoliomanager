@@ -4,6 +4,7 @@ import my.portfoliomanager.app.config.AppProperties;
 import my.portfoliomanager.app.dto.AssessorDiagnosticsDto;
 import my.portfoliomanager.app.dto.AssessorInstrumentAssessmentDto;
 import my.portfoliomanager.app.dto.AssessorInstrumentAssessmentItemDto;
+import my.portfoliomanager.app.dto.AssessorInstrumentAssessmentScoreComponentDto;
 import my.portfoliomanager.app.dto.AssessorInstrumentBucketDto;
 import my.portfoliomanager.app.dto.AssessorNewInstrumentSuggestionDto;
 import my.portfoliomanager.app.dto.AssessorOneTimeAllocationDto;
@@ -256,22 +257,20 @@ public class AssessorService {
 				instrumentAssessmentService.assess(instruments, amount, targets);
 		List<AssessorInstrumentAssessmentItemDto> itemDtos = new ArrayList<>();
 		for (AssessorInstrumentAssessmentService.AssessmentItem item : assessment.items()) {
+			List<AssessorInstrumentAssessmentScoreComponentDto> scoreComponents =
+					toScoreComponentDtos(item.scoreComponents());
 			itemDtos.add(new AssessorInstrumentAssessmentItemDto(
 					item.isin(),
 					item.name(),
 					item.layer(),
 					item.score(),
-					toAmount(item.allocation())
+					toAmount(item.allocation()),
+					scoreComponents
 			));
 		}
 		String narrative = null;
 		if (llmEnabled && assessment.missingIsins().isEmpty() && !itemDtos.isEmpty()) {
-			String prompt = buildInstrumentAssessmentNarrativePrompt(
-					assessment,
-					config,
-					itemDtos
-			);
-			narrative = llmNarrativeService.suggestSavingPlanNarrative(prompt);
+			narrative = buildInstrumentAssessmentNarrative(assessment, config, itemDtos);
 		}
 		AssessorInstrumentAssessmentDto instrumentAssessment = new AssessorInstrumentAssessmentDto(
 				(double) amount,
@@ -301,12 +300,16 @@ public class AssessorService {
 			LayerTargetConfigResponseDto config,
 			List<AssessorInstrumentAssessmentItemDto> items) {
 		StringBuilder builder = new StringBuilder();
-		builder.append("Write a concise narrative (2-5 sentences) describing the instrument assessment and allocation.\n");
+		builder.append("Write a concise narrative (2-6 sentences) describing the instrument assessment and allocation.\n");
 		builder.append("Rules:\n");
-		builder.append("- Explain the criteria used for the assessment score.\n");
-		builder.append("- Mention any instruments that are not recommended due to the score cutoff.\n");
+		builder.append("- Explain the criteria used for the assessment score and include a per-instrument score breakdown.\n");
+		builder.append("- Scores are penalties: lower is better, and the cutoff is the maximum acceptable penalty.\n");
+		builder.append("- If a score is below the cutoff, state that it is acceptable_risk and does not trigger a recommendation against investing.\n");
+		builder.append("- If a score is at or above the cutoff, state that it is not_recommended due to the cutoff.\n");
+		builder.append("- Use recommendation_status exactly as given; do not infer or invert the cutoff.\n");
 		builder.append("- Explain how the amount was distributed across layers and instruments.\n");
-		builder.append("- Use instrument name, ISIN, score, and allocation amounts.\n");
+		builder.append("- Use instrument name, ISIN, score, allocation amounts, and score component points.\n");
+		builder.append("- You may use short bullets for the score breakdown.\n");
 		builder.append("- Do not invent instruments or criteria.\n");
 		builder.append("Context:\n");
 		builder.append("amount_eur=").append(assessment.amountEur()).append("\n");
@@ -321,10 +324,217 @@ public class AssessorService {
 					.append(", name=").append(item.instrumentName())
 					.append(", layer=").append(item.layer())
 					.append(", score=").append(item.score())
+					.append(", recommendation_status=").append(formatRecommendationStatus(item.score(), assessment.scoreCutoff()))
 					.append(", allocation_eur=").append(item.allocation())
+					.append(", score_components=").append(formatScoreComponents(item.scoreComponents()))
 					.append("\n");
 		}
 		return builder.toString();
+	}
+
+	private String buildInstrumentAssessmentNarrative(
+			AssessorInstrumentAssessmentService.AssessmentResult assessment,
+			LayerTargetConfigResponseDto config,
+			List<AssessorInstrumentAssessmentItemDto> items) {
+		if (assessment == null || items == null || items.isEmpty()) {
+			return null;
+		}
+		StringBuilder builder = new StringBuilder();
+		String scoreCriteria = formatCriteriaList(assessment.scoreCriteria(), "the available criteria");
+		builder.append("Assessment criteria: ")
+				.append(scoreCriteria)
+				.append(". Cutoff ")
+				.append(assessment.scoreCutoff())
+				.append(" (lower is better).\n");
+		Map<Integer, String> layerNames = config == null ? Map.of() : config.getLayerNames();
+		builder.append("Results:\n");
+		for (AssessorInstrumentAssessmentItemDto item : items) {
+			if (item == null) {
+				continue;
+			}
+			String isin = item.isin() == null ? "" : item.isin();
+			String name = formatInstrumentName(item.instrumentName(), isin);
+			Integer layer = item.layer();
+			String layerLabel = formatLayerLabel(layer, layerNames);
+			Integer score = item.score() == null ? 0 : item.score();
+			String recommendation = formatRecommendationPhrase(score, assessment.scoreCutoff());
+			String allocation = formatAmountValue(item.allocation());
+			String breakdown = formatScoreComponentBreakdown(item.scoreComponents());
+			builder.append("- ")
+					.append(name)
+					.append(" (")
+					.append(isin)
+					.append(") ")
+					.append(layerLabel)
+					.append(": score ")
+					.append(score)
+					.append(" (")
+					.append(recommendation)
+					.append("), allocation ")
+					.append(allocation)
+					.append(" EUR; breakdown: ")
+					.append(breakdown)
+					.append("\n");
+		}
+		String allocationCriteria = formatCriteriaList(assessment.allocationCriteria(), "the available allocation rules");
+		String layerBudgets = formatLayerBudgetSummary(assessment.layerBudgets(), layerNames);
+		builder.append("Allocation: ")
+				.append(allocationCriteria)
+				.append("; budgets: ")
+				.append(layerBudgets)
+				.append(".");
+		return builder.toString().trim();
+	}
+
+	private String formatCriteriaList(List<String> criteria, String fallback) {
+		if (criteria == null || criteria.isEmpty()) {
+			return fallback;
+		}
+		List<String> entries = new ArrayList<>();
+		for (String criterion : criteria) {
+			if (criterion != null && !criterion.isBlank()) {
+				entries.add(criterion.trim());
+			}
+		}
+		if (entries.isEmpty()) {
+			return fallback;
+		}
+		if (entries.size() == 1) {
+			return entries.get(0);
+		}
+		if (entries.size() == 2) {
+			return entries.get(0) + " and " + entries.get(1);
+		}
+		String last = entries.remove(entries.size() - 1);
+		return String.join(", ", entries) + ", and " + last;
+	}
+
+	private String formatLayerLabel(Integer layer, Map<Integer, String> layerNames) {
+		if (layer == null) {
+			return "Layer ?";
+		}
+		String defaultName = "Layer " + layer;
+		String label = layerNames == null ? defaultName : layerNames.getOrDefault(layer, defaultName);
+		if (label.equals(defaultName)) {
+			return defaultName;
+		}
+		return defaultName + " (" + label + ")";
+	}
+
+	private String formatLayerBudgets(Map<Integer, BigDecimal> layerBudgets, Map<Integer, String> layerNames) {
+		Map<Integer, Double> amounts = toAmountMap(layerBudgets);
+		List<String> parts = new ArrayList<>();
+		for (Map.Entry<Integer, Double> entry : amounts.entrySet()) {
+			String label = formatLayerLabel(entry.getKey(), layerNames);
+			parts.add(label + " " + formatAmountValue(entry.getValue()) + " EUR");
+		}
+		return String.join(", ", parts);
+	}
+
+	private String formatLayerBudgetSummary(Map<Integer, BigDecimal> layerBudgets, Map<Integer, String> layerNames) {
+		Map<Integer, Double> amounts = toAmountMap(layerBudgets);
+		List<String> nonZero = new ArrayList<>();
+		int zeroCount = 0;
+		for (Map.Entry<Integer, Double> entry : amounts.entrySet()) {
+			Double value = entry.getValue();
+			if (value == null || Math.abs(value) < 0.0001) {
+				zeroCount++;
+				continue;
+			}
+			String label = formatLayerLabel(entry.getKey(), layerNames);
+			nonZero.add(label + " " + formatAmountValue(value) + " EUR");
+		}
+		if (nonZero.isEmpty()) {
+			return "all layers 0 EUR";
+		}
+		String summary = String.join(", ", nonZero);
+		if (zeroCount > 0) {
+			return summary + "; remaining layers 0 EUR";
+		}
+		return summary;
+	}
+
+	private String formatScoreComponentBreakdown(List<AssessorInstrumentAssessmentScoreComponentDto> components) {
+		if (components == null || components.isEmpty()) {
+			return "none";
+		}
+		List<String> entries = new ArrayList<>();
+		for (AssessorInstrumentAssessmentScoreComponentDto component : components) {
+			if (component == null || component.criterion() == null || component.criterion().isBlank()) {
+				continue;
+			}
+			String points = formatScorePoints(component.points());
+			entries.add(component.criterion().trim() + " " + points);
+		}
+		return entries.isEmpty() ? "none" : String.join(", ", entries);
+	}
+
+	private String formatRecommendationPhrase(int score, int cutoff) {
+		return score < cutoff ? "acceptable risk" : "not recommended";
+	}
+
+	private String formatInstrumentName(String name, String isin) {
+		if (name == null || name.isBlank()) {
+			return (isin == null || isin.isBlank()) ? "Instrument" : isin;
+		}
+		return name.trim();
+	}
+
+	private String formatAmountValue(Double value) {
+		if (value == null) {
+			return "0";
+		}
+		BigDecimal amount = BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros();
+		return amount.toPlainString();
+	}
+
+	private String formatRecommendationStatus(int score, int cutoff) {
+		return score < cutoff ? "acceptable_risk" : "not_recommended";
+	}
+
+	private List<AssessorInstrumentAssessmentScoreComponentDto> toScoreComponentDtos(
+			List<AssessorInstrumentAssessmentService.ScoreComponent> components) {
+		if (components == null || components.isEmpty()) {
+			return List.of();
+		}
+		List<AssessorInstrumentAssessmentScoreComponentDto> mapped = new ArrayList<>();
+		for (AssessorInstrumentAssessmentService.ScoreComponent component : components) {
+			if (component == null || component.criterion() == null || component.criterion().isBlank()) {
+				continue;
+			}
+			mapped.add(new AssessorInstrumentAssessmentScoreComponentDto(component.criterion(), component.points()));
+		}
+		return mapped;
+	}
+
+	private String formatScoreComponents(List<AssessorInstrumentAssessmentScoreComponentDto> components) {
+		if (components == null || components.isEmpty()) {
+			return "[]";
+		}
+		StringBuilder builder = new StringBuilder("[");
+		boolean first = true;
+		for (AssessorInstrumentAssessmentScoreComponentDto component : components) {
+			if (component == null || component.criterion() == null || component.criterion().isBlank()) {
+				continue;
+			}
+			if (!first) {
+				builder.append(", ");
+			}
+			builder.append(component.criterion())
+					.append(":")
+					.append(formatScorePoints(component.points()));
+			first = false;
+		}
+		builder.append("]");
+		return builder.toString();
+	}
+
+	private String formatScorePoints(Double points) {
+		if (points == null) {
+			return "0";
+		}
+		BigDecimal value = BigDecimal.valueOf(points).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros();
+		return value.toPlainString();
 	}
 
 	private SavingPlanSnapshot loadSavingPlans(List<String> depotScope) {
