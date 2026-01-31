@@ -754,6 +754,9 @@ databaseChangeLog:
       id: 013a-layer-target-config-profiles
       author: codex
       dbms: postgresql
+      validCheckSum:
+        - 9:3ce61546bde4b37bbd92335317b020fc
+        - 9:b0b2107e5feb1fec4752a8b207046cab
       changes:
         - sql:
             splitStatements: false
