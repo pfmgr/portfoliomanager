@@ -37,4 +37,22 @@ describe('AssessorView', () => {
     expect(wrapper.text()).toContain('Saving Plan Gaps (default)')
     expect(wrapper.text()).toContain('Portfolio Gaps')
   })
+
+  it('shows instrument assessment option', async () => {
+    apiRequest.mockResolvedValue({
+      activeProfileKey: 'BALANCED',
+      profiles: {},
+      layerNames: {},
+      effectiveLayerTargets: {},
+      acceptableVariancePct: 3.0,
+      minimumSavingPlanSize: 15,
+      minimumRebalancingAmount: 10,
+      customOverridesEnabled: false
+    })
+
+    const wrapper = mount(AssessorView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Instrument One-Time Invest')
+  })
 })

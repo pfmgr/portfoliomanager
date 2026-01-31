@@ -72,6 +72,43 @@
           />
         </div>
       </div>
+      <h3>Risk thresholds</h3>
+      <p class="note">Stored per profile and used for instrument assessment risk bands.</p>
+      <div class="grid grid-2">
+        <div>
+          <label for="risk-low-max-input">Low risk max (score)</label>
+          <input
+            id="risk-low-max-input"
+            class="input"
+            type="number"
+            step="1"
+            min="0"
+            max="100"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            v-model.number="riskThresholds.lowMax"
+            @input="coerceRiskThresholds"
+            @blur="normalizeRiskThresholds"
+          />
+        </div>
+        <div>
+          <label for="risk-high-min-input">High risk min (score)</label>
+          <input
+            id="risk-high-min-input"
+            class="input"
+            type="number"
+            step="1"
+            min="0"
+            max="100"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            v-model.number="riskThresholds.highMin"
+            @input="coerceRiskThresholds"
+            @blur="normalizeRiskThresholds"
+          />
+        </div>
+      </div>
+      <p class="note small">Medium risk is the band between the low and high thresholds.</p>
       <p class="note">Current source for variance + minimums: <b>{{ sourceLabel }}</b></p>
       <p class="note">
         Profile defaults: variance {{ formatVariance(profileVariancePct) }},
@@ -143,6 +180,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { apiRequest } from '../api'
 
 const layers = [1, 2, 3, 4, 5]
+const DEFAULT_RISK_THRESHOLDS = { lowMax: 30, highMin: 51 }
 const layerNames = ref({
   1: 'Global Core',
   2: 'Core-Plus',
@@ -156,32 +194,36 @@ const maxSavingPlansPerLayer = ref({ 1: 17, 2: 17, 3: 17, 4: 17, 5: 17 })
 const variance = ref(2.0)
 const minimumSavingPlanSize = ref(15)
 const minimumRebalancingAmount = ref(10)
+const riskThresholds = ref({ ...DEFAULT_RISK_THRESHOLDS })
 const message = ref('')
 const messageType = ref('success')
 const loading = ref(false)
 const saving = ref(false)
 const applyingProfile = ref(false)
 const profiles = ref({})
+const seedProfiles = ref({})
 const selectedProfileKey = ref('BALANCED')
 const customOverridesEnabled = ref(false)
 const PROFILE_ORDER = ['CLASSIC', 'BALANCED', 'GROWTH', 'AGGRESSIVE', 'OPPORTUNITY']
 
 const selectedProfileName = computed(() => profiles.value[selectedProfileKey.value]?.displayName || 'Custom')
 const selectedProfileDescription = computed(() => profiles.value[selectedProfileKey.value]?.description || '')
+const seedProfile = computed(() => resolveSeedProfile(selectedProfileKey.value))
 const hasVarianceBreaches = computed(() => layers.some((layer) => deltaExceeded(layer)))
 const sourceLabel = computed(() => (customOverridesEnabled.value ? 'Custom overrides' : selectedProfileName.value))
 const profileVariancePct = computed(() => {
-  const value = profiles.value[selectedProfileKey.value]?.acceptableVariancePct
+  const value = seedProfile.value?.acceptableVariancePct
   return typeof value === 'number' && value > 0 ? value : variance.value
 })
 const profileMinimumSavingPlanSize = computed(() => {
-  const value = profiles.value[selectedProfileKey.value]?.minimumSavingPlanSize
+  const value = seedProfile.value?.minimumSavingPlanSize
   return Number.isInteger(value) && value > 0 ? value : 15
 })
 const profileMinimumRebalancingAmount = computed(() => {
-  const value = profiles.value[selectedProfileKey.value]?.minimumRebalancingAmount
+  const value = seedProfile.value?.minimumRebalancingAmount
   return Number.isInteger(value) && value > 0 ? value : 10
 })
+const profileRiskThresholdDefaults = computed(() => mapRiskThresholds(seedProfile.value?.riskThresholds))
 const orderedProfiles = computed(() => {
   const entries = []
   PROFILE_ORDER.forEach((key) => {
@@ -213,6 +255,7 @@ function applyResponse(data) {
     return
   }
   profiles.value = data.profiles || profiles.value
+  seedProfiles.value = data.seedProfiles || seedProfiles.value
   if (data.layerNames && Object.keys(data.layerNames).length) {
     layerNames.value = data.layerNames
   }
@@ -223,6 +266,7 @@ function applyResponse(data) {
   selectedProfileKey.value = data.activeProfileKey ?? selectedProfileKey.value
   customOverridesEnabled.value = Boolean(data.customOverridesEnabled)
   const profile = profiles.value[selectedProfileKey.value]
+  applyProfileRiskThresholds(profile)
   const effectiveTargets = mapToTargets(data.effectiveLayerTargets || {})
   profileTargets.value = profile?.layerTargets ? mapToTargets(profile.layerTargets) : effectiveTargets
   const customTargets = mapToTargets(data.customLayerTargets || {})
@@ -254,6 +298,7 @@ async function save() {
   try {
     normalizeMinimumSavingPlanSize()
     normalizeMinimumRebalancingAmount()
+    normalizeRiskThresholds()
     await submitConfig(
       {
         activeProfile: selectedProfileKey.value,
@@ -262,7 +307,10 @@ async function save() {
         acceptableVariancePct: variance.value,
         minimumSavingPlanSize: minimumSavingPlanSize.value,
         minimumRebalancingAmount: minimumRebalancingAmount.value,
-        maxSavingPlansPerLayer: { ...maxSavingPlansPerLayer.value }
+        maxSavingPlansPerLayer: { ...maxSavingPlansPerLayer.value },
+        profileRiskThresholds: {
+          [selectedProfileKey.value]: { ...riskThresholds.value }
+        }
       },
       'Layer targets saved.'
     )
@@ -276,6 +324,7 @@ async function applyProfile() {
   customOverridesEnabled.value = false
   targets.value = { ...profileTargets.value }
   const profile = profiles.value[selectedProfileKey.value]
+  applyProfileRiskThresholds(profile)
   if (profile?.acceptableVariancePct) {
     variance.value = profile.acceptableVariancePct
   }
@@ -306,16 +355,21 @@ async function resetToProfileDefault() {
   message.value = 'Layer targets reset to profile defaults.'
   messageType.value = 'success'
   customOverridesEnabled.value = false
-  targets.value = { ...profileTargets.value }
-  const profile = profiles.value[selectedProfileKey.value]
-  if (profile?.acceptableVariancePct) {
-    variance.value = profile.acceptableVariancePct
+  const seed = resolveSeedProfile(selectedProfileKey.value)
+  if (seed?.layerTargets) {
+    targets.value = mapToTargets(seed.layerTargets)
+  } else {
+    targets.value = { ...profileTargets.value }
   }
-  if (profile?.minimumSavingPlanSize !== undefined && profile?.minimumSavingPlanSize !== null) {
-    minimumSavingPlanSize.value = profile.minimumSavingPlanSize
+  riskThresholds.value = mapRiskThresholds(seed?.riskThresholds)
+  if (seed?.acceptableVariancePct) {
+    variance.value = seed.acceptableVariancePct
   }
-  if (profile?.minimumRebalancingAmount !== undefined && profile?.minimumRebalancingAmount !== null) {
-    minimumRebalancingAmount.value = profile.minimumRebalancingAmount
+  if (seed?.minimumSavingPlanSize !== undefined && seed?.minimumSavingPlanSize !== null) {
+    minimumSavingPlanSize.value = seed.minimumSavingPlanSize
+  }
+  if (seed?.minimumRebalancingAmount !== undefined && seed?.minimumRebalancingAmount !== null) {
+    minimumRebalancingAmount.value = seed.minimumRebalancingAmount
   }
 }
 
@@ -338,6 +392,26 @@ function mapToMaxSavingPlans(source) {
   return payload
 }
 
+function mapRiskThresholds(source) {
+  const lowMax = Number(source?.lowMax)
+  const highMin = Number(source?.highMin)
+  return {
+    lowMax: Number.isFinite(lowMax) ? lowMax : DEFAULT_RISK_THRESHOLDS.lowMax,
+    highMin: Number.isFinite(highMin) ? highMin : DEFAULT_RISK_THRESHOLDS.highMin
+  }
+}
+
+function applyProfileRiskThresholds(profile) {
+  riskThresholds.value = mapRiskThresholds(profile?.riskThresholds)
+}
+
+function resolveSeedProfile(key) {
+  if (!key) {
+    return seedProfiles.value?.BALANCED || profiles.value?.BALANCED || null
+  }
+  return seedProfiles.value?.[key] || profiles.value?.[key] || null
+}
+
 function formatDelta(layer) {
   const current = targets.value[layer] ?? 0
   const baseline = profileTargets.value[layer] ?? 0
@@ -358,6 +432,51 @@ function formatMinimum(value) {
     return 'n/a'
   }
   return `${value}`
+}
+
+function coerceRiskThresholds() {
+  const lowMax = Number(riskThresholds.value.lowMax)
+  const highMin = Number(riskThresholds.value.highMin)
+  if (Number.isFinite(lowMax)) {
+    riskThresholds.value.lowMax = Math.trunc(lowMax)
+  }
+  if (Number.isFinite(highMin)) {
+    riskThresholds.value.highMin = Math.trunc(highMin)
+  }
+}
+
+function normalizeRiskThresholds() {
+  const defaults = profileRiskThresholdDefaults.value
+  let lowMax = Number(riskThresholds.value.lowMax)
+  let highMin = Number(riskThresholds.value.highMin)
+  if (!Number.isFinite(lowMax)) {
+    lowMax = defaults.lowMax
+  }
+  if (!Number.isFinite(highMin)) {
+    highMin = defaults.highMin
+  }
+  lowMax = clampRiskValue(Math.trunc(lowMax))
+  highMin = clampRiskValue(Math.trunc(highMin))
+  if (highMin <= lowMax) {
+    highMin = Math.min(100, lowMax + 1)
+    if (highMin <= lowMax) {
+      lowMax = Math.max(0, highMin - 1)
+    }
+  }
+  riskThresholds.value = { lowMax, highMin }
+}
+
+function clampRiskValue(value) {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  if (value < 0) {
+    return 0
+  }
+  if (value > 100) {
+    return 100
+  }
+  return value
 }
 
 function coerceMinimumSavingPlanSize() {
@@ -419,6 +538,7 @@ watch(selectedProfileKey, (key) => {
       targets.value = { ...profileTargets.value }
     }
   }
+  applyProfileRiskThresholds(profile)
   if (!customOverridesEnabled.value && profile?.acceptableVariancePct) {
     variance.value = profile.acceptableVariancePct
   }

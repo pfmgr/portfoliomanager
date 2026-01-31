@@ -59,11 +59,14 @@ class AssessorBackupIntegrationTest {
 
 		AssessorRunResponseDto result = assessorService.run(new AssessorRunRequestDto(
 				"AGGRESSIVE",
+				null,
 				15.0,
 				null,
 				null,
 				null,
-				"saving_plan_gaps"
+				"saving_plan_gaps",
+				null,
+				null
 		));
 
 		Map<Integer, Double> current = result.currentLayerDistribution();
@@ -126,11 +129,14 @@ class AssessorBackupIntegrationTest {
 	private void assertSavingPlanTotals(String gapPolicy) {
 		AssessorRunResponseDto result = assessorService.run(new AssessorRunRequestDto(
 				null,
+				null,
 				500.0,
 				null,
 				null,
 				null,
-				gapPolicy
+				gapPolicy,
+				null,
+				null
 		));
 
 		BigDecimal expectedTotal = BigDecimal.valueOf(750).setScale(2, RoundingMode.HALF_UP);

@@ -2,13 +2,33 @@
   <div>
     <div class="card">
       <h2>Assessor</h2>
-      <div :class="['assessor-form', assessmentType === 'one_time' ? 'assessor-form--onetime' : 'assessor-form--saving']">
+      <div
+        :class="[
+          'assessor-form',
+          assessmentType === 'one_time'
+            ? 'assessor-form--onetime'
+            : assessmentType === 'instrument_one_time'
+              ? 'assessor-form--instrument'
+              : 'assessor-form--saving'
+        ]"
+      >
         <label class="field assessor-field assessor-field--type">
           Assessment type
           <select class="input" v-model="assessmentType">
             <option value="saving_plan">Saving Plan</option>
             <option value="one_time">One-Time Invest</option>
+            <option value="instrument_one_time">Instrument One-Time Invest</option>
           </select>
+        </label>
+        <label v-if="assessmentType === 'instrument_one_time'" class="field assessor-field assessor-field--instruments">
+          Instruments (ISINs)
+          <input
+            class="input"
+            type="text"
+            v-model="instrumentIsinsInput"
+            placeholder="DE0000000001, LU1234567890"
+          />
+          <p class="hint">Comma-separated list of ISINs to assess.</p>
         </label>
         <label v-if="assessmentType === 'saving_plan'" class="field assessor-field assessor-field--gap-policy">
           Gap Detection Policy
@@ -22,7 +42,7 @@
           </p>
         </label>
         <label class="field assessor-field assessor-field--amount">
-          Amount delta (EUR)
+          {{ amountLabel }}
           <input
             class="input"
             type="number"
@@ -35,11 +55,15 @@
             Optional; adds to the current monthly budget for saving plan targets. Minimum:
             {{ savingPlanMinimumDelta }} EUR.
           </p>
-          <p v-else class="hint">
+          <p v-else-if="assessmentType === 'one_time'" class="hint">
             Required for one-time allocations; must be at least the minimum per instrument.
+          </p>
+          <p v-else class="hint">
+            Required for instrument assessment allocations.
           </p>
           <p v-if="savingPlanDeltaWarning" class="hint warn">{{ savingPlanDeltaWarning }}</p>
           <p v-if="oneTimeDeltaWarning" class="hint warn">{{ oneTimeDeltaWarning }}</p>
+          <p v-if="instrumentAmountWarning" class="hint warn">{{ instrumentAmountWarning }}</p>
         </label>
         <label v-if="assessmentType === 'one_time'" class="field assessor-field assessor-field--minimum">
           Minimum amount per instrument (EUR)
@@ -273,6 +297,67 @@
         </p>
       </div>
 
+      <div v-if="assessmentType === 'instrument_one_time' && instrumentAssessment" class="card">
+        <h3>Instrument Assessment</h3>
+        <div
+          v-if="formattedInstrumentNarrative"
+          class="note narrative"
+          role="status"
+          aria-live="polite"
+          v-html="formattedInstrumentNarrative"
+        ></div>
+        <p v-if="instrumentMissingIsins.length" class="note warn">
+          Assessment cannot run. Missing KB extractions for: {{ instrumentMissingIsins.join(', ') }}.
+        </p>
+        <div v-else-if="instrumentAssessmentItems.length" class="table-wrap">
+          <table class="table">
+            <caption class="sr-only">Instrument assessment scores and allocation.</caption>
+            <thead>
+              <tr>
+                <th scope="col">ISIN</th>
+                <th scope="col">Name</th>
+                <th scope="col">Layer</th>
+                <th scope="col" class="num">
+                  <span class="table-header">Score</span>
+                  <span v-if="instrumentRiskThresholdLabel" class="table-header-note">
+                    Risk bands: {{ instrumentRiskThresholdLabel }}
+                  </span>
+                </th>
+                <th scope="col">Score breakdown</th>
+                <th scope="col" class="num">Allocation €</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in instrumentAssessmentItems" :key="row.isin">
+                <th scope="row">{{ row.isin }}</th>
+                <td>{{ row.instrument_name ?? '—' }}</td>
+                <td>{{ row.layer ? layerLabel(row.layer) : '—' }}</td>
+                <td class="num">
+                  <span :class="['badge', scoreBadgeClass(row)]">{{ row.score }}</span>
+                </td>
+                <td>
+                  <div
+                    v-if="scoreComponentEntries(row.score_components ?? row.scoreComponents).length"
+                    class="score-breakdown"
+                  >
+                    <span
+                      v-for="entry in scoreComponentEntries(row.score_components ?? row.scoreComponents)"
+                      :key="entry.text"
+                      :class="['score-breakdown__item', entry.levelClass]"
+                    >
+                      {{ entry.text }}
+                    </span>
+                  </div>
+                  <span v-else>—</span>
+                </td>
+                <td class="num">{{ formatAmount(row.allocation ?? 0) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="note">No instrument assessment results to display.</p>
+      </div>
+
       <div v-if="assessmentType === 'saving_plan'" class="card">
         <h3>Saving plan diagnostics</h3>
         <div class="grid grid-2">
@@ -309,6 +394,7 @@ const layerNames = ref({})
 const assessmentType = ref('saving_plan')
 const gapDetectionPolicy = ref('saving_plan_gaps')
 const amountDelta = ref('')
+const instrumentIsinsInput = ref('')
 const minimumInstrumentAmount = ref('25')
 const minimumSavingPlanSize = ref(15)
 const assessment = ref(null)
@@ -348,6 +434,15 @@ const kbMissingIsinTooltip = computed(() => {
 })
 const formattedSavingPlanNarrative = computed(() => formatNarrative(assessment.value?.saving_plan_narrative))
 const formattedOneTimeNarrative = computed(() => formatNarrative(assessment.value?.one_time_narrative))
+const instrumentAssessment = computed(() => assessment.value?.instrument_assessment ?? null)
+const instrumentAssessmentItems = computed(() => instrumentAssessment.value?.items ?? [])
+const instrumentMissingIsins = computed(() => instrumentAssessment.value?.missing_kb_isins ?? [])
+const instrumentScoreCutoff = computed(() => instrumentAssessment.value?.score_cutoff ?? 85)
+const formattedInstrumentNarrative = computed(() => formatNarrative(instrumentAssessment.value?.narrative))
+const instrumentRiskThresholds = computed(() =>
+  instrumentAssessment.value?.risk_thresholds ?? instrumentAssessment.value?.riskThresholds ?? null
+)
+const instrumentRiskThresholdLabel = computed(() => formatRiskThresholdLabel(instrumentRiskThresholds.value))
 const oneTimeNewInstruments = computed(() => assessment.value?.one_time_allocation?.new_instruments ?? [])
 const oneTimeSuggestionSort = ref({ key: 'action', direction: 'asc' })
 const savingPlanMinimumDelta = computed(() => {
@@ -358,6 +453,10 @@ const savingPlanMinimumDelta = computed(() => {
   return Math.floor(minimum)
 })
 
+const amountLabel = computed(() =>
+  assessmentType.value === 'instrument_one_time' ? 'Amount (EUR)' : 'Amount delta (EUR)'
+)
+
 const amountDeltaMin = computed(() => {
   if (assessmentType.value === 'one_time') {
     const minimum = Number(minimumInstrumentAmount.value)
@@ -365,6 +464,9 @@ const amountDeltaMin = computed(() => {
       return 1
     }
     return Math.floor(minimum)
+  }
+  if (assessmentType.value === 'instrument_one_time') {
+    return 1
   }
   return savingPlanMinimumDelta.value
 })
@@ -415,11 +517,32 @@ const oneTimeDeltaWarning = computed(() => {
   return ''
 })
 
+const instrumentAmountWarning = computed(() => {
+  if (assessmentType.value !== 'instrument_one_time') {
+    return ''
+  }
+  if (amountDelta.value === '') {
+    return ''
+  }
+  const amount = Number(amountDelta.value)
+  if (Number.isNaN(amount)) {
+    return 'Enter a valid amount.'
+  }
+  if (amount < 1) {
+    return 'Amount must be at least 1 EUR.'
+  }
+  return ''
+})
+
 const canRun = computed(() => {
   const amount = Number(amountDelta.value)
   if (assessmentType.value === 'one_time') {
     const minimum = Number(minimumInstrumentAmount.value)
     return !Number.isNaN(amount) && amount >= amountDeltaMin.value && !Number.isNaN(minimum) && minimum >= 1
+  }
+  if (assessmentType.value === 'instrument_one_time') {
+    const isins = parseInstrumentIsins()
+    return !Number.isNaN(amount) && amount >= 1 && isins.length > 0
   }
   if (amountDelta.value === '') {
     return true
@@ -558,7 +681,7 @@ onBeforeUnmount(() => {
   }
 })
 
-watch([assessmentType, gapDetectionPolicy, amountDelta, minimumInstrumentAmount], () => {
+watch([assessmentType, gapDetectionPolicy, amountDelta, minimumInstrumentAmount, instrumentIsinsInput], () => {
   if (assessment.value) {
     stale.value = true
   }
@@ -571,6 +694,9 @@ watch(assessmentType, (nextType) => {
   if (nextType === 'saving_plan') {
     gapDetectionPolicy.value = 'saving_plan_gaps'
   }
+  if (nextType !== 'instrument_one_time') {
+    instrumentIsinsInput.value = ''
+  }
   error.value = ''
 })
 
@@ -582,6 +708,16 @@ async function loadLayerTargets() {
   } catch (err) {
     error.value = err.message
   }
+}
+
+function parseInstrumentIsins() {
+  if (!instrumentIsinsInput.value) {
+    return []
+  }
+  return instrumentIsinsInput.value
+    .split(',')
+    .map((item) => item.trim().toUpperCase())
+    .filter((item) => item.length > 0)
 }
 
 async function runAssessor() {
@@ -611,11 +747,26 @@ async function runAssessor() {
       }
       payload.oneTimeAmountEur = amount
       payload.minimumInstrumentAmountEur = minimumRounded
-  } else if (hasAmount) {
-    if (Number.isNaN(amount)) {
-      error.value = 'Enter a valid amount delta for saving plan assessments.'
-      loading.value = false
-      return
+    } else if (assessmentType.value === 'instrument_one_time') {
+      if (Number.isNaN(amount) || amount <= 0) {
+        error.value = 'Enter a positive amount for the instrument assessment.'
+        loading.value = false
+        return
+      }
+      const isins = parseInstrumentIsins()
+      if (isins.length === 0) {
+        error.value = 'Enter at least one ISIN for the assessment.'
+        loading.value = false
+        return
+      }
+      payload.assessmentType = 'instrument_one_time'
+      payload.instruments = isins
+      payload.instrumentAmountEur = Math.floor(amount)
+    } else if (hasAmount) {
+      if (Number.isNaN(amount)) {
+        error.value = 'Enter a valid amount delta for saving plan assessments.'
+        loading.value = false
+        return
       }
       const minimumSavingPlan = savingPlanMinimumDelta.value
       if (amount < minimumSavingPlan) {
@@ -624,10 +775,10 @@ async function runAssessor() {
         return
     }
     payload.savingPlanAmountDeltaEur = amount
-  }
-  if (assessmentType.value === 'saving_plan') {
-    payload.gapDetectionPolicy = gapDetectionPolicy.value
-  }
+    }
+    if (assessmentType.value === 'saving_plan') {
+      payload.gapDetectionPolicy = gapDetectionPolicy.value
+    }
     const response = await apiRequest('/assessor/run', {
       method: 'POST',
       body: JSON.stringify(payload)
@@ -676,6 +827,7 @@ function resetForm() {
   assessmentType.value = 'saving_plan'
   gapDetectionPolicy.value = 'saving_plan_gaps'
   amountDelta.value = ''
+  instrumentIsinsInput.value = ''
   minimumInstrumentAmount.value = '25'
   assessment.value = null
   error.value = ''
@@ -689,6 +841,83 @@ function resetForm() {
 
 function layerLabel(layer) {
   return layerNames.value?.[layer] ?? `Layer ${layer}`
+}
+
+function scoreBadgeClass(row) {
+  const category = normalizeRiskCategory(row?.risk_category ?? row?.riskCategory)
+  if (category === 'high') {
+    return 'warn'
+  }
+  if (category === 'medium') {
+    return 'caution'
+  }
+  if (category === 'low') {
+    return 'ok'
+  }
+  const score = Number(row?.score)
+  if (!Number.isNaN(score) && score >= instrumentScoreCutoff.value) {
+    return 'warn'
+  }
+  return 'ok'
+}
+
+function normalizeRiskCategory(value) {
+  if (!value) {
+    return ''
+  }
+  return String(value).trim().toLowerCase()
+}
+
+function formatRiskThresholdLabel(thresholds) {
+  if (!thresholds) {
+    return ''
+  }
+  const lowMax = Number(thresholds.lowMax ?? thresholds.low_max)
+  const highMin = Number(thresholds.highMin ?? thresholds.high_min)
+  if (!Number.isFinite(lowMax) || !Number.isFinite(highMin)) {
+    return ''
+  }
+  const mediumMin = Math.min(100, lowMax + 1)
+  const mediumMax = Math.max(0, highMin - 1)
+  if (mediumMax < mediumMin) {
+    return `Low <= ${lowMax}, High >= ${highMin}`
+  }
+  return `Low <= ${lowMax}, Medium ${mediumMin}-${mediumMax}, High >= ${highMin}`
+}
+
+function scoreComponentEntries(components) {
+  if (!Array.isArray(components) || components.length === 0) {
+    return []
+  }
+  return components
+    .map((component) => {
+      const label = component?.criterion ?? ''
+      if (!label) {
+        return null
+      }
+      const value = Number(component?.points ?? 0)
+      const numeric = Number.isNaN(value) ? 0 : value
+      const formatted = formatAmount(Math.abs(numeric))
+      const sign = numeric > 0 ? '+' : numeric < 0 ? '-' : ''
+      return {
+        text: `${label} ${sign}${formatted}`.trim(),
+        levelClass: scoreComponentLevelClass(numeric)
+      }
+    })
+    .filter((entry) => entry)
+}
+
+function scoreComponentLevelClass(value) {
+  if (value <= 0) {
+    return 'is-neutral'
+  }
+  if (value <= 5) {
+    return 'is-low'
+  }
+  if (value <= 15) {
+    return 'is-medium'
+  }
+  return 'is-high'
 }
 
 function formatAmount(value) {
@@ -847,6 +1076,18 @@ function formatNarrative(text) {
   outline-offset: 2px;
 }
 
+.table-header {
+  display: block;
+}
+
+.table-header-note {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #6b645d;
+  margin-top: 0.2rem;
+}
+
 .sort-indicator {
   font-size: 0.75rem;
   opacity: 0.7;
@@ -860,5 +1101,54 @@ function formatNarrative(text) {
   text-transform: uppercase;
   color: #4b4b4b;
   cursor: help;
+}
+
+.score-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.score-breakdown__item {
+  background: #f7f2e8;
+  border: 1px solid #e6e3dc;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #3b3732;
+  white-space: nowrap;
+}
+
+.score-breakdown__item.is-neutral {
+  background: #f1f0eb;
+  border-color: #d9d6cc;
+  color: #5a544c;
+}
+
+.score-breakdown__item.is-low {
+  background: #e6f5d7;
+  border-color: #b9e3a1;
+  color: #2d5c28;
+}
+
+.score-breakdown__item.is-medium {
+  background: #f8e6c7;
+  border-color: #e7c28c;
+  color: #6d4a14;
+}
+
+.score-breakdown__item.is-high {
+  background: #fde6e4;
+  border-color: #f2b1a7;
+  color: #7a1f1c;
+}
+
+@media (max-width: 720px) {
+  .score-breakdown {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 </style>

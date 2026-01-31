@@ -17,6 +17,7 @@ public record AssessorRunResponseDto(
 		@JsonProperty("saving_plan_narrative") String savingPlanNarrative,
 		@JsonProperty("one_time_allocation") AssessorOneTimeAllocationDto oneTimeAllocation,
 		@JsonProperty("one_time_narrative") String oneTimeNarrative,
+		@JsonProperty("instrument_assessment") AssessorInstrumentAssessmentDto instrumentAssessment,
 		@JsonProperty("diagnostics") AssessorDiagnosticsDto diagnostics
 ) {
 }

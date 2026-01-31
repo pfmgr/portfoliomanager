@@ -10,6 +10,8 @@ import my.portfoliomanager.app.model.LayerTargetConfigModel;
 import my.portfoliomanager.app.model.LayerTargetCustomOverrides;
 import my.portfoliomanager.app.model.LayerTargetEffectiveConfig;
 import my.portfoliomanager.app.model.LayerTargetProfile;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
+import my.portfoliomanager.app.dto.LayerTargetRiskThresholdsDto;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.jdbc.core.ConnectionCallback;
@@ -36,6 +38,8 @@ public class LayerTargetConfigService {
 	private static final int DEFAULT_MINIMUM_SAVING_PLAN_SIZE = 15;
 	private static final int DEFAULT_MINIMUM_REBALANCING_AMOUNT = 10;
 	private static final int DEFAULT_MAX_SAVING_PLANS_PER_LAYER = 17;
+	private static final int DEFAULT_RISK_LOW_MAX = 30;
+	private static final int DEFAULT_RISK_HIGH_MIN = 51;
 	private static final BigDecimal NORMALIZATION_THRESHOLD = new BigDecimal("1.5");
 	private static final Map<Integer, String> DEFAULT_LAYER_NAMES = Map.of(
 			1, "Global Core",
@@ -67,17 +71,17 @@ public class LayerTargetConfigService {
 	}
 
 	public LayerTargetEffectiveConfig loadEffectiveConfig() {
-		LayerTargetConfigModel config = loadStoredConfig().orElseGet(this::loadDefaultConfig);
+		LayerTargetConfigModel config = loadStoredOrSeed();
 		return buildEffectiveConfig(config);
 	}
 
 	public LayerTargetConfigResponseDto getConfigResponse() {
-		LayerTargetConfigModel config = loadStoredConfig().orElseGet(this::loadDefaultConfig);
+		LayerTargetConfigModel config = loadStoredOrSeed();
 		return toResponse(config);
 	}
 
 	public LayerTargetConfigResponseDto saveConfig(LayerTargetConfigRequestDto request) {
-		LayerTargetConfigModel current = loadStoredConfig().orElseGet(this::loadDefaultConfig);
+		LayerTargetConfigModel current = loadStoredOrSeed();
 		LayerTargetConfigModel updated = fromRequest(request, current);
 		persistConfig(updated);
 		return toResponse(updated);
@@ -85,8 +89,29 @@ public class LayerTargetConfigService {
 
 	public LayerTargetConfigResponseDto resetToDefault() {
 		jdbcTemplate.update("delete from layer_target_config where id = 1");
-		LayerTargetConfigModel config = loadDefaultConfig();
+		LayerTargetConfigModel config = seedDefaultConfig();
 		return toResponse(config);
+	}
+
+	private LayerTargetConfigModel loadStoredOrSeed() {
+		return loadStoredConfig().orElseGet(this::seedDefaultConfig);
+	}
+
+	private LayerTargetConfigModel seedDefaultConfig() {
+		LayerTargetConfigModel defaults = loadDefaultConfig();
+		if (defaults == null) {
+			defaults = createDefaultModel();
+		}
+		LayerTargetConfigModel seeded = new LayerTargetConfigModel(
+				defaults.getActiveProfile(),
+				defaults.getProfiles(),
+				defaults.getLayerNames(),
+				defaults.getMaxSavingPlansPerLayer(),
+				defaults.getCustomOverrides(),
+				OffsetDateTime.now(ZoneOffset.UTC)
+		);
+		persistConfig(seeded);
+		return seeded;
 	}
 
 	private LayerTargetEffectiveConfig buildEffectiveConfig(LayerTargetConfigModel config) {
@@ -138,6 +163,7 @@ public class LayerTargetConfigService {
 			profiles = DEFAULT_PROFILES;
 		}
 		profiles = refreshProfiles(profiles);
+		profiles = applyRiskThresholdUpdates(profiles, request == null ? null : request.profileRiskThresholds());
 		Map<Integer, String> layerNames = current != null ? current.getLayerNames() : DEFAULT_LAYER_NAMES;
 		if (layerNames == null || layerNames.isEmpty()) {
 			layerNames = DEFAULT_LAYER_NAMES;
@@ -318,6 +344,11 @@ public class LayerTargetConfigService {
 			if (constraints.isEmpty() && DEFAULT_PROFILES.containsKey(key)) {
 				constraints = DEFAULT_PROFILES.get(key).getConstraints();
 			}
+			LayerTargetRiskThresholds riskThresholds = parseRiskThresholds(profileNode.path("risk_thresholds"));
+			LayerTargetRiskThresholds fallbackThresholds = DEFAULT_PROFILES.containsKey(key)
+					? DEFAULT_PROFILES.get(key).getRiskThresholds()
+					: DEFAULT_PROFILES.get(DEFAULT_PROFILE_KEY).getRiskThresholds();
+			riskThresholds = normalizeRiskThresholds(riskThresholds, fallbackThresholds);
 			profiles.put(key, new LayerTargetProfile(key,
 					displayName,
 					description,
@@ -325,7 +356,8 @@ public class LayerTargetConfigService {
 					variancePctOrDefault(variance),
 					minimumSavingPlanSize,
 					minimumRebalancingAmount,
-					constraints));
+					constraints,
+					riskThresholds));
 		});
 		return Map.copyOf(profiles);
 	}
@@ -426,6 +458,106 @@ public class LayerTargetConfigService {
 		return Map.copyOf(constraints);
 	}
 
+	private LayerTargetRiskThresholds parseRiskThresholds(JsonNode node) {
+		if (node == null || node.isMissingNode() || !node.isObject()) {
+			return null;
+		}
+		Integer lowMax = parseThresholdValue(node, "low_max");
+		Integer highMin = parseThresholdValue(node, "high_min");
+		if (lowMax == null && highMin == null) {
+			return null;
+		}
+		return new LayerTargetRiskThresholds(lowMax, highMin);
+	}
+
+	private Integer parseThresholdValue(JsonNode node, String field) {
+		if (node == null || node.isMissingNode() || field == null) {
+			return null;
+		}
+		JsonNode value = node.path(field);
+		if (value.isMissingNode() || value.isNull()) {
+			return null;
+		}
+		if (value.isIntegralNumber()) {
+			return value.intValue();
+		}
+		if (value.isNumber()) {
+			return value.asInt();
+		}
+		if (value.isTextual()) {
+			try {
+				return Integer.parseInt(value.asText().trim());
+			} catch (NumberFormatException ignored) {
+				return null;
+			}
+		}
+		return null;
+	}
+
+	private LayerTargetRiskThresholds normalizeRiskThresholds(LayerTargetRiskThresholds thresholds,
+											  LayerTargetRiskThresholds fallback) {
+		Integer lowMax = thresholds == null ? null : thresholds.getLowMax();
+		Integer highMin = thresholds == null ? null : thresholds.getHighMin();
+		Integer fallbackLow = fallback == null ? DEFAULT_RISK_LOW_MAX : fallback.getLowMax();
+		Integer fallbackHigh = fallback == null ? DEFAULT_RISK_HIGH_MIN : fallback.getHighMin();
+		lowMax = normalizeRiskValue(lowMax, fallbackLow);
+		highMin = normalizeRiskValue(highMin, fallbackHigh);
+		if (highMin <= lowMax) {
+			highMin = Math.min(100, lowMax + 1);
+			if (highMin <= lowMax) {
+				lowMax = Math.max(0, highMin - 1);
+			}
+		}
+		return new LayerTargetRiskThresholds(lowMax, highMin);
+	}
+
+	private Integer normalizeRiskValue(Integer value, Integer fallback) {
+		int resolved = value == null ? fallback : value;
+		if (resolved < 0) {
+			return 0;
+		}
+		if (resolved > 100) {
+			return 100;
+		}
+		return resolved;
+	}
+
+	private Map<String, LayerTargetProfile> applyRiskThresholdUpdates(
+			Map<String, LayerTargetProfile> profiles,
+			Map<String, LayerTargetRiskThresholdsDto> requested) {
+		if (profiles == null || profiles.isEmpty() || requested == null || requested.isEmpty()) {
+			return profiles == null ? Map.of() : profiles;
+		}
+		Map<String, LayerTargetProfile> updated = new LinkedHashMap<>(profiles);
+		requested.forEach((key, value) -> {
+			if (key == null || value == null) {
+				return;
+			}
+			String normalizedKey = key.trim().toUpperCase(Locale.ROOT);
+			LayerTargetProfile profile = updated.get(normalizedKey);
+			if (profile == null) {
+				return;
+			}
+			LayerTargetRiskThresholds fallback = profile.getRiskThresholds();
+			LayerTargetRiskThresholds normalized = normalizeRiskThresholds(
+					new LayerTargetRiskThresholds(value.lowMax(), value.highMin()),
+					fallback
+			);
+			updated.put(normalizedKey, new LayerTargetProfile(
+					profile.getKey(),
+					profile.getDisplayName(),
+					profile.getDescription(),
+					profile.getLayerTargets(),
+					profile.getAcceptableVariancePct(),
+					profile.getMinimumSavingPlanSize(),
+					profile.getMinimumRebalancingAmount(),
+					profile.getConstraints(),
+					normalized
+			));
+		});
+		return Map.copyOf(updated);
+	}
+
 	private Map<Integer, BigDecimal> parseRequestTargets(Map<Integer, Double> payload) {
 		if (payload == null || payload.isEmpty()) {
 			return Map.of();
@@ -518,8 +650,21 @@ public class LayerTargetConfigService {
 			if (profile.getConstraints() != null && !profile.getConstraints().isEmpty()) {
 				profileData.put("constraints", profile.getConstraints());
 			}
+			if (profile.getRiskThresholds() != null) {
+				profileData.put("risk_thresholds", buildRiskThresholdsPayload(profile.getRiskThresholds()));
+			}
 			payload.put(entry.getKey(), profileData);
 		}
+		return payload;
+	}
+
+	private Map<String, Integer> buildRiskThresholdsPayload(LayerTargetRiskThresholds thresholds) {
+		Map<String, Integer> payload = new LinkedHashMap<>();
+		if (thresholds == null) {
+			return payload;
+		}
+		payload.put("low_max", thresholds.getLowMax());
+		payload.put("high_min", thresholds.getHighMin());
 		return payload;
 	}
 
@@ -585,20 +730,10 @@ public class LayerTargetConfigService {
 		LayerTargetEffectiveConfig effective = buildEffectiveConfig(config);
 		Map<Integer, Double> effectiveTargets = buildDoubleMap(effective.effectiveLayerTargets());
 		Map<String, LayerTargetProfile> profiles = config.getProfiles();
-		Map<String, LayerTargetConfigResponseDto.LayerTargetProfileDto> profileDtos = new LinkedHashMap<>();
-		if (profiles != null) {
-			profiles.forEach((key, profile) -> {
-				profileDtos.put(key, new LayerTargetConfigResponseDto.LayerTargetProfileDto(
-						profile.getDisplayName(),
-						profile.getDescription(),
-						buildDoubleMap(profile.getLayerTargets()),
-						profile.getAcceptableVariancePct() != null ? profile.getAcceptableVariancePct().doubleValue() : DEFAULT_VARIANCE_PCT.doubleValue(),
-						profile.getMinimumSavingPlanSize(),
-						profile.getMinimumRebalancingAmount(),
-						buildDoubleConstraintMap(profile.getConstraints())
-				));
-			});
-		}
+		Map<String, LayerTargetConfigResponseDto.LayerTargetProfileDto> profileDtos = buildProfileDtos(profiles);
+		LayerTargetConfigModel defaults = loadDefaultConfig();
+		Map<String, LayerTargetConfigResponseDto.LayerTargetProfileDto> seedProfiles =
+				buildProfileDtos(defaults == null ? Map.of() : defaults.getProfiles());
 
 		String selectedProfileKey = effective.selectedProfileKey();
 		boolean customActive = !config.getProfiles().containsKey(selectedProfileKey);
@@ -609,6 +744,7 @@ public class LayerTargetConfigService {
 				displayName,
 				description,
 				Map.copyOf(profileDtos),
+				Map.copyOf(seedProfiles),
 				effectiveTargets,
 				effective.acceptableVariancePct().doubleValue(),
 				effective.minimumSavingPlanSize(),
@@ -643,6 +779,39 @@ public class LayerTargetConfigService {
 		}
 		input.forEach((key, value) -> output.put(key, value.doubleValue()));
 		return output;
+	}
+
+	private Map<String, LayerTargetConfigResponseDto.LayerTargetProfileDto> buildProfileDtos(
+			Map<String, LayerTargetProfile> profiles) {
+		Map<String, LayerTargetConfigResponseDto.LayerTargetProfileDto> profileDtos = new LinkedHashMap<>();
+		if (profiles == null) {
+			return profileDtos;
+		}
+		profiles.forEach((key, profile) -> {
+			if (profile == null) {
+				return;
+			}
+			profileDtos.put(key, new LayerTargetConfigResponseDto.LayerTargetProfileDto(
+					profile.getDisplayName(),
+					profile.getDescription(),
+					buildDoubleMap(profile.getLayerTargets()),
+					profile.getAcceptableVariancePct() != null
+							? profile.getAcceptableVariancePct().doubleValue()
+							: DEFAULT_VARIANCE_PCT.doubleValue(),
+					profile.getMinimumSavingPlanSize(),
+					profile.getMinimumRebalancingAmount(),
+					buildDoubleConstraintMap(profile.getConstraints()),
+					buildRiskThresholdsDto(profile.getRiskThresholds())
+			));
+		});
+		return profileDtos;
+	}
+
+	private LayerTargetRiskThresholdsDto buildRiskThresholdsDto(LayerTargetRiskThresholds thresholds) {
+		if (thresholds == null) {
+			return null;
+		}
+		return new LayerTargetRiskThresholdsDto(thresholds.getLowMax(), thresholds.getHighMin());
 	}
 
 	private String determineProfileKey(String raw) {
@@ -849,11 +1018,10 @@ public class LayerTargetConfigService {
 	}
 
 	private Map<String, LayerTargetProfile> refreshProfiles(Map<String, LayerTargetProfile> existing) {
-		Map<String, LayerTargetProfile> merged = new LinkedHashMap<>();
+		Map<String, LayerTargetProfile> merged = new LinkedHashMap<>(DEFAULT_PROFILES);
 		if (existing != null) {
 			merged.putAll(existing);
 		}
-		DEFAULT_PROFILES.forEach(merged::put);
 		return Map.copyOf(merged);
 	}
 
@@ -871,7 +1039,8 @@ public class LayerTargetConfigService {
 						"core_min", new BigDecimal("0.70"),
 						"layer5_max", new BigDecimal("0.03"),
 						"layer4_max", new BigDecimal("0.05")
-				)
+				),
+				createRiskThresholds(25, 41)
 		));
 		profiles.put("BALANCED", new LayerTargetProfile(
 				"BALANCED",
@@ -885,7 +1054,8 @@ public class LayerTargetConfigService {
 						"core_min", new BigDecimal("0.70"),
 						"layer5_max", new BigDecimal("0.03"),
 						"layer4_max", new BigDecimal("0.05")
-				)
+				),
+				createRiskThresholds(30, 51)
 		));
 		profiles.put("GROWTH", new LayerTargetProfile(
 				"GROWTH",
@@ -899,7 +1069,8 @@ public class LayerTargetConfigService {
 						"core_min", new BigDecimal("0.70"),
 						"layer5_max", new BigDecimal("0.03"),
 						"layer4_max", new BigDecimal("0.10")
-				)
+				),
+				createRiskThresholds(35, 59)
 		));
 		profiles.put("AGGRESSIVE", new LayerTargetProfile(
 				"AGGRESSIVE",
@@ -913,7 +1084,8 @@ public class LayerTargetConfigService {
 						"core_min", new BigDecimal("0.60"),
 						"layer5_max", new BigDecimal("0.03"),
 						"layer4_max", new BigDecimal("0.20")
-				)
+				),
+				createRiskThresholds(38, 63)
 		));
 		profiles.put("OPPORTUNITY", new LayerTargetProfile(
 				"OPPORTUNITY",
@@ -927,7 +1099,8 @@ public class LayerTargetConfigService {
 						"core_min", new BigDecimal("0.60"),
 						"layer5_max", new BigDecimal("0.03"),
 						"layer4_max", new BigDecimal("0.20")
-				)
+				),
+				createRiskThresholds(40, 66)
 		));
 		return Map.copyOf(profiles);
 	}
@@ -938,5 +1111,9 @@ public class LayerTargetConfigService {
 			targets.put(layer, BigDecimal.valueOf(values[layer - 1]));
 		}
 		return Map.copyOf(targets);
+	}
+
+	private static LayerTargetRiskThresholds createRiskThresholds(int lowMax, int highMin) {
+		return new LayerTargetRiskThresholds(lowMax, highMin);
 	}
 }
