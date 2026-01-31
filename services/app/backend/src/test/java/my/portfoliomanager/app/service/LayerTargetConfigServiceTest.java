@@ -25,6 +25,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,8 +66,9 @@ class LayerTargetConfigServiceTest {
 		));
 
 		ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
-		verify(jdbcTemplate).update(sqlCaptor.capture(), any(Object[].class));
-		assertThat(sqlCaptor.getValue()).contains("cast(? as jsonb)");
+		verify(jdbcTemplate, atLeastOnce()).update(sqlCaptor.capture(), any(Object[].class));
+		assertThat(sqlCaptor.getAllValues())
+				.anyMatch(sql -> sql.contains("cast(? as jsonb)"));
 	}
 
 	@Test

@@ -71,17 +71,17 @@ public class LayerTargetConfigService {
 	}
 
 	public LayerTargetEffectiveConfig loadEffectiveConfig() {
-		LayerTargetConfigModel config = loadStoredConfig().orElseGet(this::loadDefaultConfig);
+		LayerTargetConfigModel config = loadStoredOrSeed();
 		return buildEffectiveConfig(config);
 	}
 
 	public LayerTargetConfigResponseDto getConfigResponse() {
-		LayerTargetConfigModel config = loadStoredConfig().orElseGet(this::loadDefaultConfig);
+		LayerTargetConfigModel config = loadStoredOrSeed();
 		return toResponse(config);
 	}
 
 	public LayerTargetConfigResponseDto saveConfig(LayerTargetConfigRequestDto request) {
-		LayerTargetConfigModel current = loadStoredConfig().orElseGet(this::loadDefaultConfig);
+		LayerTargetConfigModel current = loadStoredOrSeed();
 		LayerTargetConfigModel updated = fromRequest(request, current);
 		persistConfig(updated);
 		return toResponse(updated);
@@ -89,8 +89,29 @@ public class LayerTargetConfigService {
 
 	public LayerTargetConfigResponseDto resetToDefault() {
 		jdbcTemplate.update("delete from layer_target_config where id = 1");
-		LayerTargetConfigModel config = loadDefaultConfig();
+		LayerTargetConfigModel config = seedDefaultConfig();
 		return toResponse(config);
+	}
+
+	private LayerTargetConfigModel loadStoredOrSeed() {
+		return loadStoredConfig().orElseGet(this::seedDefaultConfig);
+	}
+
+	private LayerTargetConfigModel seedDefaultConfig() {
+		LayerTargetConfigModel defaults = loadDefaultConfig();
+		if (defaults == null) {
+			defaults = createDefaultModel();
+		}
+		LayerTargetConfigModel seeded = new LayerTargetConfigModel(
+				defaults.getActiveProfile(),
+				defaults.getProfiles(),
+				defaults.getLayerNames(),
+				defaults.getMaxSavingPlansPerLayer(),
+				defaults.getCustomOverrides(),
+				OffsetDateTime.now(ZoneOffset.UTC)
+		);
+		persistConfig(seeded);
+		return seeded;
 	}
 
 	private LayerTargetEffectiveConfig buildEffectiveConfig(LayerTargetConfigModel config) {
