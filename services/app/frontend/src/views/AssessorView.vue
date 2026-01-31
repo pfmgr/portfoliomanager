@@ -317,7 +317,12 @@
                 <th scope="col">ISIN</th>
                 <th scope="col">Name</th>
                 <th scope="col">Layer</th>
-                <th scope="col" class="num">Score</th>
+                <th scope="col" class="num">
+                  <span class="table-header">Score</span>
+                  <span v-if="instrumentRiskThresholdLabel" class="table-header-note">
+                    Risk bands: {{ instrumentRiskThresholdLabel }}
+                  </span>
+                </th>
                 <th scope="col">Score breakdown</th>
                 <th scope="col" class="num">Allocation €</th>
               </tr>
@@ -328,7 +333,7 @@
                 <td>{{ row.instrument_name ?? '—' }}</td>
                 <td>{{ row.layer ? layerLabel(row.layer) : '—' }}</td>
                 <td class="num">
-                  <span :class="['badge', row.score >= instrumentScoreCutoff ? 'warn' : 'ok']">{{ row.score }}</span>
+                  <span :class="['badge', scoreBadgeClass(row)]">{{ row.score }}</span>
                 </td>
                 <td>
                   <div
@@ -434,6 +439,10 @@ const instrumentAssessmentItems = computed(() => instrumentAssessment.value?.ite
 const instrumentMissingIsins = computed(() => instrumentAssessment.value?.missing_kb_isins ?? [])
 const instrumentScoreCutoff = computed(() => instrumentAssessment.value?.score_cutoff ?? 85)
 const formattedInstrumentNarrative = computed(() => formatNarrative(instrumentAssessment.value?.narrative))
+const instrumentRiskThresholds = computed(() =>
+  instrumentAssessment.value?.risk_thresholds ?? instrumentAssessment.value?.riskThresholds ?? null
+)
+const instrumentRiskThresholdLabel = computed(() => formatRiskThresholdLabel(instrumentRiskThresholds.value))
 const oneTimeNewInstruments = computed(() => assessment.value?.one_time_allocation?.new_instruments ?? [])
 const oneTimeSuggestionSort = ref({ key: 'action', direction: 'asc' })
 const savingPlanMinimumDelta = computed(() => {
@@ -834,6 +843,48 @@ function layerLabel(layer) {
   return layerNames.value?.[layer] ?? `Layer ${layer}`
 }
 
+function scoreBadgeClass(row) {
+  const category = normalizeRiskCategory(row?.risk_category ?? row?.riskCategory)
+  if (category === 'high') {
+    return 'warn'
+  }
+  if (category === 'medium') {
+    return 'caution'
+  }
+  if (category === 'low') {
+    return 'ok'
+  }
+  const score = Number(row?.score)
+  if (!Number.isNaN(score) && score >= instrumentScoreCutoff.value) {
+    return 'warn'
+  }
+  return 'ok'
+}
+
+function normalizeRiskCategory(value) {
+  if (!value) {
+    return ''
+  }
+  return String(value).trim().toLowerCase()
+}
+
+function formatRiskThresholdLabel(thresholds) {
+  if (!thresholds) {
+    return ''
+  }
+  const lowMax = Number(thresholds.lowMax ?? thresholds.low_max)
+  const highMin = Number(thresholds.highMin ?? thresholds.high_min)
+  if (!Number.isFinite(lowMax) || !Number.isFinite(highMin)) {
+    return ''
+  }
+  const mediumMin = Math.min(100, lowMax + 1)
+  const mediumMax = Math.max(0, highMin - 1)
+  if (mediumMax < mediumMin) {
+    return `Low <= ${lowMax}, High >= ${highMin}`
+  }
+  return `Low <= ${lowMax}, Medium ${mediumMin}-${mediumMax}, High >= ${highMin}`
+}
+
 function scoreComponentEntries(components) {
   if (!Array.isArray(components) || components.length === 0) {
     return []
@@ -1023,6 +1074,18 @@ function formatNarrative(text) {
 .sort-button:focus-visible {
   outline: 2px solid #14131a;
   outline-offset: 2px;
+}
+
+.table-header {
+  display: block;
+}
+
+.table-header-note {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #6b645d;
+  margin-top: 0.2rem;
 }
 
 .sort-indicator {

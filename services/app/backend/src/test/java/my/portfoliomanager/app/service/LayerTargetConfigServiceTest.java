@@ -60,6 +60,7 @@ class LayerTargetConfigServiceTest {
 				1.5,
 				15,
 				10,
+				null,
 				null
 		));
 
@@ -110,6 +111,7 @@ class LayerTargetConfigServiceTest {
 				5.0,
 				20,
 				10,
+				null,
 				null
 		);
 
@@ -135,7 +137,8 @@ class LayerTargetConfigServiceTest {
 				1.5,
 				20,
 				10,
-				Map.of(1, 10, 2, 10, 3, 10, 4, 10, 5, 10)
+				Map.of(1, 10, 2, 10, 3, 10, 4, 10, 5, 10),
+				null
 		));
 
 		assertThat(response.isCustomOverridesEnabled()).isTrue();
@@ -156,7 +159,7 @@ class LayerTargetConfigServiceTest {
 		targets.put(2, 0.3);
 		targets.put(5, null);
 
-		LayerTargetConfigRequestDto request = new LayerTargetConfigRequestDto(null, null, targets, -5.0, null, null, null);
+		LayerTargetConfigRequestDto request = new LayerTargetConfigRequestDto(null, null, targets, -5.0, null, null, null, null);
 
 		LayerTargetConfigResponseDto response = layerTargetConfigService.saveConfig(request);
 
@@ -174,7 +177,7 @@ class LayerTargetConfigServiceTest {
 		when(resourceLoader.getResource(anyString())).thenReturn(new ClassPathResource("layer_targets.json"));
 
 		LayerTargetConfigResponseDto response = layerTargetConfigService.saveConfig(
-				new LayerTargetConfigRequestDto("CLASSIC", false, null, null, null, null, null));
+				new LayerTargetConfigRequestDto("CLASSIC", false, null, null, null, null, null, null));
 
 		assertThat(response.getActiveProfileKey()).isEqualTo("CLASSIC");
 		assertThat(response.getEffectiveLayerTargets()).containsEntry(1, 0.8);

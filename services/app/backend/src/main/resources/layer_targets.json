@@ -12,6 +12,10 @@
         "5": 0.0
       },
       "acceptable_variance_pct": 3.0,
+      "risk_thresholds": {
+        "low_max": 25,
+        "high_min": 41
+      },
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "constraints": {
@@ -31,6 +35,10 @@
         "5": 0.0
       },
       "acceptable_variance_pct": 3.0,
+      "risk_thresholds": {
+        "low_max": 30,
+        "high_min": 51
+      },
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "constraints": {
@@ -50,6 +58,10 @@
         "5": 0.0
       },
       "acceptable_variance_pct": 3.0,
+      "risk_thresholds": {
+        "low_max": 35,
+        "high_min": 59
+      },
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "constraints": {
@@ -69,6 +81,10 @@
         "5": 0.0
       },
       "acceptable_variance_pct": 3.0,
+      "risk_thresholds": {
+        "low_max": 38,
+        "high_min": 63
+      },
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "constraints": {
@@ -88,6 +104,10 @@
         "5": 0.0
       },
       "acceptable_variance_pct": 3.0,
+      "risk_thresholds": {
+        "low_max": 40,
+        "high_min": 66
+      },
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "constraints": {

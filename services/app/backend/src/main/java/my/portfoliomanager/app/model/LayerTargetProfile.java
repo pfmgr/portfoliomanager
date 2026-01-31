@@ -12,15 +12,17 @@ public class LayerTargetProfile {
 	private final Integer minimumSavingPlanSize;
 	private final Integer minimumRebalancingAmount;
 	private final Map<String, BigDecimal> constraints;
+	private final LayerTargetRiskThresholds riskThresholds;
 
 	public LayerTargetProfile(String key,
-							  String displayName,
-							  String description,
-							  Map<Integer, BigDecimal> layerTargets,
-							  BigDecimal acceptableVariancePct,
-							  Integer minimumSavingPlanSize,
-							  Integer minimumRebalancingAmount,
-							  Map<String, BigDecimal> constraints) {
+						  String displayName,
+						  String description,
+						  Map<Integer, BigDecimal> layerTargets,
+						  BigDecimal acceptableVariancePct,
+						  Integer minimumSavingPlanSize,
+						  Integer minimumRebalancingAmount,
+						  Map<String, BigDecimal> constraints,
+						  LayerTargetRiskThresholds riskThresholds) {
 		this.key = key;
 		this.displayName = displayName;
 		this.description = description;
@@ -29,6 +31,7 @@ public class LayerTargetProfile {
 		this.minimumSavingPlanSize = minimumSavingPlanSize;
 		this.minimumRebalancingAmount = minimumRebalancingAmount;
 		this.constraints = constraints;
+		this.riskThresholds = riskThresholds;
 	}
 
 	public String getKey() {
@@ -61,5 +64,9 @@ public class LayerTargetProfile {
 
 	public Map<String, BigDecimal> getConstraints() {
 		return constraints;
+	}
+
+	public LayerTargetRiskThresholds getRiskThresholds() {
+		return riskThresholds;
 	}
 }

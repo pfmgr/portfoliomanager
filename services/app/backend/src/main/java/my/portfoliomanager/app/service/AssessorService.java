@@ -12,8 +12,10 @@ import my.portfoliomanager.app.dto.AssessorRunRequestDto;
 import my.portfoliomanager.app.dto.AssessorRunResponseDto;
 import my.portfoliomanager.app.dto.AssessorSavingPlanSuggestionDto;
 import my.portfoliomanager.app.dto.LayerTargetConfigResponseDto;
+import my.portfoliomanager.app.dto.LayerTargetRiskThresholdsDto;
 import my.portfoliomanager.app.repository.SavingPlanRepository;
 import my.portfoliomanager.app.repository.projection.SavingPlanListProjection;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -253,28 +255,32 @@ public class AssessorService {
 		if (instruments == null || instruments.isEmpty()) {
 			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Instrument list must not be empty.");
 		}
+		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(selectedProfile, config);
 		AssessorInstrumentAssessmentService.AssessmentResult assessment =
-				instrumentAssessmentService.assess(instruments, amount, targets);
+				instrumentAssessmentService.assess(instruments, amount, targets, riskThresholds);
 		List<AssessorInstrumentAssessmentItemDto> itemDtos = new ArrayList<>();
 		for (AssessorInstrumentAssessmentService.AssessmentItem item : assessment.items()) {
 			List<AssessorInstrumentAssessmentScoreComponentDto> scoreComponents =
 					toScoreComponentDtos(item.scoreComponents());
+			String riskCategory = riskCategoryForScore(item.score(), riskThresholds);
 			itemDtos.add(new AssessorInstrumentAssessmentItemDto(
 					item.isin(),
 					item.name(),
 					item.layer(),
 					item.score(),
+					riskCategory,
 					toAmount(item.allocation()),
 					scoreComponents
 			));
 		}
 		String narrative = null;
 		if (llmEnabled && assessment.missingIsins().isEmpty() && !itemDtos.isEmpty()) {
-			narrative = buildInstrumentAssessmentNarrative(assessment, config, itemDtos);
+			narrative = buildInstrumentAssessmentNarrative(assessment, config, itemDtos, riskThresholds);
 		}
 		AssessorInstrumentAssessmentDto instrumentAssessment = new AssessorInstrumentAssessmentDto(
 				(double) amount,
 				assessment.scoreCutoff(),
+				new LayerTargetRiskThresholdsDto(riskThresholds.getLowMax(), riskThresholds.getHighMin()),
 				itemDtos,
 				assessment.missingIsins(),
 				narrative
@@ -298,15 +304,17 @@ public class AssessorService {
 	private String buildInstrumentAssessmentNarrativePrompt(
 			AssessorInstrumentAssessmentService.AssessmentResult assessment,
 			LayerTargetConfigResponseDto config,
-			List<AssessorInstrumentAssessmentItemDto> items) {
+			List<AssessorInstrumentAssessmentItemDto> items,
+			LayerTargetRiskThresholds riskThresholds) {
 		StringBuilder builder = new StringBuilder();
 		builder.append("Write a concise narrative (2-6 sentences) describing the instrument assessment and allocation.\n");
 		builder.append("Rules:\n");
 		builder.append("- Explain the criteria used for the assessment score and include a per-instrument score breakdown.\n");
-		builder.append("- Scores are penalties: lower is better, and the cutoff is the maximum acceptable penalty.\n");
-		builder.append("- If a score is below the cutoff, state that it is acceptable_risk and does not trigger a recommendation against investing.\n");
-		builder.append("- If a score is at or above the cutoff, state that it is not_recommended due to the cutoff.\n");
-		builder.append("- Use recommendation_status exactly as given; do not infer or invert the cutoff.\n");
+		builder.append("- Scores are penalties: lower is better.\n");
+		builder.append("- Use risk_category and the provided thresholds (low_risk_max, high_risk_min).\n");
+		builder.append("- Low and medium risk are acceptable_risk; medium risk must include a warning.\n");
+		builder.append("- High risk is not_acceptable_risk and should be called out clearly.\n");
+		builder.append("- Use recommendation_status exactly as given; do not infer or invert the risk bands.\n");
 		builder.append("- Explain how the amount was distributed across layers and instruments.\n");
 		builder.append("- Use instrument name, ISIN, score, allocation amounts, and score component points.\n");
 		builder.append("- You may use short bullets for the score breakdown.\n");
@@ -314,6 +322,8 @@ public class AssessorService {
 		builder.append("Context:\n");
 		builder.append("amount_eur=").append(assessment.amountEur()).append("\n");
 		builder.append("score_cutoff=").append(assessment.scoreCutoff()).append("\n");
+		builder.append("low_risk_max=").append(riskThresholds == null ? null : riskThresholds.getLowMax()).append("\n");
+		builder.append("high_risk_min=").append(riskThresholds == null ? null : riskThresholds.getHighMin()).append("\n");
 		builder.append("score_criteria=").append(assessment.scoreCriteria()).append("\n");
 		builder.append("allocation_criteria=").append(assessment.allocationCriteria()).append("\n");
 		builder.append("layer_names=").append(config == null ? Map.of() : config.getLayerNames()).append("\n");
@@ -324,7 +334,8 @@ public class AssessorService {
 					.append(", name=").append(item.instrumentName())
 					.append(", layer=").append(item.layer())
 					.append(", score=").append(item.score())
-					.append(", recommendation_status=").append(formatRecommendationStatus(item.score(), assessment.scoreCutoff()))
+					.append(", risk_category=").append(item.riskCategory())
+					.append(", recommendation_status=").append(formatRecommendationStatus(item.riskCategory()))
 					.append(", allocation_eur=").append(item.allocation())
 					.append(", score_components=").append(formatScoreComponents(item.scoreComponents()))
 					.append("\n");
@@ -335,7 +346,8 @@ public class AssessorService {
 	private String buildInstrumentAssessmentNarrative(
 			AssessorInstrumentAssessmentService.AssessmentResult assessment,
 			LayerTargetConfigResponseDto config,
-			List<AssessorInstrumentAssessmentItemDto> items) {
+			List<AssessorInstrumentAssessmentItemDto> items,
+			LayerTargetRiskThresholds riskThresholds) {
 		if (assessment == null || items == null || items.isEmpty()) {
 			return null;
 		}
@@ -346,6 +358,13 @@ public class AssessorService {
 				.append(". Cutoff ")
 				.append(assessment.scoreCutoff())
 				.append(" (lower is better).\n");
+		if (riskThresholds != null) {
+			builder.append("Risk bands: low <= ")
+					.append(riskThresholds.getLowMax())
+					.append(", medium between, high >= ")
+					.append(riskThresholds.getHighMin())
+					.append(". High risk is not acceptable.\n");
+		}
 		Map<Integer, String> layerNames = config == null ? Map.of() : config.getLayerNames();
 		builder.append("Results:\n");
 		for (AssessorInstrumentAssessmentItemDto item : items) {
@@ -357,7 +376,7 @@ public class AssessorService {
 			Integer layer = item.layer();
 			String layerLabel = formatLayerLabel(layer, layerNames);
 			Integer score = item.score() == null ? 0 : item.score();
-			String recommendation = formatRecommendationPhrase(score, assessment.scoreCutoff());
+			String recommendation = formatRecommendationPhrase(item.riskCategory());
 			String allocation = formatAmountValue(item.allocation());
 			String breakdown = formatScoreComponentBreakdown(item.scoreComponents());
 			builder.append("- ")
@@ -469,8 +488,14 @@ public class AssessorService {
 		return entries.isEmpty() ? "none" : String.join(", ", entries);
 	}
 
-	private String formatRecommendationPhrase(int score, int cutoff) {
-		return score < cutoff ? "acceptable risk" : "not recommended";
+	private String formatRecommendationPhrase(String riskCategory) {
+		String normalized = normalizeRiskCategory(riskCategory);
+		return switch (normalized) {
+			case "high" -> "high risk (not acceptable)";
+			case "medium" -> "medium risk (acceptable, warning)";
+			case "low" -> "low risk (acceptable)";
+			default -> "risk not specified";
+		};
 	}
 
 	private String formatInstrumentName(String name, String isin) {
@@ -488,8 +513,75 @@ public class AssessorService {
 		return amount.toPlainString();
 	}
 
-	private String formatRecommendationStatus(int score, int cutoff) {
-		return score < cutoff ? "acceptable_risk" : "not_recommended";
+	private String formatRecommendationStatus(String riskCategory) {
+		String normalized = normalizeRiskCategory(riskCategory);
+		return "high".equals(normalized) ? "not_acceptable_risk" : "acceptable_risk";
+	}
+
+	private String normalizeRiskCategory(String value) {
+		if (value == null || value.isBlank()) {
+			return "";
+		}
+		return value.trim().toLowerCase(Locale.ROOT);
+	}
+
+	private String riskCategoryForScore(int score, LayerTargetRiskThresholds thresholds) {
+		LayerTargetRiskThresholds effective = normalizeRiskThresholds(thresholds);
+		int lowMax = effective.getLowMax();
+		int highMin = effective.getHighMin();
+		if (score >= highMin) {
+			return "high";
+		}
+		if (score <= lowMax) {
+			return "low";
+		}
+		return "medium";
+	}
+
+	private LayerTargetRiskThresholds resolveRiskThresholds(String profileKey, LayerTargetConfigResponseDto config) {
+		LayerTargetRiskThresholdsDto dto = null;
+		if (config != null && config.getProfiles() != null) {
+			LayerTargetConfigResponseDto.LayerTargetProfileDto profile = config.getProfiles().get(profileKey);
+			if (profile != null) {
+				dto = profile.getRiskThresholds();
+			}
+			if (dto == null) {
+				LayerTargetConfigResponseDto.LayerTargetProfileDto balanced = config.getProfiles().get("BALANCED");
+				if (balanced != null) {
+					dto = balanced.getRiskThresholds();
+				}
+			}
+		}
+		LayerTargetRiskThresholds thresholds = dto == null
+				? new LayerTargetRiskThresholds(30, 51)
+				: new LayerTargetRiskThresholds(dto.lowMax(), dto.highMin());
+		return normalizeRiskThresholds(thresholds);
+	}
+
+	private LayerTargetRiskThresholds normalizeRiskThresholds(LayerTargetRiskThresholds thresholds) {
+		if (thresholds == null) {
+			return new LayerTargetRiskThresholds(30, 51);
+		}
+		int lowMax = normalizeRiskValue(thresholds.getLowMax(), 30);
+		int highMin = normalizeRiskValue(thresholds.getHighMin(), 51);
+		if (highMin <= lowMax) {
+			highMin = Math.min(100, lowMax + 1);
+			if (highMin <= lowMax) {
+				lowMax = Math.max(0, highMin - 1);
+			}
+		}
+		return new LayerTargetRiskThresholds(lowMax, highMin);
+	}
+
+	private int normalizeRiskValue(Integer value, int fallback) {
+		int resolved = value == null ? fallback : value;
+		if (resolved < 0) {
+			return 0;
+		}
+		if (resolved > 100) {
+			return 100;
+		}
+		return resolved;
 	}
 
 	private List<AssessorInstrumentAssessmentScoreComponentDto> toScoreComponentDtos(

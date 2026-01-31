@@ -340,6 +340,12 @@ button.secondary {
   border-color: #f2b1a7;
 }
 
+.badge.caution {
+  background: #fff4cc;
+  color: #7a5a00;
+  border-color: #f2d27a;
+}
+
 .badge.neutral {
   background: #f2f0ec;
   color: #6a6761;

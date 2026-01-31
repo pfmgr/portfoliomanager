@@ -9,6 +9,7 @@ public record AssessorInstrumentAssessmentItemDto(
 		@JsonProperty("instrument_name") String instrumentName,
 		@JsonProperty("layer") Integer layer,
 		@JsonProperty("score") Integer score,
+		@JsonProperty("risk_category") String riskCategory,
 		@JsonProperty("allocation") Double allocation,
 		@JsonProperty("score_components") List<AssessorInstrumentAssessmentScoreComponentDto> scoreComponents
 ) {

@@ -3,6 +3,7 @@ package my.portfoliomanager.app.service;
 import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.config.AppProperties;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -26,7 +27,8 @@ public class AssessorInstrumentAssessmentService {
 	private static final Logger logger = LoggerFactory.getLogger(AssessorInstrumentAssessmentService.class);
 	private static final Set<String> COMPLETE_STATUSES = Set.of("COMPLETE", "APPROVED", "APPLIED");
 	private static final Set<String> APPROVED_EXTRACTION_STATUSES = Set.of("APPROVED", "APPLIED");
-	private static final int SCORE_CUTOFF = 85;
+	private static final int DEFAULT_LOW_RISK_MAX = 30;
+	private static final int DEFAULT_HIGH_RISK_MIN = 51;
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 3.0;
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 5.0;
 	private static final double MAX_DATA_QUALITY_PENALTY = 20.0;
@@ -58,22 +60,25 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	public AssessmentResult assess(List<String> instrumentIsins,
-							 int amountEur,
-							 Map<Integer, BigDecimal> layerTargets) {
+						 int amountEur,
+						 Map<Integer, BigDecimal> layerTargets,
+						 LayerTargetRiskThresholds riskThresholds) {
+		LayerTargetRiskThresholds thresholds = normalizeRiskThresholds(riskThresholds);
+		int scoreCutoff = thresholds.getHighMin();
 		List<String> normalizedIsins = normalizeIsins(instrumentIsins);
 		if (normalizedIsins.isEmpty() || amountEur <= 0) {
-			return AssessmentResult.empty(SCORE_CUTOFF, amountEur);
+			return AssessmentResult.empty(scoreCutoff, amountEur);
 		}
 		boolean kbEnabled = properties != null && properties.kb() != null && properties.kb().enabled();
 		if (!kbEnabled) {
-			return AssessmentResult.missing(SCORE_CUTOFF, amountEur, normalizedIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, normalizedIsins);
 		}
 		Set<String> isinSet = new LinkedHashSet<>(normalizedIsins);
 		Map<String, KbExtraction> kbExtractions = loadLatestExtractions(isinSet);
 		Map<String, ApprovedExtraction> approvedExtractions = loadApprovedExtractions(isinSet);
 		List<String> missingIsins = resolveMissingIsins(normalizedIsins, kbExtractions, approvedExtractions);
 		if (!missingIsins.isEmpty()) {
-			return AssessmentResult.missing(SCORE_CUTOFF, amountEur, missingIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins);
 		}
 		Map<String, InstrumentFallback> fallbacks = loadInstrumentFallbacks(isinSet);
 		List<AssessmentItem> items = new ArrayList<>();
@@ -88,16 +93,16 @@ public class AssessorInstrumentAssessmentService {
 			InstrumentFallback fallback = fallbacks.get(isin);
 			String name = resolveName(payload, fallback, isin);
 			Integer layer = resolveLayer(payload, fallback);
-			ScoreResult scoreResult = computeAssessmentScore(payload, criteria);
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, scoreCutoff);
 			items.add(new AssessmentItem(isin, name, layer, scoreResult.score(), scoreResult.badFinancials(),
 					scoreResult.scoreComponents()));
 		}
 		if (!missingIsins.isEmpty()) {
 			missingIsins.sort(String::compareTo);
-			return AssessmentResult.missing(SCORE_CUTOFF, amountEur, missingIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins);
 		}
-		AllocationResult allocation = allocate(amountEur, items, layerTargets, kbExtractions, criteria);
-		return new AssessmentResult(SCORE_CUTOFF, amountEur, allocation.items(), List.of(), criteria.scoreCriteria(),
+		AllocationResult allocation = allocate(amountEur, items, layerTargets, kbExtractions, criteria, scoreCutoff);
+		return new AssessmentResult(scoreCutoff, amountEur, allocation.items(), List.of(), criteria.scoreCriteria(),
 				criteria.allocationCriteria(), allocation.layerBudgets());
 	}
 
@@ -123,6 +128,32 @@ public class AssessorInstrumentAssessmentService {
 			return null;
 		}
 		return isin.trim().toUpperCase(Locale.ROOT);
+	}
+
+	private LayerTargetRiskThresholds normalizeRiskThresholds(LayerTargetRiskThresholds thresholds) {
+		if (thresholds == null) {
+			return new LayerTargetRiskThresholds(DEFAULT_LOW_RISK_MAX, DEFAULT_HIGH_RISK_MIN);
+		}
+		int lowMax = normalizeRiskValue(thresholds.getLowMax(), DEFAULT_LOW_RISK_MAX);
+		int highMin = normalizeRiskValue(thresholds.getHighMin(), DEFAULT_HIGH_RISK_MIN);
+		if (highMin <= lowMax) {
+			highMin = Math.min(100, lowMax + 1);
+			if (highMin <= lowMax) {
+				lowMax = Math.max(0, highMin - 1);
+			}
+		}
+		return new LayerTargetRiskThresholds(lowMax, highMin);
+	}
+
+	private int normalizeRiskValue(Integer value, int fallback) {
+		int resolved = value == null ? fallback : value;
+		if (resolved < 0) {
+			return 0;
+		}
+		if (resolved > 100) {
+			return 100;
+		}
+		return resolved;
 	}
 
 	private Map<String, KbExtraction> loadLatestExtractions(Set<String> isins) {
@@ -269,10 +300,10 @@ public class AssessorInstrumentAssessmentService {
 		return layer;
 	}
 
-	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria) {
+	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria, int scoreCutoff) {
 		boolean badFinancials = false;
 		if (payload == null) {
-			return new ScoreResult(SCORE_CUTOFF, true, List.of());
+			return new ScoreResult(scoreCutoff, true, List.of());
 		}
 		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
 		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
@@ -310,15 +341,15 @@ public class AssessorInstrumentAssessmentService {
 		List<ScoreComponent> adjustedComponents = scaleComponentsIfNeeded(components, rawScore, 100.0);
 		double adjustedScore = sumComponents(adjustedComponents);
 		int rounded = (int) Math.round(Math.min(100.0, Math.max(0.0, adjustedScore)));
-		if (badFinancials && rounded < SCORE_CUTOFF) {
-			double floorPenalty = SCORE_CUTOFF - adjustedScore;
+		if (badFinancials && rounded < scoreCutoff) {
+			double floorPenalty = scoreCutoff - adjustedScore;
 			if (floorPenalty > 0) {
 				List<ScoreComponent> extended = new ArrayList<>(adjustedComponents);
 				extended.add(new ScoreComponent("Bad financials floor", floorPenalty));
 				adjustedComponents = extended;
 				adjustedScore += floorPenalty;
 			}
-			rounded = SCORE_CUTOFF;
+			rounded = scoreCutoff;
 		}
 		return new ScoreResult(rounded, badFinancials, List.copyOf(adjustedComponents));
 	}
@@ -548,20 +579,21 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private AllocationResult allocate(int amountEur,
-								 List<AssessmentItem> items,
-								 Map<Integer, BigDecimal> layerTargets,
-								 Map<String, KbExtraction> extractions,
-								 CriteriaTracker criteria) {
+							 List<AssessmentItem> items,
+							 Map<Integer, BigDecimal> layerTargets,
+							 Map<String, KbExtraction> extractions,
+							 CriteriaTracker criteria,
+							 int scoreCutoff) {
 		Map<Integer, List<AssessmentItem>> byLayer = groupByLayer(items);
-		Map<Integer, BigDecimal> layerBudgets = allocateLayerBudgets(amountEur, byLayer, layerTargets);
+		Map<Integer, BigDecimal> layerBudgets = allocateLayerBudgets(amountEur, byLayer, layerTargets, scoreCutoff);
 		List<AssessmentItem> allocatedItems = new ArrayList<>();
 		Set<String> allocatedIsins = new LinkedHashSet<>();
 		for (Map.Entry<Integer, List<AssessmentItem>> entry : byLayer.entrySet()) {
 			Integer layer = entry.getKey();
 			List<AssessmentItem> layerItems = entry.getValue();
 			BigDecimal layerBudget = layerBudgets.getOrDefault(layer, BigDecimal.ZERO);
-			Map<String, BigDecimal> weights = computeWeights(layerItems, extractions, criteria);
-			Map<String, BigDecimal> amounts = allocateInstrumentAmounts(layerItems, layerBudget, weights);
+			Map<String, BigDecimal> weights = computeWeights(layerItems, extractions, criteria, scoreCutoff);
+			Map<String, BigDecimal> amounts = allocateInstrumentAmounts(layerItems, layerBudget, weights, scoreCutoff);
 			for (AssessmentItem item : layerItems) {
 				BigDecimal allocation = amounts.getOrDefault(item.isin(), BigDecimal.ZERO);
 				allocatedItems.add(item.withAllocation(allocation));
@@ -595,8 +627,9 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<Integer, BigDecimal> allocateLayerBudgets(int amountEur,
-									 Map<Integer, List<AssessmentItem>> byLayer,
-									 Map<Integer, BigDecimal> layerTargets) {
+								 Map<Integer, List<AssessmentItem>> byLayer,
+								 Map<Integer, BigDecimal> layerTargets,
+								 int scoreCutoff) {
 		Map<Integer, BigDecimal> budgets = new LinkedHashMap<>();
 		if (amountEur <= 0) {
 			return budgets;
@@ -605,7 +638,7 @@ public class AssessorInstrumentAssessmentService {
 		BigDecimal targetSum = BigDecimal.ZERO;
 		for (int layer = 1; layer <= 5; layer++) {
 			List<AssessmentItem> layerItems = byLayer.getOrDefault(layer, List.of());
-			boolean hasEligible = layerItems.stream().anyMatch(item -> item.score() < SCORE_CUTOFF);
+			boolean hasEligible = layerItems.stream().anyMatch(item -> item.score() < scoreCutoff);
 			if (!hasEligible) {
 				continue;
 			}
@@ -672,8 +705,9 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<String, BigDecimal> allocateInstrumentAmounts(List<AssessmentItem> items,
-										  BigDecimal layerBudget,
-										  Map<String, BigDecimal> weights) {
+								  BigDecimal layerBudget,
+								  Map<String, BigDecimal> weights,
+								  int scoreCutoff) {
 		Map<String, BigDecimal> allocations = new LinkedHashMap<>();
 		if (layerBudget == null || layerBudget.signum() <= 0 || items.isEmpty()) {
 			for (AssessmentItem item : items) {
@@ -683,7 +717,7 @@ public class AssessorInstrumentAssessmentService {
 		}
 		List<AssessmentItem> eligible = new ArrayList<>();
 		for (AssessmentItem item : items) {
-			if (item.score() < SCORE_CUTOFF) {
+			if (item.score() < scoreCutoff) {
 				eligible.add(item);
 			}
 		}
@@ -737,10 +771,11 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<String, BigDecimal> computeWeights(List<AssessmentItem> items,
-									  Map<String, KbExtraction> extractions,
-									  CriteriaTracker criteria) {
+								  Map<String, KbExtraction> extractions,
+								  CriteriaTracker criteria,
+								  int scoreCutoff) {
 		List<AssessmentItem> eligible = items.stream()
-				.filter(item -> item.score() < SCORE_CUTOFF)
+				.filter(item -> item.score() < scoreCutoff)
 				.toList();
 		if (eligible.isEmpty()) {
 			return Map.of();
