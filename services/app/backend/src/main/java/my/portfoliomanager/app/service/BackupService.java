@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import my.portfoliomanager.app.dto.BackupImportResultDto;
+import my.portfoliomanager.app.service.util.ZipEntryReader;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -39,7 +40,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 @Service
@@ -575,19 +575,6 @@ public class BackupService {
 				.orElse(null);
 	}
 
-	private Map<String, byte[]> readZipEntries(ZipInputStream zip) throws IOException {
-		Map<String, byte[]> entries = new HashMap<>();
-		ZipEntry entry;
-		while ((entry = zip.getNextEntry()) != null) {
-			if (entry.isDirectory()) {
-				continue;
-			}
-			ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-			zip.transferTo(buffer);
-			entries.put(entry.getName(), buffer.toByteArray());
-		}
-		return entries;
-	}
 
 	private Map<String, ColumnInfo> getColumnInfos(String tableName) {
 		return columnInfoCache.computeIfAbsent(tableName.toLowerCase(Locale.ROOT), this::loadColumnInfos);
@@ -648,9 +635,7 @@ public class BackupService {
 	}
 
 	private Map<String, byte[]> readZipEntries(MultipartFile file) throws IOException {
-		try (ZipInputStream zip = new ZipInputStream(file.getInputStream(), StandardCharsets.UTF_8)) {
-			return readZipEntries(zip);
-		}
+		return ZipEntryReader.readZipEntries(file);
 	}
 
 	private boolean isPostgres() {

@@ -4,6 +4,7 @@ import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.config.AppProperties;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
 import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
+import my.portfoliomanager.app.service.util.RiskThresholdsUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -27,8 +28,6 @@ public class AssessorInstrumentAssessmentService {
 	private static final Logger logger = LoggerFactory.getLogger(AssessorInstrumentAssessmentService.class);
 	private static final Set<String> COMPLETE_STATUSES = Set.of("COMPLETE", "APPROVED", "APPLIED");
 	private static final Set<String> APPROVED_EXTRACTION_STATUSES = Set.of("APPROVED", "APPLIED");
-	private static final int DEFAULT_LOW_RISK_MAX = 30;
-	private static final int DEFAULT_HIGH_RISK_MIN = 51;
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 3.0;
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 5.0;
 	private static final double MAX_DATA_QUALITY_PENALTY = 20.0;
@@ -63,7 +62,7 @@ public class AssessorInstrumentAssessmentService {
 						 int amountEur,
 						 Map<Integer, BigDecimal> layerTargets,
 						 LayerTargetRiskThresholds riskThresholds) {
-		LayerTargetRiskThresholds thresholds = normalizeRiskThresholds(riskThresholds);
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
 		int scoreCutoff = thresholds.getHighMin();
 		List<String> normalizedIsins = normalizeIsins(instrumentIsins);
 		if (normalizedIsins.isEmpty() || amountEur <= 0) {
@@ -130,31 +129,6 @@ public class AssessorInstrumentAssessmentService {
 		return isin.trim().toUpperCase(Locale.ROOT);
 	}
 
-	private LayerTargetRiskThresholds normalizeRiskThresholds(LayerTargetRiskThresholds thresholds) {
-		if (thresholds == null) {
-			return new LayerTargetRiskThresholds(DEFAULT_LOW_RISK_MAX, DEFAULT_HIGH_RISK_MIN);
-		}
-		int lowMax = normalizeRiskValue(thresholds.getLowMax(), DEFAULT_LOW_RISK_MAX);
-		int highMin = normalizeRiskValue(thresholds.getHighMin(), DEFAULT_HIGH_RISK_MIN);
-		if (highMin <= lowMax) {
-			highMin = Math.min(100, lowMax + 1);
-			if (highMin <= lowMax) {
-				lowMax = Math.max(0, highMin - 1);
-			}
-		}
-		return new LayerTargetRiskThresholds(lowMax, highMin);
-	}
-
-	private int normalizeRiskValue(Integer value, int fallback) {
-		int resolved = value == null ? fallback : value;
-		if (resolved < 0) {
-			return 0;
-		}
-		if (resolved > 100) {
-			return 100;
-		}
-		return resolved;
-	}
 
 	private Map<String, KbExtraction> loadLatestExtractions(Set<String> isins) {
 		if (isins == null || isins.isEmpty()) {

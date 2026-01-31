@@ -16,6 +16,7 @@ import my.portfoliomanager.app.dto.LayerTargetRiskThresholdsDto;
 import my.portfoliomanager.app.repository.SavingPlanRepository;
 import my.portfoliomanager.app.repository.projection.SavingPlanListProjection;
 import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
+import my.portfoliomanager.app.service.util.RiskThresholdsUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -529,7 +530,7 @@ public class AssessorService {
 	}
 
 	private String riskCategoryForScore(int score, LayerTargetRiskThresholds thresholds) {
-		LayerTargetRiskThresholds effective = normalizeRiskThresholds(thresholds);
+		LayerTargetRiskThresholds effective = RiskThresholdsUtil.normalize(thresholds);
 		int lowMax = effective.getLowMax();
 		int highMin = effective.getHighMin();
 		if (score >= highMin) {
@@ -556,35 +557,9 @@ public class AssessorService {
 			}
 		}
 		LayerTargetRiskThresholds thresholds = dto == null
-				? new LayerTargetRiskThresholds(30, 51)
+				? new LayerTargetRiskThresholds(RiskThresholdsUtil.DEFAULT_LOW_MAX, RiskThresholdsUtil.DEFAULT_HIGH_MIN)
 				: new LayerTargetRiskThresholds(dto.lowMax(), dto.highMin());
-		return normalizeRiskThresholds(thresholds);
-	}
-
-	private LayerTargetRiskThresholds normalizeRiskThresholds(LayerTargetRiskThresholds thresholds) {
-		if (thresholds == null) {
-			return new LayerTargetRiskThresholds(30, 51);
-		}
-		int lowMax = normalizeRiskValue(thresholds.getLowMax(), 30);
-		int highMin = normalizeRiskValue(thresholds.getHighMin(), 51);
-		if (highMin <= lowMax) {
-			highMin = Math.min(100, lowMax + 1);
-			if (highMin <= lowMax) {
-				lowMax = Math.max(0, highMin - 1);
-			}
-		}
-		return new LayerTargetRiskThresholds(lowMax, highMin);
-	}
-
-	private int normalizeRiskValue(Integer value, int fallback) {
-		int resolved = value == null ? fallback : value;
-		if (resolved < 0) {
-			return 0;
-		}
-		if (resolved > 100) {
-			return 100;
-		}
-		return resolved;
+		return RiskThresholdsUtil.normalize(thresholds);
 	}
 
 	private List<AssessorInstrumentAssessmentScoreComponentDto> toScoreComponentDtos(
