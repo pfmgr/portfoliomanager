@@ -2,6 +2,8 @@ package my.portfoliomanager.app.service;
 
 import my.portfoliomanager.app.config.AppProperties;
 import my.portfoliomanager.app.dto.AssessorDiagnosticsDto;
+import my.portfoliomanager.app.dto.AssessorInstrumentAssessmentDto;
+import my.portfoliomanager.app.dto.AssessorInstrumentAssessmentItemDto;
 import my.portfoliomanager.app.dto.AssessorInstrumentBucketDto;
 import my.portfoliomanager.app.dto.AssessorNewInstrumentSuggestionDto;
 import my.portfoliomanager.app.dto.AssessorOneTimeAllocationDto;
@@ -37,6 +39,7 @@ public class AssessorService {
 	private static final int DEFAULT_MIN_SAVING_PLAN = 15;
 	private static final int DEFAULT_MIN_REBALANCE = 10;
 	private static final int DEFAULT_MIN_INSTRUMENT = 25;
+	private static final String ASSESSMENT_TYPE_INSTRUMENT_ONE_TIME = "instrument_one_time";
 
 	private final SavingPlanRepository savingPlanRepository;
 	private final LayerTargetConfigService layerTargetConfigService;
@@ -44,6 +47,7 @@ public class AssessorService {
 	private final AppProperties properties;
 	private final AssessorEngine assessorEngine;
 	private final AssessorInstrumentSuggestionService instrumentSuggestionService;
+	private final AssessorInstrumentAssessmentService instrumentAssessmentService;
 	private final LlmNarrativeService llmNarrativeService;
 	private final SavingPlanDeltaAllocator savingPlanDeltaAllocator;
 	private final boolean llmEnabled;
@@ -54,6 +58,7 @@ public class AssessorService {
 						   AppProperties properties,
 						   AssessorEngine assessorEngine,
 						   AssessorInstrumentSuggestionService instrumentSuggestionService,
+						   AssessorInstrumentAssessmentService instrumentAssessmentService,
 						   LlmNarrativeService llmNarrativeService,
 						   SavingPlanDeltaAllocator savingPlanDeltaAllocator) {
 		this.savingPlanRepository = savingPlanRepository;
@@ -62,6 +67,7 @@ public class AssessorService {
 		this.properties = properties;
 		this.assessorEngine = assessorEngine;
 		this.instrumentSuggestionService = instrumentSuggestionService;
+		this.instrumentAssessmentService = instrumentAssessmentService;
 		this.llmNarrativeService = llmNarrativeService;
 		this.savingPlanDeltaAllocator = savingPlanDeltaAllocator;
 		this.llmEnabled = llmNarrativeService != null && llmNarrativeService.isEnabled();
@@ -107,6 +113,9 @@ public class AssessorService {
 		}
 		if (minInstrument == null || minInstrument < 1) {
 			minInstrument = DEFAULT_MIN_INSTRUMENT;
+		}
+		if (isInstrumentAssessment(request)) {
+			return runInstrumentAssessment(request, selectedProfile, config, targets);
 		}
 
 		List<String> depotScope = request == null ? null : request.depotScope();
@@ -213,8 +222,109 @@ public class AssessorService {
 				narratives.savingPlanNarrative(),
 				toOneTimeDto(result.oneTimeAllocation(), savingPlanSnapshot, oneTimeNewInstruments, adjustedOneTimeBuckets),
 				narratives.oneTimeNarrative(),
+				null,
 				toDiagnosticsDto(result.diagnostics(), kbDiagnostics)
 		);
+	}
+
+	private boolean isInstrumentAssessment(AssessorRunRequestDto request) {
+		if (request == null || request.assessmentType() == null) {
+			return false;
+		}
+		String type = request.assessmentType().trim().toLowerCase(Locale.ROOT);
+		return ASSESSMENT_TYPE_INSTRUMENT_ONE_TIME.equals(type)
+				|| "instrument_one_time_invest".equals(type)
+				|| "instrument_one_type_invest".equals(type);
+	}
+
+	private AssessorRunResponseDto runInstrumentAssessment(AssessorRunRequestDto request,
+											 String selectedProfile,
+											 LayerTargetConfigResponseDto config,
+											 Map<Integer, BigDecimal> targets) {
+		if (request == null) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Instrument assessment request missing.");
+		}
+		Integer amount = request.instrumentAmountEur();
+		if (amount == null || amount < 1) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Instrument amount must be a positive integer.");
+		}
+		List<String> instruments = request.instruments();
+		if (instruments == null || instruments.isEmpty()) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Instrument list must not be empty.");
+		}
+		AssessorInstrumentAssessmentService.AssessmentResult assessment =
+				instrumentAssessmentService.assess(instruments, amount, targets);
+		List<AssessorInstrumentAssessmentItemDto> itemDtos = new ArrayList<>();
+		for (AssessorInstrumentAssessmentService.AssessmentItem item : assessment.items()) {
+			itemDtos.add(new AssessorInstrumentAssessmentItemDto(
+					item.isin(),
+					item.name(),
+					item.layer(),
+					item.score(),
+					toAmount(item.allocation())
+			));
+		}
+		String narrative = null;
+		if (llmEnabled && assessment.missingIsins().isEmpty() && !itemDtos.isEmpty()) {
+			String prompt = buildInstrumentAssessmentNarrativePrompt(
+					assessment,
+					config,
+					itemDtos
+			);
+			narrative = llmNarrativeService.suggestSavingPlanNarrative(prompt);
+		}
+		AssessorInstrumentAssessmentDto instrumentAssessment = new AssessorInstrumentAssessmentDto(
+				(double) amount,
+				assessment.scoreCutoff(),
+				itemDtos,
+				assessment.missingIsins(),
+				narrative
+		);
+		return new AssessorRunResponseDto(
+				selectedProfile,
+				LocalDate.now(),
+				null,
+				null,
+				null,
+				List.of(),
+				List.of(),
+				null,
+				null,
+				null,
+				instrumentAssessment,
+				null
+		);
+	}
+
+	private String buildInstrumentAssessmentNarrativePrompt(
+			AssessorInstrumentAssessmentService.AssessmentResult assessment,
+			LayerTargetConfigResponseDto config,
+			List<AssessorInstrumentAssessmentItemDto> items) {
+		StringBuilder builder = new StringBuilder();
+		builder.append("Write a concise narrative (2-5 sentences) describing the instrument assessment and allocation.\n");
+		builder.append("Rules:\n");
+		builder.append("- Explain the criteria used for the assessment score.\n");
+		builder.append("- Mention any instruments that are not recommended due to the score cutoff.\n");
+		builder.append("- Explain how the amount was distributed across layers and instruments.\n");
+		builder.append("- Use instrument name, ISIN, score, and allocation amounts.\n");
+		builder.append("- Do not invent instruments or criteria.\n");
+		builder.append("Context:\n");
+		builder.append("amount_eur=").append(assessment.amountEur()).append("\n");
+		builder.append("score_cutoff=").append(assessment.scoreCutoff()).append("\n");
+		builder.append("score_criteria=").append(assessment.scoreCriteria()).append("\n");
+		builder.append("allocation_criteria=").append(assessment.allocationCriteria()).append("\n");
+		builder.append("layer_names=").append(config == null ? Map.of() : config.getLayerNames()).append("\n");
+		builder.append("layer_budgets_eur=").append(toAmountMap(assessment.layerBudgets())).append("\n");
+		builder.append("items=\n");
+		for (AssessorInstrumentAssessmentItemDto item : items) {
+			builder.append("- isin=").append(item.isin())
+					.append(", name=").append(item.instrumentName())
+					.append(", layer=").append(item.layer())
+					.append(", score=").append(item.score())
+					.append(", allocation_eur=").append(item.allocation())
+					.append("\n");
+		}
+		return builder.toString();
 	}
 
 	private SavingPlanSnapshot loadSavingPlans(List<String> depotScope) {

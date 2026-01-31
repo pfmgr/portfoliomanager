@@ -2,13 +2,33 @@
   <div>
     <div class="card">
       <h2>Assessor</h2>
-      <div :class="['assessor-form', assessmentType === 'one_time' ? 'assessor-form--onetime' : 'assessor-form--saving']">
+      <div
+        :class="[
+          'assessor-form',
+          assessmentType === 'one_time'
+            ? 'assessor-form--onetime'
+            : assessmentType === 'instrument_one_time'
+              ? 'assessor-form--instrument'
+              : 'assessor-form--saving'
+        ]"
+      >
         <label class="field assessor-field assessor-field--type">
           Assessment type
           <select class="input" v-model="assessmentType">
             <option value="saving_plan">Saving Plan</option>
             <option value="one_time">One-Time Invest</option>
+            <option value="instrument_one_time">Instrument One-Time Invest</option>
           </select>
+        </label>
+        <label v-if="assessmentType === 'instrument_one_time'" class="field assessor-field assessor-field--instruments">
+          Instruments (ISINs)
+          <input
+            class="input"
+            type="text"
+            v-model="instrumentIsinsInput"
+            placeholder="DE0000000001, LU1234567890"
+          />
+          <p class="hint">Comma-separated list of ISINs to assess.</p>
         </label>
         <label v-if="assessmentType === 'saving_plan'" class="field assessor-field assessor-field--gap-policy">
           Gap Detection Policy
@@ -22,7 +42,7 @@
           </p>
         </label>
         <label class="field assessor-field assessor-field--amount">
-          Amount delta (EUR)
+          {{ amountLabel }}
           <input
             class="input"
             type="number"
@@ -35,11 +55,15 @@
             Optional; adds to the current monthly budget for saving plan targets. Minimum:
             {{ savingPlanMinimumDelta }} EUR.
           </p>
-          <p v-else class="hint">
+          <p v-else-if="assessmentType === 'one_time'" class="hint">
             Required for one-time allocations; must be at least the minimum per instrument.
+          </p>
+          <p v-else class="hint">
+            Required for instrument assessment allocations.
           </p>
           <p v-if="savingPlanDeltaWarning" class="hint warn">{{ savingPlanDeltaWarning }}</p>
           <p v-if="oneTimeDeltaWarning" class="hint warn">{{ oneTimeDeltaWarning }}</p>
+          <p v-if="instrumentAmountWarning" class="hint warn">{{ instrumentAmountWarning }}</p>
         </label>
         <label v-if="assessmentType === 'one_time'" class="field assessor-field assessor-field--minimum">
           Minimum amount per instrument (EUR)
@@ -273,6 +297,46 @@
         </p>
       </div>
 
+      <div v-if="assessmentType === 'instrument_one_time' && instrumentAssessment" class="card">
+        <h3>Instrument Assessment</h3>
+        <div
+          v-if="formattedInstrumentNarrative"
+          class="note narrative"
+          role="status"
+          aria-live="polite"
+          v-html="formattedInstrumentNarrative"
+        ></div>
+        <p v-if="instrumentMissingIsins.length" class="note warn">
+          Assessment cannot run. Missing KB extractions for: {{ instrumentMissingIsins.join(', ') }}.
+        </p>
+        <div v-else-if="instrumentAssessmentItems.length" class="table-wrap">
+          <table class="table">
+            <caption class="sr-only">Instrument assessment scores and allocation.</caption>
+            <thead>
+              <tr>
+                <th scope="col">ISIN</th>
+                <th scope="col">Name</th>
+                <th scope="col">Layer</th>
+                <th scope="col" class="num">Score</th>
+                <th scope="col" class="num">Allocation €</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in instrumentAssessmentItems" :key="row.isin">
+                <th scope="row">{{ row.isin }}</th>
+                <td>{{ row.instrument_name ?? '—' }}</td>
+                <td>{{ row.layer ? layerLabel(row.layer) : '—' }}</td>
+                <td class="num">
+                  <span :class="['badge', row.score >= instrumentScoreCutoff ? 'warn' : 'ok']">{{ row.score }}</span>
+                </td>
+                <td class="num">{{ formatAmount(row.allocation ?? 0) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="note">No instrument assessment results to display.</p>
+      </div>
+
       <div v-if="assessmentType === 'saving_plan'" class="card">
         <h3>Saving plan diagnostics</h3>
         <div class="grid grid-2">
@@ -309,6 +373,7 @@ const layerNames = ref({})
 const assessmentType = ref('saving_plan')
 const gapDetectionPolicy = ref('saving_plan_gaps')
 const amountDelta = ref('')
+const instrumentIsinsInput = ref('')
 const minimumInstrumentAmount = ref('25')
 const minimumSavingPlanSize = ref(15)
 const assessment = ref(null)
@@ -348,6 +413,11 @@ const kbMissingIsinTooltip = computed(() => {
 })
 const formattedSavingPlanNarrative = computed(() => formatNarrative(assessment.value?.saving_plan_narrative))
 const formattedOneTimeNarrative = computed(() => formatNarrative(assessment.value?.one_time_narrative))
+const instrumentAssessment = computed(() => assessment.value?.instrument_assessment ?? null)
+const instrumentAssessmentItems = computed(() => instrumentAssessment.value?.items ?? [])
+const instrumentMissingIsins = computed(() => instrumentAssessment.value?.missing_kb_isins ?? [])
+const instrumentScoreCutoff = computed(() => instrumentAssessment.value?.score_cutoff ?? 85)
+const formattedInstrumentNarrative = computed(() => formatNarrative(instrumentAssessment.value?.narrative))
 const oneTimeNewInstruments = computed(() => assessment.value?.one_time_allocation?.new_instruments ?? [])
 const oneTimeSuggestionSort = ref({ key: 'action', direction: 'asc' })
 const savingPlanMinimumDelta = computed(() => {
@@ -358,6 +428,10 @@ const savingPlanMinimumDelta = computed(() => {
   return Math.floor(minimum)
 })
 
+const amountLabel = computed(() =>
+  assessmentType.value === 'instrument_one_time' ? 'Amount (EUR)' : 'Amount delta (EUR)'
+)
+
 const amountDeltaMin = computed(() => {
   if (assessmentType.value === 'one_time') {
     const minimum = Number(minimumInstrumentAmount.value)
@@ -365,6 +439,9 @@ const amountDeltaMin = computed(() => {
       return 1
     }
     return Math.floor(minimum)
+  }
+  if (assessmentType.value === 'instrument_one_time') {
+    return 1
   }
   return savingPlanMinimumDelta.value
 })
@@ -415,11 +492,32 @@ const oneTimeDeltaWarning = computed(() => {
   return ''
 })
 
+const instrumentAmountWarning = computed(() => {
+  if (assessmentType.value !== 'instrument_one_time') {
+    return ''
+  }
+  if (amountDelta.value === '') {
+    return ''
+  }
+  const amount = Number(amountDelta.value)
+  if (Number.isNaN(amount)) {
+    return 'Enter a valid amount.'
+  }
+  if (amount < 1) {
+    return 'Amount must be at least 1 EUR.'
+  }
+  return ''
+})
+
 const canRun = computed(() => {
   const amount = Number(amountDelta.value)
   if (assessmentType.value === 'one_time') {
     const minimum = Number(minimumInstrumentAmount.value)
     return !Number.isNaN(amount) && amount >= amountDeltaMin.value && !Number.isNaN(minimum) && minimum >= 1
+  }
+  if (assessmentType.value === 'instrument_one_time') {
+    const isins = parseInstrumentIsins()
+    return !Number.isNaN(amount) && amount >= 1 && isins.length > 0
   }
   if (amountDelta.value === '') {
     return true
@@ -558,7 +656,7 @@ onBeforeUnmount(() => {
   }
 })
 
-watch([assessmentType, gapDetectionPolicy, amountDelta, minimumInstrumentAmount], () => {
+watch([assessmentType, gapDetectionPolicy, amountDelta, minimumInstrumentAmount, instrumentIsinsInput], () => {
   if (assessment.value) {
     stale.value = true
   }
@@ -571,6 +669,9 @@ watch(assessmentType, (nextType) => {
   if (nextType === 'saving_plan') {
     gapDetectionPolicy.value = 'saving_plan_gaps'
   }
+  if (nextType !== 'instrument_one_time') {
+    instrumentIsinsInput.value = ''
+  }
   error.value = ''
 })
 
@@ -582,6 +683,16 @@ async function loadLayerTargets() {
   } catch (err) {
     error.value = err.message
   }
+}
+
+function parseInstrumentIsins() {
+  if (!instrumentIsinsInput.value) {
+    return []
+  }
+  return instrumentIsinsInput.value
+    .split(',')
+    .map((item) => item.trim().toUpperCase())
+    .filter((item) => item.length > 0)
 }
 
 async function runAssessor() {
@@ -611,11 +722,26 @@ async function runAssessor() {
       }
       payload.oneTimeAmountEur = amount
       payload.minimumInstrumentAmountEur = minimumRounded
-  } else if (hasAmount) {
-    if (Number.isNaN(amount)) {
-      error.value = 'Enter a valid amount delta for saving plan assessments.'
-      loading.value = false
-      return
+    } else if (assessmentType.value === 'instrument_one_time') {
+      if (Number.isNaN(amount) || amount <= 0) {
+        error.value = 'Enter a positive amount for the instrument assessment.'
+        loading.value = false
+        return
+      }
+      const isins = parseInstrumentIsins()
+      if (isins.length === 0) {
+        error.value = 'Enter at least one ISIN for the assessment.'
+        loading.value = false
+        return
+      }
+      payload.assessmentType = 'instrument_one_time'
+      payload.instruments = isins
+      payload.instrumentAmountEur = Math.floor(amount)
+    } else if (hasAmount) {
+      if (Number.isNaN(amount)) {
+        error.value = 'Enter a valid amount delta for saving plan assessments.'
+        loading.value = false
+        return
       }
       const minimumSavingPlan = savingPlanMinimumDelta.value
       if (amount < minimumSavingPlan) {
@@ -624,10 +750,10 @@ async function runAssessor() {
         return
     }
     payload.savingPlanAmountDeltaEur = amount
-  }
-  if (assessmentType.value === 'saving_plan') {
-    payload.gapDetectionPolicy = gapDetectionPolicy.value
-  }
+    }
+    if (assessmentType.value === 'saving_plan') {
+      payload.gapDetectionPolicy = gapDetectionPolicy.value
+    }
     const response = await apiRequest('/assessor/run', {
       method: 'POST',
       body: JSON.stringify(payload)
@@ -676,6 +802,7 @@ function resetForm() {
   assessmentType.value = 'saving_plan'
   gapDetectionPolicy.value = 'saving_plan_gaps'
   amountDelta.value = ''
+  instrumentIsinsInput.value = ''
   minimumInstrumentAmount.value = '25'
   assessment.value = null
   error.value = ''

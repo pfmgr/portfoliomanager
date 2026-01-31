@@ -182,6 +182,11 @@ a {
   grid-template-areas: "type amount minimum actions";
 }
 
+.assessor-form--instrument {
+  grid-template-columns: repeat(3, minmax(220px, 1fr)) auto;
+  grid-template-areas: "type instruments amount actions";
+}
+
 .assessor-field--type {
   grid-area: type;
 }
@@ -196,6 +201,10 @@ a {
 
 .assessor-field--minimum {
   grid-area: minimum;
+}
+
+.assessor-field--instruments {
+  grid-area: instruments;
 }
 
 .assessor-actions {
@@ -416,6 +425,13 @@ button.secondary {
       "type amount"
       "minimum actions";
   }
+
+  .assessor-form--instrument {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    grid-template-areas:
+      "type instruments"
+      "amount actions";
+  }
 }
 
 @media (max-width: 720px) {
@@ -456,6 +472,15 @@ button.secondary {
       "type"
       "amount"
       "minimum"
+      "actions";
+  }
+
+  .assessor-form--instrument {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "type"
+      "instruments"
+      "amount"
       "actions";
   }
 }
