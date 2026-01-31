@@ -53,17 +53,19 @@ public class AssessorService {
 	private final AssessorInstrumentAssessmentService instrumentAssessmentService;
 	private final LlmNarrativeService llmNarrativeService;
 	private final SavingPlanDeltaAllocator savingPlanDeltaAllocator;
+	private final LlmPromptPolicy llmPromptPolicy;
 	private final boolean llmEnabled;
 
 	public AssessorService(SavingPlanRepository savingPlanRepository,
-						   LayerTargetConfigService layerTargetConfigService,
-						   NamedParameterJdbcTemplate namedParameterJdbcTemplate,
-						   AppProperties properties,
-						   AssessorEngine assessorEngine,
-						   AssessorInstrumentSuggestionService instrumentSuggestionService,
-						   AssessorInstrumentAssessmentService instrumentAssessmentService,
-						   LlmNarrativeService llmNarrativeService,
-						   SavingPlanDeltaAllocator savingPlanDeltaAllocator) {
+					   LayerTargetConfigService layerTargetConfigService,
+					   NamedParameterJdbcTemplate namedParameterJdbcTemplate,
+					   AppProperties properties,
+					   AssessorEngine assessorEngine,
+					   AssessorInstrumentSuggestionService instrumentSuggestionService,
+					   AssessorInstrumentAssessmentService instrumentAssessmentService,
+					   LlmNarrativeService llmNarrativeService,
+					   SavingPlanDeltaAllocator savingPlanDeltaAllocator,
+					   LlmPromptPolicy llmPromptPolicy) {
 		this.savingPlanRepository = savingPlanRepository;
 		this.layerTargetConfigService = layerTargetConfigService;
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
@@ -73,6 +75,7 @@ public class AssessorService {
 		this.instrumentAssessmentService = instrumentAssessmentService;
 		this.llmNarrativeService = llmNarrativeService;
 		this.savingPlanDeltaAllocator = savingPlanDeltaAllocator;
+		this.llmPromptPolicy = llmPromptPolicy;
 		this.llmEnabled = llmNarrativeService != null && llmNarrativeService.isEnabled();
 	}
 
@@ -933,7 +936,12 @@ public class AssessorService {
 			String prompt = buildSavingPlanNarrativePrompt(result, config, variance,
 					minimumSavingPlanSize, minimumRebalancingAmount, targetLayerAmounts, savingPlanSuggestions,
 					savingPlanNewInstruments, savingPlanAllocationNotes, gapDetectionPolicy);
-			savingPlanNarrative = llmNarrativeService.suggestSavingPlanNarrative(prompt);
+			prompt = llmPromptPolicy == null
+					? prompt
+					: llmPromptPolicy.validatePrompt(prompt, LlmPromptPurpose.SAVING_PLAN_NARRATIVE);
+			if (prompt != null) {
+				savingPlanNarrative = llmNarrativeService.suggestSavingPlanNarrative(prompt);
+			}
 		}
 		String oneTimeNarrative = null;
 		boolean hasOneTimeBuckets = result.oneTimeAllocation() != null && result.oneTimeAllocation().layerBuckets() != null
@@ -943,7 +951,12 @@ public class AssessorService {
 				&& oneTimeAmount != null && oneTimeAmount.signum() > 0) {
 			String prompt = buildOneTimeNarrativePrompt(result, config, savingPlanSnapshot, oneTimeAmount,
 					minimumInstrumentAmount, oneTimeNewInstruments, adjustedOneTimeBuckets);
-			oneTimeNarrative = llmNarrativeService.suggestSavingPlanNarrative(prompt);
+			prompt = llmPromptPolicy == null
+					? prompt
+					: llmPromptPolicy.validatePrompt(prompt, LlmPromptPurpose.ONE_TIME_NARRATIVE);
+			if (prompt != null) {
+				oneTimeNarrative = llmNarrativeService.suggestSavingPlanNarrative(prompt);
+			}
 		}
 		return new NarrativeBundle(savingPlanNarrative, oneTimeNarrative);
 	}

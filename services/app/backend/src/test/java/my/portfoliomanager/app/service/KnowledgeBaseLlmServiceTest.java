@@ -51,7 +51,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		client.generateDossier("DE0000000001", null, List.of("example.com"), 15000);
 
@@ -92,7 +92,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		KnowledgeBaseLlmAlternativesDraft draft = client.findAlternatives("DE0000000001", List.of("example.com"));
 
@@ -122,7 +122,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		assertThatThrownBy(() -> client.findAlternatives("DE0000000001", List.of("example.com")))
 				.isInstanceOf(KnowledgeBaseLlmOutputException.class)
@@ -178,7 +178,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		var draft = client.extractMetadata("Dossier text");
 
@@ -291,7 +291,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		var draft = client.extractMetadata("Research date: 2026-01-24");
 
@@ -351,7 +351,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		var draft = client.extractMetadata("Research date: 2026-01-24");
 
@@ -401,7 +401,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		var draft = client.extractMetadata("Research date: 2026-01-24");
 		assertThat(draft.extractionJson().get("name").asText()).isEqualTo("Test Name");
@@ -444,7 +444,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		var draft = client.generateDossier("DE0000000001", null, List.of("example.com"), 15000);
 
@@ -496,7 +496,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		var draft = client.generateDossier("DE0000000002", null, List.of("example.com"), 15000);
 
@@ -542,7 +542,7 @@ class KnowledgeBaseLlmServiceTest {
 		};
 		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
 		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
-		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
 
 		var draft = client.generateDossier("DE0000000003", null, List.of("example.com"), 15000);
 

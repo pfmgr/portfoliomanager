@@ -413,3 +413,23 @@ If you change UI files or observe UI issues, run this review and add the output 
 ### Rebalancer instrument proposals
 - Instrument-level saving plan proposals are gated by `app.kb.enabled` and the latest `knowledge_base_extractions` status (`COMPLETE`). When gating fails, rebalancer responses include missing ISINs and no instrument-level proposals.
 - `instrument_dossier_extractions` are synced into `knowledge_base_extractions` on extraction run/approve/apply.
+
+---
+
+## 15) Security & Critical Review (mandatory)
+
+- Every change must include a brief critical review covering: security weaknesses, data leaks, injection vectors, and code duplication.
+- Review output must be recorded in the PR description or commit/review log (short list of findings + severity + recommended actions).
+- Always run tests after hardening changes: backend Junit, frontend Vitest, frontend E2E (see test commands above).
+
+### LLM Prompt Minimization Review (required)
+- Prompt templates defined in Java classes MUST be reviewed for need-to-know data before external LLM calls.
+- Allowed in prompts: ISINs, instrument names, absolute and relative amounts (when needed for explanations).
+- Disallowed in prompts: user identifiers (depot IDs, account IDs, usernames, tokens, emails, addresses, phone numbers).
+- Policy applies only to external LLM providers.
+  - External is true when `app.llm.external-provider=true` OR the provider is enabled and the base URL is not localhost (combined A/B rule).
+- If a prompt contains disallowed data, the external LLM call must be skipped (fallback narrative or error).
+
+### Lombok Usage Review (optional)
+- Evaluate Lombok only for plain model/POJO classes to reduce boilerplate.
+- Do NOT use Lombok on JPA entities (risk of Equals/HashCode pitfalls).

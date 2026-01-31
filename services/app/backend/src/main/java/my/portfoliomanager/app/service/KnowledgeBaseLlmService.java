@@ -409,11 +409,13 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 	private final Map<String, Object> dossierResponseSchema;
 	private final Map<String, Object> alternativesResponseSchema;
 	private final Map<String, Object> extractionResponseSchema;
+	private final LlmPromptPolicy llmPromptPolicy;
 	private final Random jitter = new Random();
 
 	public KnowledgeBaseLlmService(KnowledgeBaseLlmProvider llmProvider,
-								   KnowledgeBaseConfigService configService,
-								   ObjectMapper objectMapper) {
+							   KnowledgeBaseConfigService configService,
+							   ObjectMapper objectMapper,
+							   LlmPromptPolicy llmPromptPolicy) {
 		this.llmProvider = llmProvider;
 		this.configService = configService;
 		this.objectMapper = objectMapper;
@@ -421,6 +423,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		this.dossierResponseSchema = buildDossierResponseSchema(objectMapper);
 		this.alternativesResponseSchema = buildAlternativesResponseSchema(objectMapper);
 		this.extractionResponseSchema = buildExtractionResponseSchema(objectMapper);
+		this.llmPromptPolicy = llmPromptPolicy;
 	}
 
 	@Override
@@ -430,11 +433,12 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 														 int maxChars) {
 		String normalizedIsin = normalizeIsin(isin);
 		String prompt = buildDossierPrompt(normalizedIsin, context, maxChars);
-		logger.debug("Sending prompt to LLM: {}",prompt);
+		String validatedPrompt = enforcePromptPolicy(prompt, LlmPromptPurpose.KB_DOSSIER_WEBSEARCH);
+		logger.debug("Sending dossier websearch prompt (chars={}).", validatedPrompt.length());
 		logger.info("Starting websearch for ISIN(s) {} to create dossier", isin);
 		String reasoningEffort = configService.getSnapshot().websearchReasoningEffort();
 		KnowledgeBaseLlmResponse response = withRetry(() -> llmProvider.runWebSearch(
-				prompt,
+				validatedPrompt,
 				allowedDomains,
 				reasoningEffort,
 				"kb_dossier_websearch",
@@ -474,8 +478,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 	@Override
 	public KnowledgeBaseLlmExtractionDraft extractMetadata(String dossierText) {
 		String prompt = buildExtractionPrompt(dossierText);
+		String validatedPrompt = enforcePromptPolicy(prompt, LlmPromptPurpose.KB_DOSSIER_EXTRACTION);
 		KnowledgeBaseLlmResponse response = withRetry(() -> llmProvider.runJsonPrompt(
-				prompt,
+				validatedPrompt,
 				"kb_extraction_response",
 				extractionResponseSchema
 		));
@@ -516,6 +521,17 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			normalizedBody += "\n";
 		}
 		return before + normalizedBody + after;
+	}
+
+	private String enforcePromptPolicy(String prompt, LlmPromptPurpose purpose) {
+		if (llmPromptPolicy == null) {
+			return prompt;
+		}
+		String validated = llmPromptPolicy.validatePrompt(prompt, purpose);
+		if (validated == null) {
+			throw new IllegalStateException("LLM prompt rejected by policy: " + purpose);
+		}
+		return validated;
 	}
 
 	private String insertMissingValuationSection(String contentMd) {
@@ -1198,9 +1214,10 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 	public KnowledgeBaseLlmAlternativesDraft findAlternatives(String isin, List<String> allowedDomains) {
 		String normalizedIsin = normalizeIsin(isin);
 		String prompt = buildAlternativesPrompt(normalizedIsin);
+		String validatedPrompt = enforcePromptPolicy(prompt, LlmPromptPurpose.KB_ALTERNATIVES_WEBSEARCH);
 		String reasoningEffort = configService.getSnapshot().websearchReasoningEffort();
 		KnowledgeBaseLlmResponse response = withRetry(() -> llmProvider.runWebSearch(
-				prompt,
+				validatedPrompt,
 				allowedDomains,
 				reasoningEffort,
 				"kb_alternatives_websearch",

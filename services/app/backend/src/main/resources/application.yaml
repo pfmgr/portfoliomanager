@@ -35,6 +35,7 @@ app:
     issuer: ${JWT_ISSUER:portfolio-manager}
   llm:
     provider: ${LLM_PROVIDER:none}
+    external-provider: ${LLM_EXTERNAL_PROVIDER:false}
     openai:
       api-key: ${LLM_PROVIDER_API_KEY:${OPENAI_API_KEY:}}
       base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}

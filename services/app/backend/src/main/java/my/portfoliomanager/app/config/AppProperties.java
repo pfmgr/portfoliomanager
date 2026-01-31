@@ -26,7 +26,8 @@ public record AppProperties(
 
 	public record Llm(
 			@NotBlank String provider,
-			OpenAi openai
+			OpenAi openai,
+			Boolean externalProvider
 	) {
 		public record OpenAi(
 				String apiKey,

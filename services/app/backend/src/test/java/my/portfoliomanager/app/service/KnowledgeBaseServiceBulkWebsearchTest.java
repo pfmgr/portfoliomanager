@@ -83,7 +83,8 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 				mock(KnowledgeBaseLlmClient.class),
 				mock(KnowledgeBaseRunService.class),
 				llmClient,
-				new ObjectMapper()
+				new ObjectMapper(),
+				null
 		);
 
 		KnowledgeBaseService.BulkWebsearchDraftResult result =

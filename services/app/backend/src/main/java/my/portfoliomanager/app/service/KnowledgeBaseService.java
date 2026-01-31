@@ -48,6 +48,7 @@ public class KnowledgeBaseService {
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
     private final Map<String, Object> bulkWebsearchSchema;
+    private final LlmPromptPolicy llmPromptPolicy;
 
     public KnowledgeBaseService(InstrumentRepository instrumentRepository,
                                 InstrumentDossierRepository dossierRepository,
@@ -61,7 +62,8 @@ public class KnowledgeBaseService {
                                 KnowledgeBaseLlmClient knowledgeBaseLlmClient,
                                 KnowledgeBaseRunService runService,
                                 LlmClient llmClient,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                LlmPromptPolicy llmPromptPolicy) {
         this.instrumentRepository = instrumentRepository;
         this.dossierRepository = dossierRepository;
         this.extractionRepository = extractionRepository;
@@ -76,6 +78,7 @@ public class KnowledgeBaseService {
         this.llmClient = llmClient;
         this.objectMapper = objectMapper;
         this.bulkWebsearchSchema = buildBulkWebsearchSchema(objectMapper);
+        this.llmPromptPolicy = llmPromptPolicy;
     }
 
     public InstrumentDossierSearchPageDto searchDossiers(String query,
@@ -194,7 +197,13 @@ public class KnowledgeBaseService {
         logger.info("Performing Buld Draft Creating for {} isins", normalized.size());
         KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
         String prompt = buildBulkWebsearchPrompt(normalized, config.dossierMaxChars());
-        logger.debug("Sending Prompt {}", prompt);
+        prompt = llmPromptPolicy == null
+                ? prompt
+                : llmPromptPolicy.validatePrompt(prompt, LlmPromptPurpose.KB_BULK_WEBSEARCH);
+        if (prompt == null) {
+            throw new IllegalStateException("Bulk websearch prompt rejected by policy");
+        }
+        logger.debug("Sending bulk websearch prompt (chars={}).", prompt.length());
         LlmSuggestion suggestion;
         try {
             logger.info("Sending bulk research to LLM");
