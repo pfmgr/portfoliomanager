@@ -1,4 +1,4 @@
-# Portfolio Manager Admin (Trade Republic + Deka)
+# Portfolio Manager Admin
 
 A self-hosted admin tool for importing Trade Republic PDFs and Deka CSVs, classifying instruments, and managing savings plans with a deterministic rebalancer workflow that can optionally explain its recommendations via an LLM.
 
