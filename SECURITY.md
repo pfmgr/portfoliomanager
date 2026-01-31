@@ -11,4 +11,4 @@ currently being supported with security updates.
 
 ## Reporting a Vulnerability
 
-Report Vulnerabilitird as ISSUE in the github repo.
+Report Vulnerabilities to https://github.com/pfmgr/portfoliomanager/issues
