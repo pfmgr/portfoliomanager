@@ -257,6 +257,12 @@
                 <span class="badge neutral">Origin {{ dossierDetail.latestDossier.origin }}</span>
                 <span class="badge neutral">Authored {{ dossierDetail.latestDossier.authoredBy }}</span>
                 <span v-if="dossierDetail.latestDossier.autoApproved" class="badge warn">Auto-approved</span>
+                <span
+                  v-if="dossierQualityGate"
+                  :class="['badge', gateBadgeClass(dossierQualityGate.passed)]"
+                >
+                  Quality gate: {{ dossierQualityGate.passed ? 'PASS' : 'FAIL' }}
+                </span>
               </div>
 
               <p v-if="isNewDossier" class="hint">No dossier exists yet. Fill in the form and save to create one.</p>
@@ -316,6 +322,12 @@
                   </ul>
                   <p v-if="dossierSources.length === 0" class="hint">No citations listed.</p>
                 </div>
+                <div v-if="dossierQualityReasons.length" class="section">
+                  <h4>Quality gate reasons</h4>
+                  <ul>
+                    <li v-for="reason in dossierQualityReasons" :key="reason">{{ reason }}</li>
+                  </ul>
+                </div>
               </div>
 
               <div class="section">
@@ -349,6 +361,12 @@
                   <p class="hint">
                     Status: {{ latestExtraction.status }} | Model: {{ latestExtraction.model }}
                     <span v-if="latestExtraction.autoApproved">(auto-approved)</span>
+                  </p>
+                  <p v-if="extractionEvidenceGate" class="hint">
+                    Evidence gate:
+                    <span :class="['badge', gateBadgeClass(extractionEvidenceGate.passed)]">
+                      {{ extractionEvidenceGate.passed ? 'PASS' : 'FAIL' }}
+                    </span>
                   </p>
                   <dl class="kb-dl">
                     <template v-for="field in extractionBaseFields" :key="field.label">
@@ -391,6 +409,12 @@
                     <h5>Warnings</h5>
                     <ul>
                       <li v-for="warning in extractionWarnings" :key="warning">{{ warning }}</li>
+                    </ul>
+                  </div>
+                  <div v-if="extractionEvidenceMissing.length" class="section">
+                    <h5>Evidence gate missing fields</h5>
+                    <ul>
+                      <li v-for="field in extractionEvidenceMissing" :key="field">{{ field }}</li>
                     </ul>
                   </div>
                 </div>
@@ -1134,6 +1158,28 @@
                 <option value="high">High</option>
               </select>
             </label>
+            <label class="field">
+              <span>Bulk min citations</span>
+              <input type="number" min="1" v-model.number="configForm.bulkMinCitations" />
+            </label>
+            <label class="field">
+              <span>Require primary source</span>
+              <select class="input" v-model="configForm.bulkRequirePrimarySource">
+                <option :value="true">Yes</option>
+                <option :value="false">No</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Alternatives similarity threshold</span>
+              <input type="number" step="0.05" min="0" max="1" v-model.number="configForm.alternativesMinSimilarityScore" />
+            </label>
+            <label class="field">
+              <span>Require extraction evidence</span>
+              <select class="input" v-model="configForm.extractionEvidenceRequired">
+                <option :value="true">Yes</option>
+                <option :value="false">No</option>
+              </select>
+            </label>
           </div>
 
           <label class="field">
@@ -1195,7 +1241,11 @@ const configForm = ref({
   dossierMaxChars: 15000,
   kbRefreshMinDaysBetweenRunsPerInstrument: 7,
   runTimeoutMinutes: 30,
-  websearchReasoningEffort: 'low'
+  websearchReasoningEffort: 'low',
+  bulkMinCitations: 2,
+  bulkRequirePrimarySource: true,
+  alternativesMinSimilarityScore: 0.6,
+  extractionEvidenceRequired: true
 })
 const domainsText = ref('')
 const configBusy = ref(false)
@@ -1386,9 +1436,23 @@ const sortSnapshot = computed(() => ({
 }))
 
 const latestExtraction = computed(() => dossierDetail.value?.extractions?.[0] || null)
+const dossierQualityGate = computed(() =>
+  dossierDetail.value?.latestDossier?.quality_gate || dossierDetail.value?.latestDossier?.qualityGate || null
+)
+const dossierQualityReasons = computed(() => {
+  if (!dossierQualityGate.value || dossierQualityGate.value.passed) return []
+  return dossierQualityGate.value.reasons || []
+})
 const formattedExtraction = computed(() =>
   latestExtraction.value ? JSON.stringify(latestExtraction.value.extractedJson, null, 2) : ''
 )
+const extractionEvidenceGate = computed(() =>
+  latestExtraction.value?.evidence_gate || latestExtraction.value?.evidenceGate || null
+)
+const extractionEvidenceMissing = computed(() => {
+  if (!extractionEvidenceGate.value || extractionEvidenceGate.value.passed) return []
+  return extractionEvidenceGate.value.missing_evidence || extractionEvidenceGate.value.missingEvidence || []
+})
 const extractionMissingFields = computed(() => {
   if (!latestExtraction.value) return []
   return (latestExtraction.value.missingFieldsJson || []).map((entry) => entry.field || entry)
@@ -2487,7 +2551,11 @@ function normalizeConfig(raw) {
     kbRefreshMinDaysBetweenRunsPerInstrument: raw.kb_refresh_min_days_between_runs_per_instrument ?? 7,
     runTimeoutMinutes: raw.run_timeout_minutes ?? 30,
     websearchReasoningEffort: effort,
-    websearchAllowedDomains: raw.websearch_allowed_domains || []
+    websearchAllowedDomains: raw.websearch_allowed_domains || [],
+    bulkMinCitations: raw.bulk_min_citations ?? 2,
+    bulkRequirePrimarySource: raw.bulk_require_primary_source ?? true,
+    alternativesMinSimilarityScore: raw.alternatives_min_similarity_score ?? 0.6,
+    extractionEvidenceRequired: raw.extraction_evidence_required ?? true
   }
 }
 
@@ -2511,7 +2579,11 @@ function toConfigPayload(form, domainsRaw) {
     kb_refresh_min_days_between_runs_per_instrument: form.kbRefreshMinDaysBetweenRunsPerInstrument,
     run_timeout_minutes: form.runTimeoutMinutes,
     websearch_reasoning_effort: form.websearchReasoningEffort,
-    websearch_allowed_domains: parseDomains(domainsRaw)
+    websearch_allowed_domains: parseDomains(domainsRaw),
+    bulk_min_citations: form.bulkMinCitations,
+    bulk_require_primary_source: form.bulkRequirePrimarySource,
+    alternatives_min_similarity_score: form.alternativesMinSimilarityScore,
+    extraction_evidence_required: form.extractionEvidenceRequired
   }
 }
 
@@ -2751,6 +2823,12 @@ function statusBadgeClass(status) {
   if (!status) return 'neutral'
   if (['APPROVED', 'APPLIED', 'SUCCEEDED', 'DONE', 'GENERATED', 'EXISTS'].includes(status)) return 'ok'
   if (['FAILED', 'REJECTED', 'FAILED_TIMEOUT', 'CANCELED'].includes(status)) return 'warn'
+  return 'neutral'
+}
+
+function gateBadgeClass(passed) {
+  if (passed === true) return 'ok'
+  if (passed === false) return 'warn'
   return 'neutral'
 }
 

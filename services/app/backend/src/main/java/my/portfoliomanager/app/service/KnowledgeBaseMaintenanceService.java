@@ -206,8 +206,12 @@ public class KnowledgeBaseMaintenanceService {
                                 if (!similarity.passed()) {
                                     error = "similarity_gate_failed";
                                 } else {
-                                    dossier = knowledgeBaseService.approveDossier(dossierId, actor, true);
-                                    knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
+                                    InstrumentDossierResponseDto approved = knowledgeBaseService.approveDossier(dossierId, actor, true);
+                                    if (approved.status() != DossierStatus.APPROVED) {
+                                        error = "dossier_quality_gate_failed";
+                                    } else {
+                                        knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
+                                    }
                                 }
                             }
                             status = KnowledgeBaseAlternativeStatus.GENERATED;

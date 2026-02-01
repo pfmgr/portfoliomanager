@@ -16,14 +16,14 @@ import java.util.regex.Pattern;
 
 @Service
 public class KnowledgeBaseQualityGateService {
-	private static final List<Pattern> REQUIRED_SECTIONS = List.of(
-			Pattern.compile("(?im)^##\\s*quick profile\\b"),
-			Pattern.compile("(?im)^##\\s*classification\\b"),
-			Pattern.compile("(?im)^##\\s*risk\\b"),
-			Pattern.compile("(?im)^##\\s*costs\\s*&\\s*structure\\b"),
-			Pattern.compile("(?im)^##\\s*exposures\\b"),
-			Pattern.compile("(?im)^##\\s*valuation\\s*&\\s*profitability\\b"),
-			Pattern.compile("(?im)^##\\s*sources\\b")
+	private static final List<SectionRequirement> REQUIRED_SECTIONS = List.of(
+			new SectionRequirement("quick_profile", Pattern.compile("(?im)^##\\s*quick profile\\b")),
+			new SectionRequirement("classification", Pattern.compile("(?im)^##\\s*classification\\b")),
+			new SectionRequirement("risk", Pattern.compile("(?im)^##\\s*risk\\b")),
+			new SectionRequirement("costs_structure", Pattern.compile("(?im)^##\\s*costs\\s*&\\s*structure\\b")),
+			new SectionRequirement("exposures", Pattern.compile("(?im)^##\\s*exposures\\b")),
+			new SectionRequirement("valuation_profitability", Pattern.compile("(?im)^##\\s*valuation\\s*&\\s*profitability\\b")),
+			new SectionRequirement("sources", Pattern.compile("(?im)^##\\s*sources\\b"))
 	);
 	private static final List<String> SECONDARY_DOMAINS = List.of(
 			"justetf.com",
@@ -65,9 +65,9 @@ public class KnowledgeBaseQualityGateService {
 				reasons.add("missing_isin_header");
 			}
 		}
-		for (Pattern section : REQUIRED_SECTIONS) {
-			if (!section.matcher(trimmed).find()) {
-				reasons.add("missing_section:" + section.pattern());
+		for (SectionRequirement section : REQUIRED_SECTIONS) {
+			if (!section.pattern().matcher(trimmed).find()) {
+				reasons.add("missing_section:" + section.code());
 			}
 		}
 		List<CitationInfo> parsed = parseCitations(citations);
@@ -247,9 +247,14 @@ public class KnowledgeBaseQualityGateService {
 		if (value == null) {
 			return List.of();
 		}
+		String raw = value.toPlainString();
 		String plain = value.stripTrailingZeros().toPlainString();
 		List<String> tokens = new ArrayList<>();
+		tokens.add(raw.toLowerCase(Locale.ROOT));
 		tokens.add(plain.toLowerCase(Locale.ROOT));
+		if (raw.contains(".")) {
+			tokens.add(raw.replace('.', ',').toLowerCase(Locale.ROOT));
+		}
 		if (plain.contains(".")) {
 			tokens.add(plain.replace('.', ',').toLowerCase(Locale.ROOT));
 		}
@@ -416,5 +421,8 @@ public class KnowledgeBaseQualityGateService {
 	}
 
 	private record CitationInfo(String url, String publisher, String title) {
+	}
+
+	private record SectionRequirement(String code, Pattern pattern) {
 	}
 }

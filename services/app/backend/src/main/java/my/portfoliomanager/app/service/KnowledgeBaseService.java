@@ -832,6 +832,16 @@ public class KnowledgeBaseService {
     }
 
     private InstrumentDossierResponseDto toResponse(InstrumentDossier dossier) {
+        KnowledgeBaseDossierQualityGateDto qualityGate = null;
+        if (qualityGateService != null && dossier != null) {
+            KnowledgeBaseQualityGateService.DossierQualityResult result = qualityGateService.evaluateDossier(
+                    dossier.getIsin(),
+                    dossier.getContentMd(),
+                    dossier.getCitationsJson(),
+                    configService.getSnapshot()
+            );
+            qualityGate = new KnowledgeBaseDossierQualityGateDto(result.passed(), result.reasons());
+        }
         return new InstrumentDossierResponseDto(
                 dossier.getDossierId(),
                 dossier.getIsin(),
@@ -849,11 +859,27 @@ public class KnowledgeBaseService {
                 dossier.getApprovedBy(),
                 dossier.getApprovedAt(),
                 dossier.isAutoApproved(),
-                dossier.getSupersedesId()
+                dossier.getSupersedesId(),
+                qualityGate
         );
     }
 
     private InstrumentDossierExtractionResponseDto toResponse(InstrumentDossierExtraction extraction) {
+        KnowledgeBaseExtractionEvidenceGateDto evidenceGate = null;
+        if (qualityGateService != null && extraction != null) {
+            InstrumentDossier dossier = dossierRepository.findById(extraction.getDossierId()).orElse(null);
+            InstrumentDossierExtractionPayload payload = null;
+            try {
+                payload = parsePayload(extraction.getExtractedJson());
+            } catch (Exception ignored) {
+            }
+            KnowledgeBaseQualityGateService.EvidenceResult result = qualityGateService.evaluateExtractionEvidence(
+                    dossier == null ? null : dossier.getContentMd(),
+                    payload,
+                    configService.getSnapshot()
+            );
+            evidenceGate = new KnowledgeBaseExtractionEvidenceGateDto(result.passed(), result.missingEvidence());
+        }
         return new InstrumentDossierExtractionResponseDto(
                 extraction.getExtractionId(),
                 extraction.getDossierId(),
@@ -868,7 +894,8 @@ public class KnowledgeBaseService {
                 extraction.getApprovedAt(),
                 extraction.getAppliedBy(),
                 extraction.getAppliedAt(),
-                extraction.isAutoApproved()
+                extraction.isAutoApproved(),
+                evidenceGate
         );
     }
 
