@@ -488,6 +488,7 @@
 <script setup>
 import { onMounted, ref, computed } from 'vue'
 import { apiRequest } from '../api'
+import { formatNarrative } from '../utils/narrativeFormat'
 
 const summary = ref(emptySummary())
 const asOf = ref('')
@@ -732,72 +733,6 @@ function layerLabelFromAllocation(item) {
   return layerNames.value[key] || item.label
 }
 
-function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case '&':
-        return '&amp;'
-      case '<':
-        return '&lt;'
-      case '>':
-        return '&gt;'
-      case '"':
-        return '&quot;'
-      case "'":
-        return '&#39;'
-      default:
-        return char
-    }
-  })
-}
-
-function formatInline(value) {
-  const escaped = escapeHtml(value)
-  return escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
-}
-
-function formatNarrative(text) {
-  if (!text) {
-    return ''
-  }
-  const normalized = text.replace(/\r\n/g, '\n')
-  const bulletPrepared = normalized
-    .replace(/:\s*-\s+/g, ':\n- ')
-    .replace(/([^\n]) - (?=\*\*)/g, '$1\n- ')
-  const lines = bulletPrepared.split('\n')
-  let html = ''
-  let listOpen = false
-
-  lines.forEach((rawLine) => {
-    const line = rawLine.trim()
-    if (!line) {
-      if (listOpen) {
-        html += '</ul>'
-        listOpen = false
-      }
-      return
-    }
-    if (line.startsWith('- ')) {
-      if (!listOpen) {
-        html += '<ul>'
-        listOpen = true
-      }
-      html += `<li>${formatInline(line.slice(2))}</li>`
-    } else {
-      if (listOpen) {
-        html += '</ul>'
-        listOpen = false
-      }
-      html += `<p>${formatInline(line)}</p>`
-    }
-  })
-
-  if (listOpen) {
-    html += '</ul>'
-  }
-
-  return html
-}
 
 function formatReasons(reasons) {
   if (!reasons || reasons.length === 0) {

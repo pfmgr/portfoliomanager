@@ -343,7 +343,7 @@ test('navigates across main pages', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Rebalancer History' })).toBeVisible()
 
   await page.goto('/layer-targets')
-  await expect(page.getByRole('heading', { name: 'Layer Targets' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Profile Configuration' })).toBeVisible()
 
   await page.goto('/instruments')
   await expect(page.getByRole('heading', { name: 'Effective Instruments' })).toBeVisible()

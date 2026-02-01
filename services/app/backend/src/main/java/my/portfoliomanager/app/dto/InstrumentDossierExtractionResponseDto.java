@@ -19,6 +19,7 @@ public record InstrumentDossierExtractionResponseDto(
 		LocalDateTime approvedAt,
 		String appliedBy,
 		LocalDateTime appliedAt,
-		boolean autoApproved
+		boolean autoApproved,
+		KnowledgeBaseExtractionEvidenceGateDto evidenceGate
 ) {
 }

@@ -24,6 +24,7 @@ public record InstrumentDossierResponseDto(
 		String approvedBy,
 		LocalDateTime approvedAt,
 		boolean autoApproved,
-		Long supersedesId
+		Long supersedesId,
+		KnowledgeBaseDossierQualityGateDto qualityGate
 ) {
 }

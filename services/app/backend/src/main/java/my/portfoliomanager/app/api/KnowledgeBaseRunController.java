@@ -6,6 +6,7 @@ import my.portfoliomanager.app.domain.KnowledgeBaseRunStatus;
 import my.portfoliomanager.app.dto.KnowledgeBaseRunItemDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseRunPageDto;
 import my.portfoliomanager.app.service.KnowledgeBaseAvailabilityService;
+import my.portfoliomanager.app.service.KnowledgeBaseService;
 import my.portfoliomanager.app.service.KnowledgeBaseRunService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -22,11 +23,14 @@ import java.util.List;
 public class KnowledgeBaseRunController {
 	private final KnowledgeBaseRunService runService;
 	private final KnowledgeBaseAvailabilityService availabilityService;
+	private final KnowledgeBaseService knowledgeBaseService;
 
 	public KnowledgeBaseRunController(KnowledgeBaseRunService runService,
-									  KnowledgeBaseAvailabilityService availabilityService) {
+									  KnowledgeBaseAvailabilityService availabilityService,
+									  KnowledgeBaseService knowledgeBaseService) {
 		this.runService = runService;
 		this.availabilityService = availabilityService;
+		this.knowledgeBaseService = knowledgeBaseService;
 	}
 
 	@GetMapping
@@ -52,7 +56,8 @@ public class KnowledgeBaseRunController {
 				run.getAttempts(),
 				run.getError(),
 				run.getBatchId(),
-				run.getRequestId()
+				run.getRequestId(),
+				knowledgeBaseService.resolveManualApprovalForIsin(run.getIsin())
 		)).toList();
 		int offset = page * size;
 		return new KnowledgeBaseRunPageDto(items, Math.toIntExact(runs.getTotalElements()), size, offset);

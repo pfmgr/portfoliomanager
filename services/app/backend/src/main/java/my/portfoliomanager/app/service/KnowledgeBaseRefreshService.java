@@ -58,11 +58,11 @@ public class KnowledgeBaseRefreshService {
 		runService.markTimedOutRuns(Duration.ofMinutes(config.runTimeoutMinutes()));
 		boolean autoApproveFlag = autoApprove != null ? autoApprove : config.autoApprove();
 		boolean applyOverrides = config.applyExtractionsToOverrides();
-		if (blockedIsins != null && blockedIsins.contains(normalized)) {
-			return new KnowledgeBaseRefreshItemDto(normalized, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "already_running");
-		}
-		return runRefreshForIsin(normalized, autoApproveFlag, applyOverrides, actor, null);
-	}
+        if (blockedIsins != null && blockedIsins.contains(normalized)) {
+            return new KnowledgeBaseRefreshItemDto(normalized, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "already_running", null);
+        }
+        return runRefreshForIsin(normalized, autoApproveFlag, applyOverrides, actor, null);
+    }
 
 	public KnowledgeBaseRefreshBatchResponseDto refreshBatch(KnowledgeBaseRefreshBatchRequestDto request, String actor) {
 		return refreshBatch(request, actor, Set.of());
@@ -104,18 +104,18 @@ public class KnowledgeBaseRefreshService {
 				if (Thread.currentThread().isInterrupted()) {
 					throw new CancellationException("Canceled");
 				}
-				if (blockedIsins != null && blockedIsins.contains(isin)) {
-					items.add(new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "already_running"));
-					skipped++;
-					processed++;
-					continue;
-				}
-				if (dryRun) {
-					items.add(new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "dry_run"));
-					skipped++;
-					processed++;
-					continue;
-				}
+                if (blockedIsins != null && blockedIsins.contains(isin)) {
+                    items.add(new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "already_running", null));
+                    skipped++;
+                    processed++;
+                    continue;
+                }
+                if (dryRun) {
+                    items.add(new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "dry_run", null));
+                    skipped++;
+                    processed++;
+                    continue;
+                }
 				KnowledgeBaseRefreshItemDto item = runRefreshForIsin(isin, config.autoApprove(), config.applyExtractionsToOverrides(),
 						actor, batchId);
 				items.add(item);
@@ -149,12 +149,12 @@ public class KnowledgeBaseRefreshService {
 			throw new CancellationException("Canceled");
 		}
 
-		if (shouldSkipRefresh(isin, config)) {
-			KnowledgeBaseRun skipped = runService.startRun(isin, KnowledgeBaseRunAction.REFRESH, batchId, null);
-			runService.incrementAttempt(skipped);
-			runService.markSkipped(skipped, "Recently refreshed");
-			return new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "recently_refreshed");
-		}
+        if (shouldSkipRefresh(isin, config)) {
+            KnowledgeBaseRun skipped = runService.startRun(isin, KnowledgeBaseRunAction.REFRESH, batchId, null);
+            runService.incrementAttempt(skipped);
+            runService.markSkipped(skipped, "Recently refreshed");
+            return new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "recently_refreshed", null);
+        }
 
 		KnowledgeBaseRun run = runService.startRun(isin, KnowledgeBaseRunAction.REFRESH, batchId, null);
 		runService.incrementAttempt(run);
@@ -165,60 +165,62 @@ public class KnowledgeBaseRefreshService {
 					config.websearchAllowedDomains(),
 					config.dossierMaxChars()
 			);
-			InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
-			if (autoApprove) {
-				dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
-			}
-			runService.markSucceeded(run);
-			KnowledgeBaseBulkResearchItemDto extractionResult = runExtractionFlow(
-					isin, dossier.dossierId(), actor, autoApprove, applyOverrides
-			);
-			return new KnowledgeBaseRefreshItemDto(isin, extractionResult.status(), dossier.dossierId(),
-					extractionResult.extractionId(), extractionResult.error());
-		} catch (CancellationException ex) {
-			runService.markFailed(run, "Canceled");
-			throw ex;
-		} catch (Exception ex) {
-			runService.markFailed(run, ex.getMessage());
-			return new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, null, null,
-					messageOrFallback(ex));
-		}
-	}
+            InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
+            if (autoApprove) {
+                dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
+            }
+            runService.markSucceeded(run);
+            KnowledgeBaseBulkResearchItemDto extractionResult = runExtractionFlow(
+                    isin, dossier.status(), dossier.dossierId(), actor, autoApprove, applyOverrides
+            );
+            return new KnowledgeBaseRefreshItemDto(isin, extractionResult.status(), dossier.dossierId(),
+                    extractionResult.extractionId(), extractionResult.error(), extractionResult.manualApproval());
+        } catch (CancellationException ex) {
+            runService.markFailed(run, "Canceled");
+            throw ex;
+        } catch (Exception ex) {
+            runService.markFailed(run, ex.getMessage());
+            return new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, null, null,
+                    messageOrFallback(ex), null);
+        }
+    }
 
-	private KnowledgeBaseBulkResearchItemDto runExtractionFlow(String isin,
-															   Long dossierId,
-															   String actor,
-															   boolean autoApprove,
-															   boolean applyOverrides) {
-		if (Thread.currentThread().isInterrupted()) {
-			throw new CancellationException("Canceled");
-		}
+    private KnowledgeBaseBulkResearchItemDto runExtractionFlow(String isin,
+                                                               DossierStatus dossierStatus,
+                                                               Long dossierId,
+                                                               String actor,
+                                                               boolean autoApprove,
+                                                               boolean applyOverrides) {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("Canceled");
+        }
 		KnowledgeBaseRun extractRun = runService.startRun(isin, KnowledgeBaseRunAction.EXTRACT, null, null);
 		runService.incrementAttempt(extractRun);
 		try {
-			InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossierId);
-			if (extraction.status() == DossierExtractionStatus.FAILED) {
-				runService.markFailed(extractRun, extraction.error());
-				return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
-						extraction.extractionId(), extraction.error());
-			}
-			Long extractionId = extraction.extractionId();
-			if (autoApprove) {
-				extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
-				extractionId = extraction.extractionId();
-			}
-			runService.markSucceeded(extractRun);
-			return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
-					extractionId, null);
-		} catch (CancellationException ex) {
-			runService.markFailed(extractRun, "Canceled");
-			throw ex;
-		} catch (Exception ex) {
-			runService.markFailed(extractRun, ex.getMessage());
-			return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId, null,
-					messageOrFallback(ex));
-		}
-	}
+            InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossierId);
+            if (extraction.status() == DossierExtractionStatus.FAILED) {
+                runService.markFailed(extractRun, extraction.error());
+                return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
+                        extraction.extractionId(), extraction.error(),
+                        knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status()));
+            }
+            Long extractionId = extraction.extractionId();
+            if (autoApprove) {
+                extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
+                extractionId = extraction.extractionId();
+            }
+            runService.markSucceeded(extractRun);
+            return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
+                    extractionId, null, knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status()));
+        } catch (CancellationException ex) {
+            runService.markFailed(extractRun, "Canceled");
+            throw ex;
+        } catch (Exception ex) {
+            runService.markFailed(extractRun, ex.getMessage());
+            return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId, null,
+                    messageOrFallback(ex), null);
+        }
+    }
 
 	private InstrumentDossierResponseDto createDossierFromDraft(String isin,
 																KnowledgeBaseLlmDossierDraft draft,

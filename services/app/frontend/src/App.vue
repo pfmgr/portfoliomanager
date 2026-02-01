@@ -9,7 +9,7 @@
           <li><RouterLink to="/rebalancer">Rebalancer</RouterLink></li>
           <li><RouterLink to="/rebalancer/history">Rebalancer History</RouterLink></li>
           <li><RouterLink to="/assessor">Assessor</RouterLink></li>
-          <li><RouterLink to="/layer-targets">Layer Targets</RouterLink></li>
+          <li><RouterLink to="/layer-targets">Profile Configuration</RouterLink></li>
           <li><RouterLink to="/instruments">Effective Instruments</RouterLink></li>
           <li><RouterLink to="/knowledge-base">Knowledge Base</RouterLink></li>
           <li><RouterLink to="/savings-plans">Savings plans</RouterLink></li>

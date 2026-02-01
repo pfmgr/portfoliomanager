@@ -20,6 +20,7 @@ public record KnowledgeBaseLlmActionDto(
 		LocalDateTime createdAt,
 		LocalDateTime updatedAt,
 		String message,
+		List<KnowledgeBaseManualApprovalItemDto> manualApprovals,
 		KnowledgeBaseBulkResearchResponseDto bulkResearchResult,
 		KnowledgeBaseAlternativesResponseDto alternativesResult,
 		KnowledgeBaseRefreshBatchResponseDto refreshBatchResult,

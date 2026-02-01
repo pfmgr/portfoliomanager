@@ -12,6 +12,7 @@ import my.portfoliomanager.app.model.LayerTargetEffectiveConfig;
 import my.portfoliomanager.app.model.LayerTargetProfile;
 import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
 import my.portfoliomanager.app.dto.LayerTargetRiskThresholdsDto;
+import my.portfoliomanager.app.service.util.RiskThresholdsUtil;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.jdbc.core.ConnectionCallback;
@@ -38,8 +39,6 @@ public class LayerTargetConfigService {
 	private static final int DEFAULT_MINIMUM_SAVING_PLAN_SIZE = 15;
 	private static final int DEFAULT_MINIMUM_REBALANCING_AMOUNT = 10;
 	private static final int DEFAULT_MAX_SAVING_PLANS_PER_LAYER = 17;
-	private static final int DEFAULT_RISK_LOW_MAX = 30;
-	private static final int DEFAULT_RISK_HIGH_MIN = 51;
 	private static final BigDecimal NORMALIZATION_THRESHOLD = new BigDecimal("1.5");
 	private static final Map<Integer, String> DEFAULT_LAYER_NAMES = Map.of(
 			1, "Global Core",
@@ -348,7 +347,7 @@ public class LayerTargetConfigService {
 			LayerTargetRiskThresholds fallbackThresholds = DEFAULT_PROFILES.containsKey(key)
 					? DEFAULT_PROFILES.get(key).getRiskThresholds()
 					: DEFAULT_PROFILES.get(DEFAULT_PROFILE_KEY).getRiskThresholds();
-			riskThresholds = normalizeRiskThresholds(riskThresholds, fallbackThresholds);
+			riskThresholds = RiskThresholdsUtil.normalize(riskThresholds, fallbackThresholds);
 			profiles.put(key, new LayerTargetProfile(key,
 					displayName,
 					description,
@@ -494,33 +493,6 @@ public class LayerTargetConfigService {
 		return null;
 	}
 
-	private LayerTargetRiskThresholds normalizeRiskThresholds(LayerTargetRiskThresholds thresholds,
-											  LayerTargetRiskThresholds fallback) {
-		Integer lowMax = thresholds == null ? null : thresholds.getLowMax();
-		Integer highMin = thresholds == null ? null : thresholds.getHighMin();
-		Integer fallbackLow = fallback == null ? DEFAULT_RISK_LOW_MAX : fallback.getLowMax();
-		Integer fallbackHigh = fallback == null ? DEFAULT_RISK_HIGH_MIN : fallback.getHighMin();
-		lowMax = normalizeRiskValue(lowMax, fallbackLow);
-		highMin = normalizeRiskValue(highMin, fallbackHigh);
-		if (highMin <= lowMax) {
-			highMin = Math.min(100, lowMax + 1);
-			if (highMin <= lowMax) {
-				lowMax = Math.max(0, highMin - 1);
-			}
-		}
-		return new LayerTargetRiskThresholds(lowMax, highMin);
-	}
-
-	private Integer normalizeRiskValue(Integer value, Integer fallback) {
-		int resolved = value == null ? fallback : value;
-		if (resolved < 0) {
-			return 0;
-		}
-		if (resolved > 100) {
-			return 100;
-		}
-		return resolved;
-	}
 
 	private Map<String, LayerTargetProfile> applyRiskThresholdUpdates(
 			Map<String, LayerTargetProfile> profiles,
@@ -539,7 +511,7 @@ public class LayerTargetConfigService {
 				return;
 			}
 			LayerTargetRiskThresholds fallback = profile.getRiskThresholds();
-			LayerTargetRiskThresholds normalized = normalizeRiskThresholds(
+			LayerTargetRiskThresholds normalized = RiskThresholdsUtil.normalize(
 					new LayerTargetRiskThresholds(value.lowMax(), value.highMin()),
 					fallback
 			);

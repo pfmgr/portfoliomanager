@@ -145,7 +145,7 @@ Important: All unknown instruments should remain `layer=5` until explicitly clas
 - Five rebalancer profiles (Classic → Opportunity) live in `services/app/backend/src/main/resources/layer_targets.json`. Each includes layer targets, an acceptable variance (default 3%), a minimum saving plan size (integer EUR, default 15), a minimum rebalancing amount (integer EUR, default 10), max saving plans per layer (default 17), and constraint thresholds (core minimum, layer 4/5 caps) so the rebalancer can warn about violations even before tolerance checks.
 - The `layer_target_config` table stores a single row (`id=1`). `LayerTargetConfigService` and Liquibase ensure the JSON supports the new schema plus backwards compatibility for legacy `{layer_targets, acceptable_variance_pct}` payloads. The service feeds `LayerTargetEffectiveConfig` to the rebalancer, merges custom overrides when enabled, and exposes `LayerTargetConfigResponseDto` to the UI.
 - API endpoints: `GET /api/layer-targets`, `PUT /api/layer-targets`, `POST /api/layer-targets/reset`. They supply/accept the active profile key, profile display metadata, effective layer targets, variance, layer name mapping, and custom override flags. Liquibase handles default inserts for Postgres, migrating legacy configs into the new shape.
-- The Vue UI (`LayerTargetsView.vue`) renders the “Rebalancer Profile” panel + new layer target table using the API response. It lets you switch profiles, enable overrides, edit per-layer weights (0–1), variance, minimum saving plan size, minimum rebalancing amount, and max saving plans per layer, and see delta warnings alongside layer names (Global Core, Core-Plus, Themes, Individual Stocks, Unclassified). Overridden weights flow back into the rebalancer narrative so the LLM and summaries always describe the actual profile in play.
+- The Vue UI (`ProfileConfigurationView.vue`) renders the “Rebalancer Profile” panel + new layer target table using the API response. It lets you switch profiles, enable overrides, edit per-layer weights (0–1), variance, minimum saving plan size, minimum rebalancing amount, and max saving plans per layer, and see delta warnings alongside layer names (Global Core, Core-Plus, Themes, Individual Stocks, Unclassified). Overridden weights flow back into the rebalancer narrative so the LLM and summaries always describe the actual profile in play.
 
 ---
 
@@ -272,7 +272,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - **Layer targets config UI**:
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/LayerTargetConfigController.java`
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/LayerTargetConfigService.java`
-  - `services/app/frontend/src/views/LayerTargetsView.vue`
+  - `services/app/frontend/src/views/ProfileConfigurationView.vue`
 - `services/app/backend/src/main/resources/layer_targets.json` (targets config defaults)
   - `services/app/backend/src/main/resources/db/changelog/db.changelog-master.yaml` (schema incl. advisor_runs)
 
@@ -406,6 +406,9 @@ Findings (3-10):
 - Async KB LLM job failures surface `Error ref KB-XXXXXXXX` in UI; logs include the same ref for troubleshooting.
 - OpenAI client timeouts are configurable via `app.llm.openai.connect-timeout-seconds` and `app.llm.openai.read-timeout-seconds`.
 - Bulk research parallelism uses `max_parallel_bulk_batches` in KB settings (default 2).
+- Quality gate profiles are stored in `kb_config.quality_gate_profiles` and seeded from `services/app/backend/src/main/resources/kb_quality_gate_profiles.json`.
+- Evidence gates always select rules by category (FUND/EQUITY/REIT/UNKNOWN). Default category mapping follows the active layer-target profile; custom overrides only apply when enabled and saved for that profile.
+- REIT exception: detected REIT instruments always use REIT evidence rules, regardless of layer mapping.
 
 ### Automatic application
 If you change UI files or observe UI issues, run this review and add the output to the PR description or commit/review log.
@@ -413,3 +416,23 @@ If you change UI files or observe UI issues, run this review and add the output 
 ### Rebalancer instrument proposals
 - Instrument-level saving plan proposals are gated by `app.kb.enabled` and the latest `knowledge_base_extractions` status (`COMPLETE`). When gating fails, rebalancer responses include missing ISINs and no instrument-level proposals.
 - `instrument_dossier_extractions` are synced into `knowledge_base_extractions` on extraction run/approve/apply.
+
+---
+
+## 15) Security & Critical Review (mandatory)
+
+- Every change must include a brief critical review covering: security weaknesses, data leaks, injection vectors, and code duplication.
+- Review output must be recorded in the PR description or commit/review log (short list of findings + severity + recommended actions).
+- Always run tests after hardening changes: backend Junit, frontend Vitest, frontend E2E (see test commands above).
+
+### LLM Prompt Minimization Review (required)
+- Prompt templates defined in Java classes MUST be reviewed for need-to-know data before external LLM calls.
+- Allowed in prompts: ISINs, instrument names, absolute and relative amounts (when needed for explanations).
+- Disallowed in prompts: user identifiers (depot IDs, account IDs, usernames, tokens, emails, addresses, phone numbers).
+- Policy applies only to external LLM providers.
+  - External is true when `app.llm.external-provider=true` OR the provider is enabled and the base URL is not localhost (combined A/B rule).
+- If a prompt contains disallowed data, the external LLM call must be skipped (fallback narrative or error).
+
+### Lombok Usage Review (optional)
+- Evaluate Lombok only for plain model/POJO classes to reduce boilerplate.
+- Do NOT use Lombok on JPA entities (risk of Equals/HashCode pitfalls).

@@ -3,7 +3,9 @@ package my.portfoliomanager.app.dto;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.Getter;
 
+@Getter
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class SavingPlanProposalLayerDto {
 	private final Integer layer;
@@ -31,31 +33,4 @@ public class SavingPlanProposalLayerDto {
 		this.deltaEur = deltaEur;
 	}
 
-	public Integer getLayer() {
-		return layer;
-	}
-
-	public String getLayerName() {
-		return layerName;
-	}
-
-	public Double getCurrentAmountEur() {
-		return currentAmountEur;
-	}
-
-	public Double getCurrentWeightPct() {
-		return currentWeightPct;
-	}
-
-	public Double getTargetWeightPct() {
-		return targetWeightPct;
-	}
-
-	public Double getTargetAmountEur() {
-		return targetAmountEur;
-	}
-
-	public Double getDeltaEur() {
-		return deltaEur;
-	}
 }

@@ -15,6 +15,7 @@ public record KnowledgeBaseRunItemDto(
 		Integer attempts,
 		String error,
 		String batchId,
-		String requestId
+		String requestId,
+		KnowledgeBaseManualApprovalDto manualApproval
 ) {
 }

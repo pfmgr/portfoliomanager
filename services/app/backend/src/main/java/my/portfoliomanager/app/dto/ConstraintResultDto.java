@@ -2,7 +2,9 @@ package my.portfoliomanager.app.dto;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.Getter;
 
+@Getter
 public class ConstraintResultDto {
 	private final String name;
 	private final boolean ok;
@@ -17,15 +19,4 @@ public class ConstraintResultDto {
 		this.details = details;
 	}
 
-	public String getName() {
-		return name;
-	}
-
-	public boolean isOk() {
-		return ok;
-	}
-
-	public String getDetails() {
-		return details;
-	}
 }

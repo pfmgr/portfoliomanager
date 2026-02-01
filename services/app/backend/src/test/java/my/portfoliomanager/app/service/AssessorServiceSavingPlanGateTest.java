@@ -9,7 +9,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AssessorServiceSavingPlanGateTest {
-	private final AssessorService service = new AssessorService(null, null, null, null, null, null, null, null, new SavingPlanDeltaAllocator());
+	private final AssessorService service = new AssessorService(null, null, null, null, null, null, null, null, new SavingPlanDeltaAllocator(), null);
 	private final SavingPlanDeltaAllocator allocator = new SavingPlanDeltaAllocator();
 
 	@Test

@@ -15,6 +15,7 @@ import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmDossierDraft;
 import my.portfoliomanager.app.repository.InstrumentDossierRepository;
 import my.portfoliomanager.app.repository.KnowledgeBaseAlternativeRepository;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -44,19 +45,28 @@ public class KnowledgeBaseMaintenanceService {
     private final KnowledgeBaseRunService runService;
     private final InstrumentDossierRepository dossierRepository;
     private final KnowledgeBaseAlternativeRepository alternativeRepository;
+    private final KnowledgeBaseExtractionService knowledgeBaseExtractionService;
+    private final KnowledgeBaseQualityGateService qualityGateService;
+    private final ObjectMapper objectMapper;
 
     public KnowledgeBaseMaintenanceService(KnowledgeBaseConfigService configService,
                                            KnowledgeBaseLlmClient llmClient,
                                            KnowledgeBaseService knowledgeBaseService,
                                            KnowledgeBaseRunService runService,
                                            InstrumentDossierRepository dossierRepository,
-                                           KnowledgeBaseAlternativeRepository alternativeRepository) {
+                                           KnowledgeBaseAlternativeRepository alternativeRepository,
+                                           KnowledgeBaseExtractionService knowledgeBaseExtractionService,
+                                           KnowledgeBaseQualityGateService qualityGateService,
+                                           ObjectMapper objectMapper) {
         this.configService = configService;
         this.llmClient = llmClient;
         this.knowledgeBaseService = knowledgeBaseService;
         this.runService = runService;
         this.dossierRepository = dossierRepository;
         this.alternativeRepository = alternativeRepository;
+        this.knowledgeBaseExtractionService = knowledgeBaseExtractionService;
+        this.qualityGateService = qualityGateService;
+        this.objectMapper = objectMapper;
     }
 
     public KnowledgeBaseBulkResearchResponseDto bulkResearch(List<String> isins,
@@ -144,6 +154,8 @@ public class KnowledgeBaseMaintenanceService {
                 Long dossierId = null;
                 Long extractionId = null;
                 String error = null;
+                InstrumentDossierResponseDto dossier = null;
+                ExtractionFlowResult extractionResult = null;
 
                 KnowledgeBaseRun dossierRun = runService.startRun(item.isin(), KnowledgeBaseRunAction.BULK_CREATE, null, null);
                 runService.incrementAttempt(dossierRun);
@@ -160,7 +172,8 @@ public class KnowledgeBaseMaintenanceService {
                             status,
                             dossierId,
                             extractionId,
-                            error
+                            error,
+                            null
                     ));
                     continue;
                 }
@@ -178,19 +191,35 @@ public class KnowledgeBaseMaintenanceService {
                                 config.websearchAllowedDomains(),
                                 config.dossierMaxChars()
                         );
-                        InstrumentDossierResponseDto dossier = createDossierFromDraft(item.isin(), dossierDraft, actor, DossierStatus.PENDING_REVIEW);
+                        dossier = createDossierFromDraft(item.isin(), dossierDraft, actor, DossierStatus.PENDING_REVIEW);
                         dossierId = dossier.dossierId();
-                        if (autoApproveFlag) {
-                            dossier = knowledgeBaseService.approveDossier(dossierId, actor, true);
-                        }
-                        KnowledgeBaseBulkResearchItemDto extractionResult = runExtractionFlow(
-                                item.isin(), dossierId, actor, autoApproveFlag, applyOverrides
+                        boolean requestedAutoApprove = autoApproveFlag;
+                        extractionResult = runExtractionFlow(
+                                item.isin(), dossier.status(), dossierId, actor, false, applyOverrides
                         );
-                        extractionId = extractionResult.extractionId();
-                        if (extractionResult.status() == KnowledgeBaseBulkResearchItemStatus.FAILED) {
+                        KnowledgeBaseBulkResearchItemDto extractionItem = extractionResult.item();
+                        extractionId = extractionItem.extractionId();
+                        if (extractionItem.status() == KnowledgeBaseBulkResearchItemStatus.FAILED) {
                             status = KnowledgeBaseAlternativeStatus.FAILED;
-                            error = extractionResult.error();
+                            error = extractionItem.error();
                         } else {
+                            if (requestedAutoApprove) {
+                                KnowledgeBaseQualityGateService.SimilarityResult similarity =
+                                        evaluateAlternativeSimilarity(normalizedBase, extractionResult.payload(), config);
+                                if (!similarity.passed()) {
+                                    error = "similarity_gate_failed";
+                                } else {
+                                    InstrumentDossierResponseDto approved = knowledgeBaseService.approveDossier(dossierId, actor, true);
+                                    dossier = approved;
+                                    if (approved.status() != DossierStatus.APPROVED) {
+                                        error = "dossier_quality_gate_failed";
+                                    } else {
+                                        InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService
+                                                .approveExtraction(extractionId, actor, true, applyOverrides);
+                                        extractionResult = new ExtractionFlowResult(extractionItem, extractionResult.payload(), extraction);
+                                    }
+                                }
+                            }
                             status = KnowledgeBaseAlternativeStatus.GENERATED;
                         }
                         alternative.setStatus(status);
@@ -208,6 +237,18 @@ public class KnowledgeBaseMaintenanceService {
                     }
                 }
 
+                KnowledgeBaseManualApprovalDto manualApproval = null;
+                if (dossier != null || extractionResult != null) {
+                    manualApproval = knowledgeBaseService.resolveManualApproval(
+                            dossier == null ? null : dossier.status(),
+                            extractionResult == null || extractionResult.extraction() == null
+                                    ? null
+                                    : extractionResult.extraction().status()
+                    );
+                }
+                if (manualApproval == null) {
+                    manualApproval = knowledgeBaseService.resolveManualApprovalForIsin(item.isin());
+                }
                 responseItems.add(new KnowledgeBaseAlternativeItemDto(
                         item.isin(),
                         item.rationale(),
@@ -215,7 +256,8 @@ public class KnowledgeBaseMaintenanceService {
                         status,
                         dossierId,
                         extractionId,
-                        error
+                        error,
+                        manualApproval
                 ));
             }
             runService.markSucceeded(baseRun);
@@ -229,11 +271,12 @@ public class KnowledgeBaseMaintenanceService {
         return new KnowledgeBaseAlternativesResponseDto(normalizedBase, responseItems);
     }
 
-    private KnowledgeBaseBulkResearchItemDto runExtractionFlow(String isin,
-                                                               Long dossierId,
-                                                               String actor,
-                                                               boolean autoApprove,
-                                                               boolean applyOverrides) {
+    private ExtractionFlowResult runExtractionFlow(String isin,
+                                                   DossierStatus dossierStatus,
+                                                   Long dossierId,
+                                                   String actor,
+                                                   boolean autoApprove,
+                                                   boolean applyOverrides) {
         if (Thread.currentThread().isInterrupted()) {
             throw new CancellationException("Canceled");
         }
@@ -243,24 +286,39 @@ public class KnowledgeBaseMaintenanceService {
             InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossierId);
             if (extraction.status() == DossierExtractionStatus.FAILED) {
                 runService.markFailed(extractRun, extraction.error());
-                return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
-                        extraction.extractionId(), extraction.error());
+                KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
+                return new ExtractionFlowResult(
+                        new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
+                                extraction.extractionId(), extraction.error(), manualApproval),
+                        null,
+                        extraction
+                );
             }
             Long extractionId = extraction.extractionId();
+            InstrumentDossierExtractionPayload payload = parseExtractionPayload(extraction.extractedJson());
             if (autoApprove) {
                 extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
                 extractionId = extraction.extractionId();
             }
             runService.markSucceeded(extractRun);
-            return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
-                    extractionId, null);
+            KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
+            return new ExtractionFlowResult(
+                    new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
+                            extractionId, null, manualApproval),
+                    payload,
+                    extraction
+            );
         } catch (CancellationException ex) {
             runService.markFailed(extractRun, "Canceled");
             throw ex;
         } catch (Exception ex) {
             runService.markFailed(extractRun, ex.getMessage());
-            return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId, null,
-                    messageOrFallback(ex));
+            return new ExtractionFlowResult(
+                    new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId, null,
+                            messageOrFallback(ex), null),
+                    null,
+                    null
+            );
         }
     }
 
@@ -292,13 +350,21 @@ public class KnowledgeBaseMaintenanceService {
                 logger.info("Generated draft for ISIN {}",isin);
                 InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
                 logger.info("Created dossier from draft for ISIN {}",isin);
-                if (autoApproveFlag) {
+                boolean localAutoApprove = autoApproveFlag;
+                if (localAutoApprove) {
                     dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
-                    logger.info("Auto-Approved dossier for ISIN {}",isin);
+                    if (dossier.status() == DossierStatus.APPROVED) {
+                        logger.info("Auto-Approved dossier for ISIN {}",isin);
+                    } else {
+                        logger.info("Auto-approve dossier gate blocked for ISIN {}", isin);
+                        localAutoApprove = false;
+                    }
                 }
                 runService.markSucceeded(dossierRun);
 
-                KnowledgeBaseBulkResearchItemDto extractionItem = runExtractionFlow(isin, dossier.dossierId(), actor, autoApproveFlag, applyOverrides);
+                ExtractionFlowResult extractionResult = runExtractionFlow(isin, dossier.status(), dossier.dossierId(), actor,
+                        localAutoApprove, applyOverrides);
+                KnowledgeBaseBulkResearchItemDto extractionItem = extractionResult.item();
                 if (extractionItem.status() == KnowledgeBaseBulkResearchItemStatus.FAILED) {
                     logger.info("Dossier extraction for ISIN {} failed",isin);
                     failed++;
@@ -313,7 +379,7 @@ public class KnowledgeBaseMaintenanceService {
             } catch (Exception ex) {
                 runService.markFailed(dossierRun, ex.getMessage());
                 items.add(new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, null, null,
-                        messageOrFallback(ex)));
+                        messageOrFallback(ex), null));
                 failed++;
             }
         }
@@ -334,6 +400,29 @@ public class KnowledgeBaseMaintenanceService {
         return new KnowledgeBaseBulkResearchResponseDto(total, succeeded, skipped, failed, items);
     }
 
+    private KnowledgeBaseQualityGateService.SimilarityResult evaluateAlternativeSimilarity(
+            String baseIsin,
+            InstrumentDossierExtractionPayload alternativePayload,
+            KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config) {
+        InstrumentDossierExtractionPayload basePayload = knowledgeBaseExtractionService.findPayload(baseIsin);
+        if (basePayload == null || alternativePayload == null) {
+            return new KnowledgeBaseQualityGateService.SimilarityResult(false, 0.0, List.of("missing_similarity_payload"));
+        }
+        double threshold = config == null ? 0.6 : config.alternativesMinSimilarityScore();
+        return qualityGateService.evaluateSimilarity(basePayload, alternativePayload, threshold);
+    }
+
+    private InstrumentDossierExtractionPayload parseExtractionPayload(JsonNode extractedJson) {
+        if (extractedJson == null || extractedJson.isNull()) {
+            return null;
+        }
+        try {
+            return objectMapper.treeToValue(extractedJson, InstrumentDossierExtractionPayload.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
     private List<List<String>> partition(List<String> values, int batchSize) {
         if (values == null || values.isEmpty()) {
             return List.of();
@@ -351,6 +440,13 @@ public class KnowledgeBaseMaintenanceService {
             int succeeded,
             int skipped,
             int failed
+    ) {
+    }
+
+    private record ExtractionFlowResult(
+            KnowledgeBaseBulkResearchItemDto item,
+            InstrumentDossierExtractionPayload payload,
+            InstrumentDossierExtractionResponseDto extraction
     ) {
     }
 

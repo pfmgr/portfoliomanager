@@ -52,6 +52,7 @@ public class AdvisorService {
 	private final boolean llmEnabled;
 	private final InstrumentRebalanceService instrumentRebalanceService;
 	private final LayerTargetConfigService layerTargetConfigService;
+	private final LlmPromptPolicy llmPromptPolicy;
 	private volatile Boolean isPostgres;
 	private static final String ADVISOR_RUN_INSERT_SQL = """
 			insert into advisor_runs (as_of_date, depot_scope, summary_json, narrative_md, warnings)
@@ -63,15 +64,17 @@ public class AdvisorService {
 			""";
 
 	public AdvisorService(JdbcTemplate jdbcTemplate,
-						  LlmNarrativeService llmNarrativeService,
-						  InstrumentRebalanceService instrumentRebalanceService,
-						  LayerTargetConfigService layerTargetConfigService) {
+					  LlmNarrativeService llmNarrativeService,
+					  InstrumentRebalanceService instrumentRebalanceService,
+					  LayerTargetConfigService layerTargetConfigService,
+					  LlmPromptPolicy llmPromptPolicy) {
 		this.jdbcTemplate = jdbcTemplate;
 		this.summaryMapper = new ObjectMapper();
 		this.llmNarrativeService = llmNarrativeService;
 		this.llmEnabled = llmNarrativeService != null && llmNarrativeService.isEnabled();
 		this.instrumentRebalanceService = instrumentRebalanceService;
 		this.layerTargetConfigService = layerTargetConfigService;
+		this.llmPromptPolicy = llmPromptPolicy;
 	}
 
 	public AdvisorSummaryDto summary(LocalDate asOf) {
@@ -606,6 +609,12 @@ public class AdvisorService {
 				constraints, minimumSavingPlanRebalanced, minimumSavingPlanIncreaseLayerOne, minimumSavingPlanSize, proposedLayerOneAmount,
 				instrumentDiscards, instrumentProposals, instrumentWeightingSummaries, minimumRebalancingApplied,
 				minimumRebalancingAmount, minimumRebalancingLayers);
+		prompt = llmPromptPolicy == null
+				? prompt
+				: llmPromptPolicy.validatePrompt(prompt, LlmPromptPurpose.REBALANCER_NARRATIVE);
+		if (prompt == null) {
+			return null;
+		}
 		return llmNarrativeService.suggestSavingPlanNarrative(prompt);
 	}
 

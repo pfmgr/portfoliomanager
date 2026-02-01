@@ -5,6 +5,7 @@ public record KnowledgeBaseRefreshItemDto(
 		KnowledgeBaseBulkResearchItemStatus status,
 		Long dossierId,
 		Long extractionId,
-		String error
+		String error,
+		KnowledgeBaseManualApprovalDto manualApproval
 ) {
 }

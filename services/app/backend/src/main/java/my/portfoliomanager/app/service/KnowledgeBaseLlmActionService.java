@@ -12,6 +12,7 @@ import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionStatus;
 import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionTrigger;
 import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionType;
+import my.portfoliomanager.app.dto.KnowledgeBaseManualApprovalItemDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseRefreshBatchRequestDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseRefreshBatchResponseDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseRefreshItemDto;
@@ -486,7 +487,8 @@ public class KnowledgeBaseLlmActionService {
 						KnowledgeBaseBulkResearchItemStatus.SKIPPED,
 						null,
 						null,
-						"already_running"
+						"already_running",
+						null
 				));
 			}
 		}
@@ -529,6 +531,7 @@ public class KnowledgeBaseLlmActionService {
 	}
 
 	private KnowledgeBaseLlmActionDto toDto(LlmActionState state, boolean includeResults) {
+		List<KnowledgeBaseManualApprovalItemDto> manualApprovals = knowledgeBaseService.resolveManualApprovals(state.isins);
 		return new KnowledgeBaseLlmActionDto(
 				state.actionId,
 				state.type,
@@ -538,6 +541,7 @@ public class KnowledgeBaseLlmActionService {
 				state.createdAt,
 				state.updatedAt,
 				state.message,
+				manualApprovals,
 				includeResults ? state.bulkResearchResult : null,
 				includeResults ? state.alternativesResult : null,
 				includeResults ? state.refreshBatchResult : null,

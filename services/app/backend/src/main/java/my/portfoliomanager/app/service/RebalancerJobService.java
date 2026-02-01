@@ -127,8 +127,16 @@ public class RebalancerJobService {
 	private String failWithReference(JobState job, Exception ex) {
 		String message = ex == null ? null : ex.getMessage();
 		String reference = "RB-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase(Locale.ROOT);
-		logger.error("Rebalancer job failed (ref={}, jobId={}, error={})", reference, job.jobId, message, ex);
+		logger.error("Rebalancer job failed (ref={}, jobId={}, request={}, error={})",
+				reference, job.jobId, formatRequest(job.request), message, ex);
 		return "Error ref " + reference;
+	}
+
+	private String formatRequest(RebalancerRunRequestDto request) {
+		if (request == null) {
+			return "{}";
+		}
+		return "{asOf=" + request.asOf() + ", saveRun=" + request.saveRun() + "}";
 	}
 
 	private static final class JobState {
