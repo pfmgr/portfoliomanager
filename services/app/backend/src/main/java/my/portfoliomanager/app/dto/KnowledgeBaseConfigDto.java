@@ -27,6 +27,7 @@ public record KnowledgeBaseConfigDto(
 		@JsonProperty("bulk_min_citations") Integer bulkMinCitations,
 		@JsonProperty("bulk_require_primary_source") Boolean bulkRequirePrimarySource,
 		@JsonProperty("alternatives_min_similarity_score") Double alternativesMinSimilarityScore,
-		@JsonProperty("extraction_evidence_required") Boolean extractionEvidenceRequired
+		@JsonProperty("extraction_evidence_required") Boolean extractionEvidenceRequired,
+		@JsonProperty("quality_gate_profiles") KnowledgeBaseQualityGateConfigDto qualityGateProfiles
 ) {
 }

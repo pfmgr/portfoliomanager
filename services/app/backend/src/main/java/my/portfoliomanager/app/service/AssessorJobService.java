@@ -107,8 +107,27 @@ public class AssessorJobService {
 	private String failWithReference(JobState job, Exception ex) {
 		String message = ex == null ? null : ex.getMessage();
 		String reference = "AS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase(Locale.ROOT);
-		logger.error("Assessor job failed (ref={}, jobId={}, error={})", reference, job.jobId, message, ex);
+		logger.error("Assessor job failed (ref={}, jobId={}, request={}, error={})",
+				reference, job.jobId, formatRequest(job.request), message, ex);
 		return "Error ref " + reference;
+	}
+
+	private String formatRequest(AssessorRunRequestDto request) {
+		if (request == null) {
+			return "{}";
+		}
+		int depotCount = request.depotScope() == null ? 0 : request.depotScope().size();
+		int instrumentCount = request.instruments() == null ? 0 : request.instruments().size();
+		return "{profile=" + request.profile()
+				+ ", assessmentType=" + request.assessmentType()
+				+ ", savingPlanAmountDeltaEur=" + request.savingPlanAmountDeltaEur()
+				+ ", oneTimeAmountEur=" + request.oneTimeAmountEur()
+				+ ", minimumInstrumentAmountEur=" + request.minimumInstrumentAmountEur()
+				+ ", depotScopeCount=" + depotCount
+				+ ", instrumentCount=" + instrumentCount
+				+ ", instrumentAmountEur=" + request.instrumentAmountEur()
+				+ ", gapDetectionPolicy=" + request.gapDetectionPolicy()
+				+ "}";
 	}
 
 	private static final class JobState {

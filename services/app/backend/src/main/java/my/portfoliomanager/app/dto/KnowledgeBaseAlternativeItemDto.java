@@ -10,6 +10,7 @@ public record KnowledgeBaseAlternativeItemDto(
 		KnowledgeBaseAlternativeStatus status,
 		Long dossierId,
 		Long extractionId,
-		String error
+		String error,
+		KnowledgeBaseManualApprovalDto manualApproval
 ) {
 }

@@ -124,7 +124,8 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 				2,
 				true,
 				0.6,
-				true
+				true,
+				null
 		);
 	}
 }

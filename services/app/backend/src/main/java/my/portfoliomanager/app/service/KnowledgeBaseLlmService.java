@@ -1297,27 +1297,30 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		String trimmedContext = context == null ? "" : context.trim();
 		StringBuilder prompt = new StringBuilder();
 		prompt.append("""
-                You are a research assistant for financial instruments (securities). For the provided ISIN, create a dossier in English.
-                
-                Requirements:
-                - Use web research (web_search) to find reliable primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages; optionally justETF or similar as a secondary source).
-                - For single stocks/REITs, market-data sources are acceptable and required for valuation metrics (price, P/E, P/B, market cap, EPS history) when issuer pages do not list them. Do not omit valuation metrics just because they are not on issuer pages.
-                - Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
-                - Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
-                - Include the research date (%s) and, if available, the “data as of” date for key metrics (factsheet date, holdings date).
-                - Only add verified information to the dossier.
-                - No financial advice; informational only.
-                
-                
-                Output format:
-                Return a single JSON object with:
-                - contentMd: string (Markdown dossier)
-                - displayName: string (instrument name)
-                - citations: JSON array of {id,title,url,publisher,accessed_at} with valid URLs
-                
-                
-                The Markdown dossier must follow:
-                # <ISIN> — <Name>
+				You are a research assistant for financial instruments (securities). For the provided ISIN, create a dossier in English.
+				
+				Requirements:
+				- Use web research (web_search) and prefer reliable primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages).
+				- For ETFs/funds, primary sources are required when available. For single stocks/REITs, reputable market-data sources (exchange, regulator, finance portals) are acceptable when issuer pages do not list key metrics.
+				- Secondary sources (e.g., justETF/ETF.com) are acceptable when primary sources are unavailable for the instrument type.
+				- Do not fail solely because primary sources are unavailable; if the instrument type cannot be confirmed, proceed with secondary sources and mark instrument_type as unknown.
+				- For single stocks/REITs, market-data sources are acceptable and required for valuation metrics (price, P/E, P/B, market cap, EPS history) when issuer pages do not list them. Do not omit valuation metrics just because they are not on issuer pages.
+				- Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
+				- Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
+				- Include the research date (%s) and, if available, the “data as of” date for key metrics (factsheet date, holdings date).
+				- Only add verified information to the dossier.
+				- No financial advice; informational only.
+				
+				
+				Output format:
+				Return a single JSON object with:
+				- contentMd: string (Markdown dossier)
+				- displayName: string (instrument name)
+				- citations: JSON array of {id,title,url,publisher,accessed_at} with valid URLs
+				
+				
+				The Markdown dossier must follow:
+				# <ISIN> — <Name>
                 ## Quick profile (table)
                 ## Classification (instrument type, asset class, subclass, suggested layer per Core/Satellite)
                 ## Risk (SRI and notes)
@@ -1433,11 +1436,12 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				You are a research assistant for financial instruments (securities). For the provided ISIN, identify suitable alternative instruments (ETFs or equities) with similar exposure or purpose.
 
 				Requirements:
-				- Use web research (web_search) to find reliable primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages).
+				- Use web research (web_search) and prefer primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages).
+				- If primary sources are not available, you may use reliable secondary sources (e.g., justETF, ETF.com, exchange/market-data portals) but still provide citations.
 				- Provide citations: every alternative must include sources backing the rationale.
 				- Do not invent data. If something cannot be verified, exclude the alternative.
 				- Do not return the original ISIN as an alternative.
-				- Return 3 to 6 alternatives when possible.
+				- Return 3 to 6 alternatives when possible; if fewer are available, return the best available alternatives instead of an empty list.
 				- Include the research date (%s).
 
 				Output format:

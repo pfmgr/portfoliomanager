@@ -576,7 +576,8 @@ class KnowledgeBaseLlmServiceTest {
 				2,
 				true,
 				0.6,
-				true
+				true,
+				null
 		);
 	}
 }

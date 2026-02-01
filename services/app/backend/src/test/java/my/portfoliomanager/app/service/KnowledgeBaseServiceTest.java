@@ -220,7 +220,8 @@ class KnowledgeBaseServiceTest {
 				current.bulkMinCitations(),
 				current.bulkRequirePrimarySource(),
 				current.alternativesMinSimilarityScore(),
-				current.extractionEvidenceRequired()
+				current.extractionEvidenceRequired(),
+				current.qualityGateProfiles()
 		);
 		configService.updateConfig(updated);
 

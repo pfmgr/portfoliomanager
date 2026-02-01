@@ -582,6 +582,7 @@
                   </th>
                   <th scope="col">Dossier ID</th>
                   <th scope="col">Extraction ID</th>
+                  <th scope="col">Manual approval</th>
                   <th scope="col">Error</th>
                 </tr>
               </thead>
@@ -591,6 +592,7 @@
                   <td>{{ item.status }}</td>
                   <td>{{ item.dossierId ?? '-' }}</td>
                   <td>{{ item.extractionId ?? '-' }}</td>
+                  <td>{{ formatManualApproval(item.manualApproval) }}</td>
                   <td>{{ item.error || '-' }}</td>
                 </tr>
               </tbody>
@@ -681,6 +683,7 @@
                       <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(alternativesSort, 'status') }}</span>
                     </button>
                   </th>
+                  <th scope="col">Manual approval</th>
                   <th scope="col">Rationale</th>
                   <th scope="col">Sources</th>
                   <th scope="col">Error</th>
@@ -701,6 +704,7 @@
                   <td>
                     <span :class="['badge', statusBadgeClass(item.status)]">{{ item.status }}</span>
                   </td>
+                  <td>{{ formatManualApproval(item.manualApproval) }}</td>
                   <td>
                     <details v-if="shouldUseDetails(item.rationale)" class="kb-details">
                       <summary>{{ summarizeText(item.rationale) }}</summary>
@@ -899,16 +903,17 @@
                   </button>
                 </th>
                 <th scope="col">ISINs</th>
+                <th scope="col">Manual approvals</th>
                 <th scope="col">Message</th>
                 <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="llmActionsLoading">
-                <td colspan="8">Loading LLM actions...</td>
+                <td colspan="9">Loading LLM actions...</td>
               </tr>
               <tr v-else-if="llmActionRows.length === 0">
-                <td colspan="8">No actions yet.</td>
+                <td colspan="9">No actions yet.</td>
               </tr>
               <tr v-else v-for="action in llmActionRows" :key="action.actionId">
                 <th scope="row">{{ action.createdAt ? formatDate(action.createdAt) : '-' }}</th>
@@ -924,6 +929,13 @@
                     <p>{{ formatIsinList(action.isins) }}</p>
                   </details>
                   <span v-else>{{ formatIsinList(action.isins) }}</span>
+                </td>
+                <td>
+                  <details v-if="shouldUseDetails(formatManualApprovals(action.manualApprovals))" class="kb-details">
+                    <summary>{{ summarizeText(formatManualApprovals(action.manualApprovals)) }}</summary>
+                    <p>{{ formatManualApprovals(action.manualApprovals) }}</p>
+                  </details>
+                  <span v-else>{{ formatManualApprovals(action.manualApprovals) }}</span>
                 </td>
                 <td>
                   <details v-if="shouldUseDetails(action.message)" class="kb-details">
@@ -1028,6 +1040,7 @@
                     Status <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(runsSort, 'status') }}</span>
                   </button>
                 </th>
+                <th scope="col">Manual approval</th>
                 <th scope="col">Attempts</th>
                 <th scope="col">Error</th>
                 <th scope="col">Batch</th>
@@ -1035,10 +1048,10 @@
             </thead>
             <tbody>
               <tr v-if="runsLoading">
-                <td colspan="7">Loading runs...</td>
+                <td colspan="8">Loading runs...</td>
               </tr>
               <tr v-else-if="runsItems.length === 0">
-                <td colspan="7">No runs found.</td>
+                <td colspan="8">No runs found.</td>
               </tr>
               <tr v-else v-for="run in runsRows" :key="run.runId">
                 <th scope="row">{{ run.startedAt ? formatDate(run.startedAt) : '-' }}</th>
@@ -1047,6 +1060,7 @@
                 <td>
                   <span :class="['badge', statusBadgeClass(run.status)]">{{ run.status }}</span>
                 </td>
+                <td>{{ formatManualApproval(run.manualApproval) }}</td>
                 <td>{{ run.attempts }}</td>
                 <td>{{ run.error || '-' }}</td>
                 <td>{{ run.batchId || '-' }}</td>
@@ -2842,6 +2856,28 @@ function formatExtractionFreshness(freshness) {
   if (freshness === 'CURRENT') return 'Current'
   if (freshness === 'OUTDATED') return 'Outdated'
   return 'None'
+}
+
+function formatManualApproval(approval) {
+  if (!approval) return '-'
+  const parts = []
+  if (approval.dossier) parts.push('Dossier')
+  if (approval.extraction) parts.push('Extraction')
+  return parts.length ? parts.join(' + ') : '-'
+}
+
+function formatManualApprovals(items) {
+  if (!Array.isArray(items) || items.length === 0) return '-'
+  const formatted = items
+    .map((item) => {
+      if (!item) return ''
+      const label = formatManualApproval(item.approval)
+      if (!item.isin) return label
+      if (label === '-') return ''
+      return `${item.isin} (${label})`
+    })
+    .filter(Boolean)
+  return formatted.length ? formatted.join(', ') : '-'
 }
 </script>
 

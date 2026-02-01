@@ -796,6 +796,7 @@ public class KnowledgeBaseService {
         if (run == null) {
             return null;
         }
+        KnowledgeBaseManualApprovalDto manualApproval = resolveManualApprovalForIsin(run.getIsin());
         return new KnowledgeBaseRunItemDto(
                 run.getRunId(),
                 run.getIsin(),
@@ -806,7 +807,8 @@ public class KnowledgeBaseService {
                 run.getAttempts(),
                 run.getError(),
                 run.getBatchId(),
-                run.getRequestId()
+                run.getRequestId(),
+                manualApproval
         );
     }
 
@@ -829,6 +831,14 @@ public class KnowledgeBaseService {
         } else if (status == DossierStatus.REJECTED || status == DossierStatus.FAILED) {
             dossier.setAutoApproved(false);
         }
+    }
+
+    private boolean requiresDossierApproval(DossierStatus status) {
+        return status == DossierStatus.DRAFT || status == DossierStatus.PENDING_REVIEW;
+    }
+
+    private boolean requiresExtractionApproval(DossierExtractionStatus status) {
+        return status == DossierExtractionStatus.CREATED || status == DossierExtractionStatus.PENDING_REVIEW;
     }
 
     private InstrumentDossierResponseDto toResponse(InstrumentDossier dossier) {
@@ -899,6 +909,54 @@ public class KnowledgeBaseService {
         );
     }
 
+    public KnowledgeBaseManualApprovalDto resolveManualApproval(DossierStatus dossierStatus,
+                                                                DossierExtractionStatus extractionStatus) {
+        boolean dossierRequired = requiresDossierApproval(dossierStatus);
+        boolean extractionRequired = requiresExtractionApproval(extractionStatus);
+        if (!dossierRequired && !extractionRequired) {
+            return null;
+        }
+        return new KnowledgeBaseManualApprovalDto(dossierRequired, extractionRequired);
+    }
+
+    public KnowledgeBaseManualApprovalDto resolveManualApprovalForIsin(String isin) {
+        if (isin == null || isin.isBlank()) {
+            return null;
+        }
+        String normalized;
+        try {
+            normalized = normalizeIsin(isin);
+        } catch (Exception ex) {
+            return null;
+        }
+        InstrumentDossier dossier = dossierRepository.findFirstByIsinOrderByVersionDesc(normalized)
+                .orElse(null);
+        if (dossier == null) {
+            return null;
+        }
+        DossierStatus dossierStatus = dossier.getStatus();
+        InstrumentDossierExtraction extraction = extractionRepository.findByDossierIdOrderByCreatedAtDesc(dossier.getDossierId())
+                .stream()
+                .findFirst()
+                .orElse(null);
+        DossierExtractionStatus extractionStatus = extraction == null ? null : extraction.getStatus();
+        return resolveManualApproval(dossierStatus, extractionStatus);
+    }
+
+    public List<KnowledgeBaseManualApprovalItemDto> resolveManualApprovals(List<String> isins) {
+        if (isins == null || isins.isEmpty()) {
+            return List.of();
+        }
+        List<KnowledgeBaseManualApprovalItemDto> approvals = new ArrayList<>();
+        for (String isin : isins) {
+            KnowledgeBaseManualApprovalDto approval = resolveManualApprovalForIsin(isin);
+            if (approval != null) {
+                approvals.add(new KnowledgeBaseManualApprovalItemDto(isin, approval));
+            }
+        }
+        return approvals;
+    }
+
 
     private void requireInstrument(String isin) {
         Optional<Instrument> instrument = instrumentRepository.findById(isin);
@@ -949,7 +1007,10 @@ public class KnowledgeBaseService {
                 You are a research assistant for financial instruments (securities). For each provided ISIN, create a dossier in English.
                 
                 Requirements:
-                - Use web research (web_search) to find reliable primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages; optionally justETF or similar as a secondary source).
+                - Use web research (web_search) and prefer reliable primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages).
+                - For ETFs/funds, primary sources are required when available. For single stocks/REITs, reputable market-data sources (exchange, regulator, finance portals) are acceptable if primary sources are not available.
+                - Secondary sources (e.g., justETF/ETF.com) are acceptable when primary sources are unavailable for the instrument type.
+                - Do not fail solely because primary sources are unavailable; if the instrument type cannot be confirmed, proceed with secondary sources and mark instrument_type as unknown.
                 - Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
                 - Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
                 - Include the research date (%s) and, if available, the “data as of” date for key metrics.
@@ -987,7 +1048,7 @@ public class KnowledgeBaseService {
                     - If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
                     - Output JSON only. Do not wrap in Markdown code fences.
                     - Provide exactly one items[] entry for each ISIN, in the same order as given.
-                    - If you cannot complete an ISIN, set contentMd=null, displayName=null, citations=[], error="<reason>".
+                - Only set error when the ISIN is invalid or no reliable sources can be found at all; otherwise produce a dossier and use "unknown" for missing values.
                     - Keep each dossier concise but complete (under %d characters).
                     - Single Stocks should always be classified as layer 4= Single Stock. REITs are single stocks unless explicitly a fund/ETF; classify REIT equities as layer 4.
                     - To qualify as Layer 1 = Global-Core, an instrument must be an ETF or fund that diversifies across industries and themes worldwide, but not only across individual countries and continents. World wide diversified Core-Umbrella fonds, Core-Multi Asset-ETFs and/or Bond-ETFs are allowed in this layer, too.

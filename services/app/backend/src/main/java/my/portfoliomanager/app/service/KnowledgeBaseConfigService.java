@@ -4,14 +4,22 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.domain.KnowledgeBaseConfig;
 import my.portfoliomanager.app.dto.KnowledgeBaseConfigDto;
+import my.portfoliomanager.app.dto.KnowledgeBaseQualityGateConfigDto;
+import my.portfoliomanager.app.dto.KnowledgeBaseQualityGateProfileDto;
 import my.portfoliomanager.app.llm.OpenAiLlmClient;
 import my.portfoliomanager.app.repository.KnowledgeBaseConfigRepository;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Service
 public class KnowledgeBaseConfigService {
@@ -34,13 +42,20 @@ public class KnowledgeBaseConfigService {
 	private static final boolean DEFAULT_BULK_REQUIRE_PRIMARY_SOURCE = true;
 	private static final double DEFAULT_ALTERNATIVES_MIN_SIMILARITY_SCORE = 0.6;
 	private static final boolean DEFAULT_EXTRACTION_EVIDENCE_REQUIRED = true;
+	private static final String DEFAULT_QUALITY_GATE_PROFILE_KEY = "DEFAULT";
 
 	private final KnowledgeBaseConfigRepository repository;
 	private final ObjectMapper objectMapper;
+	private final ResourceLoader resourceLoader;
+	private final KnowledgeBaseQualityGateConfigSnapshot defaultQualityGateConfig;
 
-	public KnowledgeBaseConfigService(KnowledgeBaseConfigRepository repository, ObjectMapper objectMapper) {
+	public KnowledgeBaseConfigService(KnowledgeBaseConfigRepository repository,
+									 ObjectMapper objectMapper,
+									 ResourceLoader resourceLoader) {
 		this.repository = repository;
 		this.objectMapper = objectMapper;
+		this.resourceLoader = resourceLoader;
+		this.defaultQualityGateConfig = loadDefaultQualityGateConfig();
 	}
 
 	public KnowledgeBaseConfigDto getConfig() {
@@ -110,6 +125,9 @@ public class KnowledgeBaseConfigService {
 		boolean extractionEvidenceRequired = raw != null && raw.extractionEvidenceRequired() != null
 				? raw.extractionEvidenceRequired()
 				: DEFAULT_EXTRACTION_EVIDENCE_REQUIRED;
+		KnowledgeBaseQualityGateConfigSnapshot qualityGateProfiles = normalizeQualityGateConfig(
+				raw == null ? null : raw.qualityGateProfiles()
+		);
 
 		List<String> allowedDomains = normalizeDomains(raw == null ? null : raw.websearchAllowedDomains());
 		if (allowedDomains.isEmpty()) {
@@ -139,7 +157,8 @@ public class KnowledgeBaseConfigService {
 				bulkMinCitations,
 				bulkRequirePrimarySource,
 				alternativesMinSimilarityScore,
-				extractionEvidenceRequired
+				extractionEvidenceRequired,
+				qualityGateProfiles
 		);
 	}
 
@@ -179,6 +198,253 @@ public class KnowledgeBaseConfigService {
 		};
 	}
 
+	private KnowledgeBaseQualityGateConfigSnapshot loadDefaultQualityGateConfig() {
+		KnowledgeBaseQualityGateConfigSnapshot fallback = createDefaultQualityGateConfig();
+		if (resourceLoader == null) {
+			return fallback;
+		}
+		Resource resource = resourceLoader.getResource("classpath:kb_quality_gate_profiles.json");
+		if (!resource.exists()) {
+			return fallback;
+		}
+		try (InputStream inputStream = resource.getInputStream()) {
+			String json = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+			KnowledgeBaseQualityGateConfigDto parsed = parseQualityGateConfig(json);
+			KnowledgeBaseQualityGateConfigSnapshot normalized = normalizeQualityGateConfig(parsed, fallback);
+			return normalized == null ? fallback : normalized;
+		} catch (Exception ex) {
+			return fallback;
+		}
+	}
+
+	private KnowledgeBaseQualityGateConfigDto parseQualityGateConfig(String json) {
+		if (json == null || json.isBlank()) {
+			return null;
+		}
+		try {
+			JsonNode root = objectMapper.readTree(json);
+			return objectMapper.treeToValue(root, KnowledgeBaseQualityGateConfigDto.class);
+		} catch (Exception ex) {
+			return null;
+		}
+	}
+
+	private KnowledgeBaseQualityGateConfigSnapshot normalizeQualityGateConfig(KnowledgeBaseQualityGateConfigDto raw) {
+		return normalizeQualityGateConfig(raw, defaultQualityGateConfig);
+	}
+
+	private KnowledgeBaseQualityGateConfigSnapshot normalizeQualityGateConfig(KnowledgeBaseQualityGateConfigDto raw,
+														KnowledgeBaseQualityGateConfigSnapshot defaults) {
+		KnowledgeBaseQualityGateConfigSnapshot fallback = defaults == null ? createDefaultQualityGateConfig() : defaults;
+		if (raw == null) {
+			return fallback;
+		}
+		String activeProfile = normalizeProfileKey(raw.activeProfile());
+		if (activeProfile == null) {
+			activeProfile = fallback.activeProfile();
+		}
+		Map<String, KnowledgeBaseQualityGateProfileSnapshot> mergedProfiles = new LinkedHashMap<>(fallback.profiles());
+		if (raw.profiles() != null) {
+			raw.profiles().forEach((key, profileDto) -> {
+				String normalizedKey = normalizeProfileKey(key);
+				if (normalizedKey == null) {
+					return;
+				}
+				KnowledgeBaseQualityGateProfileSnapshot baseProfile = fallback.profiles().get(normalizedKey);
+				KnowledgeBaseQualityGateProfileSnapshot normalized = normalizeQualityGateProfile(normalizedKey, profileDto, baseProfile);
+				mergedProfiles.put(normalizedKey, normalized);
+			});
+		}
+		if (!mergedProfiles.containsKey(activeProfile)) {
+			activeProfile = fallback.activeProfile();
+		}
+		return new KnowledgeBaseQualityGateConfigSnapshot(activeProfile, mergedProfiles);
+	}
+
+	private KnowledgeBaseQualityGateProfileSnapshot normalizeQualityGateProfile(String key,
+														KnowledgeBaseQualityGateProfileDto raw,
+														KnowledgeBaseQualityGateProfileSnapshot defaults) {
+		KnowledgeBaseQualityGateProfileSnapshot fallback = defaults == null
+				? new KnowledgeBaseQualityGateProfileSnapshot(key, "", Map.of(), Map.of())
+				: defaults;
+		if (raw == null) {
+			return fallback;
+		}
+		String displayName = raw.displayName() == null || raw.displayName().isBlank()
+				? fallback.displayName()
+				: raw.displayName().trim();
+		String description = raw.description() == null || raw.description().isBlank()
+				? fallback.description()
+				: raw.description().trim();
+		Map<Integer, String> layerProfiles = normalizeLayerProfiles(raw.layerProfiles(), fallback.layerProfiles());
+		Map<String, List<String>> evidenceProfiles = normalizeEvidenceProfiles(raw.evidenceProfiles(), fallback.evidenceProfiles());
+		return new KnowledgeBaseQualityGateProfileSnapshot(displayName, description, layerProfiles, evidenceProfiles);
+	}
+
+	private Map<Integer, String> normalizeLayerProfiles(Map<String, String> raw, Map<Integer, String> defaults) {
+		Map<Integer, String> normalized = new LinkedHashMap<>();
+		if (defaults != null && !defaults.isEmpty()) {
+			normalized.putAll(defaults);
+		}
+		if (raw != null) {
+			raw.forEach((key, value) -> {
+				Integer layer = parseLayerKey(key);
+				String profileKey = normalizeProfileKey(value);
+				if (layer != null && profileKey != null) {
+					normalized.put(layer, profileKey);
+				}
+			});
+		}
+		return normalized;
+	}
+
+	private Map<String, List<String>> normalizeEvidenceProfiles(Map<String, List<String>> raw,
+															Map<String, List<String>> defaults) {
+		Map<String, List<String>> normalized = new LinkedHashMap<>();
+		if (defaults != null && !defaults.isEmpty()) {
+			defaults.forEach((key, list) -> normalized.put(key, List.copyOf(list)));
+		}
+		if (raw != null) {
+			raw.forEach((key, list) -> {
+				String profileKey = normalizeProfileKey(key);
+				List<String> evidenceKeys = normalizeEvidenceKeys(list);
+				if (profileKey != null && !evidenceKeys.isEmpty()) {
+					normalized.put(profileKey, evidenceKeys);
+				}
+			});
+		}
+		return normalized;
+	}
+
+	private Integer parseLayerKey(String key) {
+		if (key == null || key.isBlank()) {
+			return null;
+		}
+		try {
+			return Integer.parseInt(key.trim());
+		} catch (NumberFormatException ex) {
+			return null;
+		}
+	}
+
+	private String normalizeProfileKey(String key) {
+		if (key == null || key.isBlank()) {
+			return null;
+		}
+		return key.trim().toUpperCase(Locale.ROOT);
+	}
+
+	private List<String> normalizeEvidenceKeys(List<String> raw) {
+		if (raw == null || raw.isEmpty()) {
+			return List.of();
+		}
+		List<String> normalized = new ArrayList<>();
+		for (String key : raw) {
+			if (key == null || key.isBlank()) {
+				continue;
+			}
+			String cleaned = key.trim().toLowerCase(Locale.ROOT);
+			if (!normalized.contains(cleaned)) {
+				normalized.add(cleaned);
+			}
+		}
+		return normalized;
+	}
+
+	private KnowledgeBaseQualityGateConfigSnapshot createDefaultQualityGateConfig() {
+		Map<Integer, String> layerProfiles = new LinkedHashMap<>();
+		layerProfiles.put(1, "FUND");
+		layerProfiles.put(2, "FUND");
+		layerProfiles.put(3, "FUND");
+		layerProfiles.put(4, "EQUITY");
+		layerProfiles.put(5, "UNKNOWN");
+
+		Map<String, List<String>> evidenceProfiles = new LinkedHashMap<>();
+		evidenceProfiles.put("FUND", List.of(
+				"benchmark_index",
+				"ongoing_charges_pct",
+				"sri",
+				"price",
+				"pe_current",
+				"pb_current",
+				"pe_ttm_holdings",
+				"earnings_yield_ttm_holdings",
+				"holdings_coverage_weight_pct",
+				"holdings_coverage_count",
+				"holdings_asof"
+		));
+		evidenceProfiles.put("EQUITY", List.of(
+				"price",
+				"pe_current",
+				"pb_current",
+				"dividend_per_share",
+				"revenue",
+				"net_income",
+				"ebitda",
+				"eps_history"
+		));
+		evidenceProfiles.put("REIT", List.of(
+				"price",
+				"pe_current",
+				"pb_current",
+				"dividend_per_share",
+				"revenue",
+				"net_income",
+				"ebitda",
+				"eps_history",
+				"net_rent",
+				"noi",
+				"affo",
+				"ffo"
+		));
+		evidenceProfiles.put("UNKNOWN", List.of(
+				"price",
+				"pe_current",
+				"pb_current"
+		));
+
+		KnowledgeBaseQualityGateProfileSnapshot defaultProfile = new KnowledgeBaseQualityGateProfileSnapshot(
+				"Default",
+				"Default evidence profiles by layer.",
+				layerProfiles,
+				evidenceProfiles
+		);
+		Map<String, KnowledgeBaseQualityGateProfileSnapshot> profiles = new LinkedHashMap<>();
+		profiles.put(DEFAULT_QUALITY_GATE_PROFILE_KEY, defaultProfile);
+		return new KnowledgeBaseQualityGateConfigSnapshot(DEFAULT_QUALITY_GATE_PROFILE_KEY, profiles);
+	}
+
+	private KnowledgeBaseQualityGateConfigDto toQualityGateDto(KnowledgeBaseQualityGateConfigSnapshot snapshot) {
+		if (snapshot == null) {
+			return null;
+		}
+		Map<String, KnowledgeBaseQualityGateProfileDto> profiles = new LinkedHashMap<>();
+		if (snapshot.profiles() != null) {
+			snapshot.profiles().forEach((key, value) -> profiles.put(key, toQualityGateProfileDto(value)));
+		}
+		return new KnowledgeBaseQualityGateConfigDto(snapshot.activeProfile(), profiles);
+	}
+
+	private KnowledgeBaseQualityGateProfileDto toQualityGateProfileDto(KnowledgeBaseQualityGateProfileSnapshot snapshot) {
+		if (snapshot == null) {
+			return null;
+		}
+		Map<String, String> layerProfiles = new LinkedHashMap<>();
+		if (snapshot.layerProfiles() != null) {
+			snapshot.layerProfiles().forEach((key, value) -> layerProfiles.put(String.valueOf(key), value));
+		}
+		Map<String, List<String>> evidenceProfiles = new LinkedHashMap<>();
+		if (snapshot.evidenceProfiles() != null) {
+			snapshot.evidenceProfiles().forEach((key, value) -> evidenceProfiles.put(key, List.copyOf(value)));
+		}
+		return new KnowledgeBaseQualityGateProfileDto(
+				snapshot.displayName(),
+				snapshot.description(),
+				layerProfiles,
+				evidenceProfiles
+		);
+	}
+
 	private KnowledgeBaseConfigDto toDto(KnowledgeBaseConfigSnapshot snapshot) {
 		return new KnowledgeBaseConfigDto(
 				snapshot.enabled(),
@@ -203,8 +469,29 @@ public class KnowledgeBaseConfigService {
 				snapshot.bulkMinCitations(),
 				snapshot.bulkRequirePrimarySource(),
 				snapshot.alternativesMinSimilarityScore(),
-				snapshot.extractionEvidenceRequired()
+				snapshot.extractionEvidenceRequired(),
+				toQualityGateDto(snapshot.qualityGateProfiles())
 		);
+	}
+
+	public record KnowledgeBaseQualityGateProfileSnapshot(
+			String displayName,
+			String description,
+			Map<Integer, String> layerProfiles,
+			Map<String, List<String>> evidenceProfiles
+	) {
+	}
+
+	public record KnowledgeBaseQualityGateConfigSnapshot(
+			String activeProfile,
+			Map<String, KnowledgeBaseQualityGateProfileSnapshot> profiles
+	) {
+		public KnowledgeBaseQualityGateProfileSnapshot activeProfileSnapshot() {
+			if (profiles == null || activeProfile == null) {
+				return null;
+			}
+			return profiles.get(activeProfile);
+		}
 	}
 
 	public record KnowledgeBaseConfigSnapshot(
@@ -230,7 +517,8 @@ public class KnowledgeBaseConfigService {
 			int bulkMinCitations,
 			boolean bulkRequirePrimarySource,
 			double alternativesMinSimilarityScore,
-			boolean extractionEvidenceRequired
+			boolean extractionEvidenceRequired,
+			KnowledgeBaseQualityGateConfigSnapshot qualityGateProfiles
 	) {
 	}
 }

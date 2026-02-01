@@ -154,6 +154,8 @@ public class KnowledgeBaseMaintenanceService {
                 Long dossierId = null;
                 Long extractionId = null;
                 String error = null;
+                InstrumentDossierResponseDto dossier = null;
+                ExtractionFlowResult extractionResult = null;
 
                 KnowledgeBaseRun dossierRun = runService.startRun(item.isin(), KnowledgeBaseRunAction.BULK_CREATE, null, null);
                 runService.incrementAttempt(dossierRun);
@@ -170,7 +172,8 @@ public class KnowledgeBaseMaintenanceService {
                             status,
                             dossierId,
                             extractionId,
-                            error
+                            error,
+                            null
                     ));
                     continue;
                 }
@@ -188,11 +191,11 @@ public class KnowledgeBaseMaintenanceService {
                                 config.websearchAllowedDomains(),
                                 config.dossierMaxChars()
                         );
-                        InstrumentDossierResponseDto dossier = createDossierFromDraft(item.isin(), dossierDraft, actor, DossierStatus.PENDING_REVIEW);
+                        dossier = createDossierFromDraft(item.isin(), dossierDraft, actor, DossierStatus.PENDING_REVIEW);
                         dossierId = dossier.dossierId();
                         boolean requestedAutoApprove = autoApproveFlag;
-                        ExtractionFlowResult extractionResult = runExtractionFlow(
-                                item.isin(), dossierId, actor, false, applyOverrides
+                        extractionResult = runExtractionFlow(
+                                item.isin(), dossier.status(), dossierId, actor, false, applyOverrides
                         );
                         KnowledgeBaseBulkResearchItemDto extractionItem = extractionResult.item();
                         extractionId = extractionItem.extractionId();
@@ -207,10 +210,13 @@ public class KnowledgeBaseMaintenanceService {
                                     error = "similarity_gate_failed";
                                 } else {
                                     InstrumentDossierResponseDto approved = knowledgeBaseService.approveDossier(dossierId, actor, true);
+                                    dossier = approved;
                                     if (approved.status() != DossierStatus.APPROVED) {
                                         error = "dossier_quality_gate_failed";
                                     } else {
-                                        knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
+                                        InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService
+                                                .approveExtraction(extractionId, actor, true, applyOverrides);
+                                        extractionResult = new ExtractionFlowResult(extractionItem, extractionResult.payload(), extraction);
                                     }
                                 }
                             }
@@ -231,6 +237,18 @@ public class KnowledgeBaseMaintenanceService {
                     }
                 }
 
+                KnowledgeBaseManualApprovalDto manualApproval = null;
+                if (dossier != null || extractionResult != null) {
+                    manualApproval = knowledgeBaseService.resolveManualApproval(
+                            dossier == null ? null : dossier.status(),
+                            extractionResult == null || extractionResult.extraction() == null
+                                    ? null
+                                    : extractionResult.extraction().status()
+                    );
+                }
+                if (manualApproval == null) {
+                    manualApproval = knowledgeBaseService.resolveManualApprovalForIsin(item.isin());
+                }
                 responseItems.add(new KnowledgeBaseAlternativeItemDto(
                         item.isin(),
                         item.rationale(),
@@ -238,7 +256,8 @@ public class KnowledgeBaseMaintenanceService {
                         status,
                         dossierId,
                         extractionId,
-                        error
+                        error,
+                        manualApproval
                 ));
             }
             runService.markSucceeded(baseRun);
@@ -253,6 +272,7 @@ public class KnowledgeBaseMaintenanceService {
     }
 
     private ExtractionFlowResult runExtractionFlow(String isin,
+                                                   DossierStatus dossierStatus,
                                                    Long dossierId,
                                                    String actor,
                                                    boolean autoApprove,
@@ -266,10 +286,12 @@ public class KnowledgeBaseMaintenanceService {
             InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossierId);
             if (extraction.status() == DossierExtractionStatus.FAILED) {
                 runService.markFailed(extractRun, extraction.error());
+                KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
                 return new ExtractionFlowResult(
                         new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
-                                extraction.extractionId(), extraction.error()),
-                        null
+                                extraction.extractionId(), extraction.error(), manualApproval),
+                        null,
+                        extraction
                 );
             }
             Long extractionId = extraction.extractionId();
@@ -279,10 +301,12 @@ public class KnowledgeBaseMaintenanceService {
                 extractionId = extraction.extractionId();
             }
             runService.markSucceeded(extractRun);
+            KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
             return new ExtractionFlowResult(
                     new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
-                            extractionId, null),
-                    payload
+                            extractionId, null, manualApproval),
+                    payload,
+                    extraction
             );
         } catch (CancellationException ex) {
             runService.markFailed(extractRun, "Canceled");
@@ -291,7 +315,8 @@ public class KnowledgeBaseMaintenanceService {
             runService.markFailed(extractRun, ex.getMessage());
             return new ExtractionFlowResult(
                     new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId, null,
-                            messageOrFallback(ex)),
+                            messageOrFallback(ex), null),
+                    null,
                     null
             );
         }
@@ -337,7 +362,8 @@ public class KnowledgeBaseMaintenanceService {
                 }
                 runService.markSucceeded(dossierRun);
 
-                ExtractionFlowResult extractionResult = runExtractionFlow(isin, dossier.dossierId(), actor, localAutoApprove, applyOverrides);
+                ExtractionFlowResult extractionResult = runExtractionFlow(isin, dossier.status(), dossier.dossierId(), actor,
+                        localAutoApprove, applyOverrides);
                 KnowledgeBaseBulkResearchItemDto extractionItem = extractionResult.item();
                 if (extractionItem.status() == KnowledgeBaseBulkResearchItemStatus.FAILED) {
                     logger.info("Dossier extraction for ISIN {} failed",isin);
@@ -353,7 +379,7 @@ public class KnowledgeBaseMaintenanceService {
             } catch (Exception ex) {
                 runService.markFailed(dossierRun, ex.getMessage());
                 items.add(new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, null, null,
-                        messageOrFallback(ex)));
+                        messageOrFallback(ex), null));
                 failed++;
             }
         }
@@ -419,7 +445,8 @@ public class KnowledgeBaseMaintenanceService {
 
     private record ExtractionFlowResult(
             KnowledgeBaseBulkResearchItemDto item,
-            InstrumentDossierExtractionPayload payload
+            InstrumentDossierExtractionPayload payload,
+            InstrumentDossierExtractionResponseDto extraction
     ) {
     }
 
