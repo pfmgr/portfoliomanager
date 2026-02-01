@@ -42,19 +42,22 @@ public class KnowledgeBaseConfigService {
 	private static final boolean DEFAULT_BULK_REQUIRE_PRIMARY_SOURCE = true;
 	private static final double DEFAULT_ALTERNATIVES_MIN_SIMILARITY_SCORE = 0.6;
 	private static final boolean DEFAULT_EXTRACTION_EVIDENCE_REQUIRED = true;
-	private static final String DEFAULT_QUALITY_GATE_PROFILE_KEY = "DEFAULT";
+	private static final String DEFAULT_QUALITY_GATE_PROFILE_KEY = "BALANCED";
 
 	private final KnowledgeBaseConfigRepository repository;
 	private final ObjectMapper objectMapper;
 	private final ResourceLoader resourceLoader;
+	private final LayerTargetConfigService layerTargetConfigService;
 	private final KnowledgeBaseQualityGateConfigSnapshot defaultQualityGateConfig;
 
 	public KnowledgeBaseConfigService(KnowledgeBaseConfigRepository repository,
 									 ObjectMapper objectMapper,
-									 ResourceLoader resourceLoader) {
+									 ResourceLoader resourceLoader,
+									 LayerTargetConfigService layerTargetConfigService) {
 		this.repository = repository;
 		this.objectMapper = objectMapper;
 		this.resourceLoader = resourceLoader;
+		this.layerTargetConfigService = layerTargetConfigService;
 		this.defaultQualityGateConfig = loadDefaultQualityGateConfig();
 	}
 
@@ -243,6 +246,13 @@ public class KnowledgeBaseConfigService {
 		if (activeProfile == null) {
 			activeProfile = fallback.activeProfile();
 		}
+		boolean customOverridesEnabled = raw.customOverridesEnabled() != null && raw.customOverridesEnabled();
+		if (!customOverridesEnabled) {
+			String layerTargetProfile = resolveLayerTargetProfile();
+			if (layerTargetProfile != null) {
+				activeProfile = layerTargetProfile;
+			}
+		}
 		Map<String, KnowledgeBaseQualityGateProfileSnapshot> mergedProfiles = new LinkedHashMap<>(fallback.profiles());
 		if (raw.profiles() != null) {
 			raw.profiles().forEach((key, profileDto) -> {
@@ -255,10 +265,28 @@ public class KnowledgeBaseConfigService {
 				mergedProfiles.put(normalizedKey, normalized);
 			});
 		}
+		Map<String, KnowledgeBaseQualityGateProfileSnapshot> mergedCustomProfiles = normalizeCustomProfiles(
+				raw.customProfiles(), mergedProfiles, fallback
+		);
 		if (!mergedProfiles.containsKey(activeProfile)) {
 			activeProfile = fallback.activeProfile();
 		}
-		return new KnowledgeBaseQualityGateConfigSnapshot(activeProfile, mergedProfiles);
+		return new KnowledgeBaseQualityGateConfigSnapshot(activeProfile, mergedProfiles, customOverridesEnabled, mergedCustomProfiles);
+	}
+
+	private String resolveLayerTargetProfile() {
+		if (layerTargetConfigService == null) {
+			return null;
+		}
+		try {
+			var effective = layerTargetConfigService.loadEffectiveConfig();
+			if (effective == null || effective.selectedProfileKey() == null) {
+				return null;
+			}
+			return normalizeProfileKey(effective.selectedProfileKey());
+		} catch (Exception ex) {
+			return null;
+		}
 	}
 
 	private KnowledgeBaseQualityGateProfileSnapshot normalizeQualityGateProfile(String key,
@@ -313,6 +341,31 @@ public class KnowledgeBaseConfigService {
 				}
 			});
 		}
+		return normalized;
+	}
+
+	private Map<String, KnowledgeBaseQualityGateProfileSnapshot> normalizeCustomProfiles(
+			Map<String, KnowledgeBaseQualityGateProfileDto> raw,
+			Map<String, KnowledgeBaseQualityGateProfileSnapshot> baseProfiles,
+			KnowledgeBaseQualityGateConfigSnapshot fallback
+	) {
+		Map<String, KnowledgeBaseQualityGateProfileSnapshot> normalized = new LinkedHashMap<>();
+		if (raw == null || raw.isEmpty()) {
+			return normalized;
+		}
+		raw.forEach((key, profileDto) -> {
+			String normalizedKey = normalizeProfileKey(key);
+			if (normalizedKey == null) {
+				return;
+			}
+			KnowledgeBaseQualityGateProfileSnapshot baseProfile = baseProfiles == null ? null : baseProfiles.get(normalizedKey);
+			if (baseProfile == null && fallback != null && fallback.profiles() != null) {
+				baseProfile = fallback.profiles().get(normalizedKey);
+			}
+			KnowledgeBaseQualityGateProfileSnapshot normalizedProfile =
+					normalizeQualityGateProfile(normalizedKey, profileDto, baseProfile);
+			normalized.put(normalizedKey, normalizedProfile);
+		});
 		return normalized;
 	}
 
@@ -403,15 +456,38 @@ public class KnowledgeBaseConfigService {
 				"pb_current"
 		));
 
-		KnowledgeBaseQualityGateProfileSnapshot defaultProfile = new KnowledgeBaseQualityGateProfileSnapshot(
-				"Default",
-				"Default evidence profiles by layer.",
+		Map<String, KnowledgeBaseQualityGateProfileSnapshot> profiles = new LinkedHashMap<>();
+		profiles.put("CLASSIC", new KnowledgeBaseQualityGateProfileSnapshot(
+				"Classic",
+				"Default quality gates for Classic profiles.",
 				layerProfiles,
 				evidenceProfiles
-		);
-		Map<String, KnowledgeBaseQualityGateProfileSnapshot> profiles = new LinkedHashMap<>();
-		profiles.put(DEFAULT_QUALITY_GATE_PROFILE_KEY, defaultProfile);
-		return new KnowledgeBaseQualityGateConfigSnapshot(DEFAULT_QUALITY_GATE_PROFILE_KEY, profiles);
+		));
+		profiles.put("BALANCED", new KnowledgeBaseQualityGateProfileSnapshot(
+				"Balanced",
+				"Default quality gates for Balanced profiles.",
+				layerProfiles,
+				evidenceProfiles
+		));
+		profiles.put("GROWTH", new KnowledgeBaseQualityGateProfileSnapshot(
+				"Growth",
+				"Default quality gates for Growth profiles.",
+				layerProfiles,
+				evidenceProfiles
+		));
+		profiles.put("AGGRESSIVE", new KnowledgeBaseQualityGateProfileSnapshot(
+				"Aggressive",
+				"Default quality gates for Aggressive profiles.",
+				layerProfiles,
+				evidenceProfiles
+		));
+		profiles.put("OPPORTUNITY", new KnowledgeBaseQualityGateProfileSnapshot(
+				"Opportunity",
+				"Default quality gates for Opportunity profiles.",
+				layerProfiles,
+				evidenceProfiles
+		));
+		return new KnowledgeBaseQualityGateConfigSnapshot(DEFAULT_QUALITY_GATE_PROFILE_KEY, profiles, false, Map.of());
 	}
 
 	private KnowledgeBaseQualityGateConfigDto toQualityGateDto(KnowledgeBaseQualityGateConfigSnapshot snapshot) {
@@ -422,7 +498,16 @@ public class KnowledgeBaseConfigService {
 		if (snapshot.profiles() != null) {
 			snapshot.profiles().forEach((key, value) -> profiles.put(key, toQualityGateProfileDto(value)));
 		}
-		return new KnowledgeBaseQualityGateConfigDto(snapshot.activeProfile(), profiles);
+		Map<String, KnowledgeBaseQualityGateProfileDto> customProfiles = new LinkedHashMap<>();
+		if (snapshot.customProfiles() != null) {
+			snapshot.customProfiles().forEach((key, value) -> customProfiles.put(key, toQualityGateProfileDto(value)));
+		}
+		return new KnowledgeBaseQualityGateConfigDto(
+				snapshot.activeProfile(),
+				profiles,
+				snapshot.customOverridesEnabled(),
+				customProfiles
+		);
 	}
 
 	private KnowledgeBaseQualityGateProfileDto toQualityGateProfileDto(KnowledgeBaseQualityGateProfileSnapshot snapshot) {
@@ -484,13 +569,21 @@ public class KnowledgeBaseConfigService {
 
 	public record KnowledgeBaseQualityGateConfigSnapshot(
 			String activeProfile,
-			Map<String, KnowledgeBaseQualityGateProfileSnapshot> profiles
+			Map<String, KnowledgeBaseQualityGateProfileSnapshot> profiles,
+			boolean customOverridesEnabled,
+			Map<String, KnowledgeBaseQualityGateProfileSnapshot> customProfiles
 	) {
 		public KnowledgeBaseQualityGateProfileSnapshot activeProfileSnapshot() {
-			if (profiles == null || activeProfile == null) {
+			if (activeProfile == null) {
 				return null;
 			}
-			return profiles.get(activeProfile);
+			if (customOverridesEnabled && customProfiles != null) {
+				KnowledgeBaseQualityGateProfileSnapshot custom = customProfiles.get(activeProfile);
+				if (custom != null) {
+					return custom;
+				}
+			}
+			return profiles == null ? null : profiles.get(activeProfile);
 		}
 	}
 

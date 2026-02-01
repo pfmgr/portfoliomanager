@@ -5,7 +5,7 @@ import ReclassificationsView from './views/ReclassificationsView.vue'
 import RebalancerView from './views/RebalancerView.vue'
 import RebalancerHistoryView from './views/RebalancerHistoryView.vue'
 import AssessorView from './views/AssessorView.vue'
-import LayerTargetsView from './views/LayerTargetsView.vue'
+import ProfileConfigurationView from './views/ProfileConfigurationView.vue'
 import ImportsExportsView from './views/ImportsExportsView.vue'
 import SavingsPlansView from './views/SavingsPlansView.vue'
 import InstrumentsView from './views/InstrumentsView.vue'
@@ -20,7 +20,7 @@ const routes = [
   { path: '/rebalancer', component: RebalancerView },
   { path: '/rebalancer/history', component: RebalancerHistoryView },
   { path: '/assessor', component: AssessorView },
-  { path: '/layer-targets', component: LayerTargetsView },
+  { path: '/layer-targets', component: ProfileConfigurationView },
   { path: '/instruments', component: InstrumentsView },
   { path: '/knowledge-base', component: KnowledgeBaseView },
   { path: '/imports-exports', component: ImportsExportsView },

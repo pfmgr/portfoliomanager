@@ -1259,7 +1259,8 @@ const configForm = ref({
   bulkMinCitations: 2,
   bulkRequirePrimarySource: true,
   alternativesMinSimilarityScore: 0.6,
-  extractionEvidenceRequired: true
+  extractionEvidenceRequired: true,
+  qualityGateProfiles: null
 })
 const domainsText = ref('')
 const configBusy = ref(false)
@@ -2569,7 +2570,8 @@ function normalizeConfig(raw) {
     bulkMinCitations: raw.bulk_min_citations ?? 2,
     bulkRequirePrimarySource: raw.bulk_require_primary_source ?? true,
     alternativesMinSimilarityScore: raw.alternatives_min_similarity_score ?? 0.6,
-    extractionEvidenceRequired: raw.extraction_evidence_required ?? true
+    extractionEvidenceRequired: raw.extraction_evidence_required ?? true,
+    qualityGateProfiles: raw.quality_gate_profiles || null
   }
 }
 
@@ -2597,7 +2599,8 @@ function toConfigPayload(form, domainsRaw) {
     bulk_min_citations: form.bulkMinCitations,
     bulk_require_primary_source: form.bulkRequirePrimarySource,
     alternatives_min_similarity_score: form.alternativesMinSimilarityScore,
-    extraction_evidence_required: form.extractionEvidenceRequired
+    extraction_evidence_required: form.extractionEvidenceRequired,
+    quality_gate_profiles: form.qualityGateProfiles
   }
 }
 

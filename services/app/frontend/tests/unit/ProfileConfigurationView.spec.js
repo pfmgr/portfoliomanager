@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect, vi } from 'vitest'
-import LayerTargetsView from '../../src/views/LayerTargetsView.vue'
+import ProfileConfigurationView from '../../src/views/ProfileConfigurationView.vue'
 import { apiRequest } from '../../src/api'
 
 vi.mock('../../src/api', () => ({
@@ -9,7 +9,7 @@ vi.mock('../../src/api', () => ({
 
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-describe('LayerTargetsView', () => {
+describe('ProfileConfigurationView', () => {
   it('loads and displays layer targets', async () => {
     apiRequest.mockResolvedValueOnce({
       activeProfileKey: 'BALANCED',
@@ -29,11 +29,24 @@ describe('LayerTargetsView', () => {
       minimumRebalancingAmount: 10,
       customOverridesEnabled: false
     })
+    apiRequest.mockResolvedValueOnce({
+      quality_gate_profiles: {
+        active_profile: 'BALANCED',
+        profiles: {
+          BALANCED: {
+            display_name: 'Balanced',
+            layer_profiles: { 1: 'FUND', 2: 'FUND', 3: 'FUND', 4: 'EQUITY', 5: 'UNKNOWN' },
+            evidence_profiles: { FUND: ['price'], EQUITY: ['price'], REIT: ['price'], UNKNOWN: ['price'] }
+          }
+        }
+      }
+    })
 
-    const wrapper = mount(LayerTargetsView)
+    const wrapper = mount(ProfileConfigurationView)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Layer Targets')
+    expect(wrapper.text()).toContain('Profile Configuration')
+    expect(wrapper.text()).toContain('Allocation & limits')
     expect(wrapper.text()).toContain('Acceptable Variance')
     expect(wrapper.text()).toContain('Minimum Saving Plan Size')
     expect(wrapper.text()).toContain('Minimum Rebalancing Amount')
@@ -60,8 +73,20 @@ describe('LayerTargetsView', () => {
       customOverridesEnabled: true,
       customLayerTargets: { 1: 0.4, 2: 0.3, 3: 0.2, 4: 0.1, 5: 0 }
     })
+    apiRequest.mockResolvedValueOnce({
+      quality_gate_profiles: {
+        active_profile: 'BALANCED',
+        profiles: {
+          BALANCED: {
+            display_name: 'Balanced',
+            layer_profiles: { 1: 'FUND', 2: 'FUND', 3: 'FUND', 4: 'EQUITY', 5: 'UNKNOWN' },
+            evidence_profiles: { FUND: ['price'], EQUITY: ['price'], REIT: ['price'], UNKNOWN: ['price'] }
+          }
+        }
+      }
+    })
 
-    const wrapper = mount(LayerTargetsView)
+    const wrapper = mount(ProfileConfigurationView)
     await flushPromises()
 
     expect(wrapper.text()).toContain('Custom overrides are active.')

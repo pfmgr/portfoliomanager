@@ -1,9 +1,231 @@
 {
-  "active_profile": "DEFAULT",
+  "active_profile": "BALANCED",
+  "custom_overrides_enabled": false,
+  "custom_profiles": {},
   "profiles": {
-    "DEFAULT": {
-      "display_name": "Default",
-      "description": "Default evidence profiles by layer.",
+    "CLASSIC": {
+      "display_name": "Classic",
+      "description": "Default quality gates for Classic profiles.",
+      "layer_profiles": {
+        "1": "FUND",
+        "2": "FUND",
+        "3": "FUND",
+        "4": "EQUITY",
+        "5": "UNKNOWN"
+      },
+      "evidence_profiles": {
+        "FUND": [
+          "benchmark_index",
+          "ongoing_charges_pct",
+          "sri",
+          "price",
+          "pe_current",
+          "pb_current",
+          "pe_ttm_holdings",
+          "earnings_yield_ttm_holdings",
+          "holdings_coverage_weight_pct",
+          "holdings_coverage_count",
+          "holdings_asof"
+        ],
+        "EQUITY": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history"
+        ],
+        "REIT": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history",
+          "net_rent",
+          "noi",
+          "affo",
+          "ffo"
+        ],
+        "UNKNOWN": [
+          "price",
+          "pe_current",
+          "pb_current"
+        ]
+      }
+    },
+    "BALANCED": {
+      "display_name": "Balanced",
+      "description": "Default quality gates for Balanced profiles.",
+      "layer_profiles": {
+        "1": "FUND",
+        "2": "FUND",
+        "3": "FUND",
+        "4": "EQUITY",
+        "5": "UNKNOWN"
+      },
+      "evidence_profiles": {
+        "FUND": [
+          "benchmark_index",
+          "ongoing_charges_pct",
+          "sri",
+          "price",
+          "pe_current",
+          "pb_current",
+          "pe_ttm_holdings",
+          "earnings_yield_ttm_holdings",
+          "holdings_coverage_weight_pct",
+          "holdings_coverage_count",
+          "holdings_asof"
+        ],
+        "EQUITY": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history"
+        ],
+        "REIT": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history",
+          "net_rent",
+          "noi",
+          "affo",
+          "ffo"
+        ],
+        "UNKNOWN": [
+          "price",
+          "pe_current",
+          "pb_current"
+        ]
+      }
+    },
+    "GROWTH": {
+      "display_name": "Growth",
+      "description": "Default quality gates for Growth profiles.",
+      "layer_profiles": {
+        "1": "FUND",
+        "2": "FUND",
+        "3": "FUND",
+        "4": "EQUITY",
+        "5": "UNKNOWN"
+      },
+      "evidence_profiles": {
+        "FUND": [
+          "benchmark_index",
+          "ongoing_charges_pct",
+          "sri",
+          "price",
+          "pe_current",
+          "pb_current",
+          "pe_ttm_holdings",
+          "earnings_yield_ttm_holdings",
+          "holdings_coverage_weight_pct",
+          "holdings_coverage_count",
+          "holdings_asof"
+        ],
+        "EQUITY": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history"
+        ],
+        "REIT": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history",
+          "net_rent",
+          "noi",
+          "affo",
+          "ffo"
+        ],
+        "UNKNOWN": [
+          "price",
+          "pe_current",
+          "pb_current"
+        ]
+      }
+    },
+    "AGGRESSIVE": {
+      "display_name": "Aggressive",
+      "description": "Default quality gates for Aggressive profiles.",
+      "layer_profiles": {
+        "1": "FUND",
+        "2": "FUND",
+        "3": "FUND",
+        "4": "EQUITY",
+        "5": "UNKNOWN"
+      },
+      "evidence_profiles": {
+        "FUND": [
+          "benchmark_index",
+          "ongoing_charges_pct",
+          "sri",
+          "price",
+          "pe_current",
+          "pb_current",
+          "pe_ttm_holdings",
+          "earnings_yield_ttm_holdings",
+          "holdings_coverage_weight_pct",
+          "holdings_coverage_count",
+          "holdings_asof"
+        ],
+        "EQUITY": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history"
+        ],
+        "REIT": [
+          "price",
+          "pe_current",
+          "pb_current",
+          "dividend_per_share",
+          "revenue",
+          "net_income",
+          "ebitda",
+          "eps_history",
+          "net_rent",
+          "noi",
+          "affo",
+          "ffo"
+        ],
+        "UNKNOWN": [
+          "price",
+          "pe_current",
+          "pb_current"
+        ]
+      }
+    },
+    "OPPORTUNITY": {
+      "display_name": "Opportunity",
+      "description": "Default quality gates for Opportunity profiles.",
       "layer_profiles": {
         "1": "FUND",
         "2": "FUND",
