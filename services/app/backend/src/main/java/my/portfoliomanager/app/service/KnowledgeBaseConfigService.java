@@ -30,6 +30,10 @@ public class KnowledgeBaseConfigService {
 	private static final int DEFAULT_MIN_DAYS_BETWEEN_RUNS = 7;
 	private static final int DEFAULT_RUN_TIMEOUT_MINUTES = 30;
 	private static final String DEFAULT_WEBSEARCH_REASONING_EFFORT = "low";
+	private static final int DEFAULT_BULK_MIN_CITATIONS = 2;
+	private static final boolean DEFAULT_BULK_REQUIRE_PRIMARY_SOURCE = true;
+	private static final double DEFAULT_ALTERNATIVES_MIN_SIMILARITY_SCORE = 0.6;
+	private static final boolean DEFAULT_EXTRACTION_EVIDENCE_REQUIRED = true;
 
 	private final KnowledgeBaseConfigRepository repository;
 	private final ObjectMapper objectMapper;
@@ -93,6 +97,19 @@ public class KnowledgeBaseConfigService {
 		int minDaysBetweenRuns = positiveOrDefault(raw == null ? null : raw.kbRefreshMinDaysBetweenRunsPerInstrument(), DEFAULT_MIN_DAYS_BETWEEN_RUNS);
 		int runTimeout = positiveOrDefault(raw == null ? null : raw.runTimeoutMinutes(), DEFAULT_RUN_TIMEOUT_MINUTES);
 		String reasoningEffort = normalizeReasoningEffort(raw == null ? null : raw.websearchReasoningEffort());
+		int bulkMinCitations = positiveOrDefault(raw == null ? null : raw.bulkMinCitations(), DEFAULT_BULK_MIN_CITATIONS);
+		boolean bulkRequirePrimarySource = raw != null && raw.bulkRequirePrimarySource() != null
+				? raw.bulkRequirePrimarySource()
+				: DEFAULT_BULK_REQUIRE_PRIMARY_SOURCE;
+		double alternativesMinSimilarityScore = raw != null && raw.alternativesMinSimilarityScore() != null
+				? raw.alternativesMinSimilarityScore()
+				: DEFAULT_ALTERNATIVES_MIN_SIMILARITY_SCORE;
+		if (alternativesMinSimilarityScore < 0 || alternativesMinSimilarityScore > 1) {
+			alternativesMinSimilarityScore = DEFAULT_ALTERNATIVES_MIN_SIMILARITY_SCORE;
+		}
+		boolean extractionEvidenceRequired = raw != null && raw.extractionEvidenceRequired() != null
+				? raw.extractionEvidenceRequired()
+				: DEFAULT_EXTRACTION_EVIDENCE_REQUIRED;
 
 		List<String> allowedDomains = normalizeDomains(raw == null ? null : raw.websearchAllowedDomains());
 		if (allowedDomains.isEmpty()) {
@@ -118,7 +135,11 @@ public class KnowledgeBaseConfigService {
 				minDaysBetweenRuns,
 				runTimeout,
 				reasoningEffort,
-				allowedDomains
+				allowedDomains,
+				bulkMinCitations,
+				bulkRequirePrimarySource,
+				alternativesMinSimilarityScore,
+				extractionEvidenceRequired
 		);
 	}
 
@@ -178,7 +199,11 @@ public class KnowledgeBaseConfigService {
 				snapshot.kbRefreshMinDaysBetweenRunsPerInstrument(),
 				snapshot.runTimeoutMinutes(),
 				snapshot.websearchReasoningEffort(),
-				List.copyOf(snapshot.websearchAllowedDomains())
+				List.copyOf(snapshot.websearchAllowedDomains()),
+				snapshot.bulkMinCitations(),
+				snapshot.bulkRequirePrimarySource(),
+				snapshot.alternativesMinSimilarityScore(),
+				snapshot.extractionEvidenceRequired()
 		);
 	}
 
@@ -201,7 +226,11 @@ public class KnowledgeBaseConfigService {
 			int kbRefreshMinDaysBetweenRunsPerInstrument,
 			int runTimeoutMinutes,
 			String websearchReasoningEffort,
-			List<String> websearchAllowedDomains
+			List<String> websearchAllowedDomains,
+			int bulkMinCitations,
+			boolean bulkRequirePrimarySource,
+			double alternativesMinSimilarityScore,
+			boolean extractionEvidenceRequired
 	) {
 	}
 }

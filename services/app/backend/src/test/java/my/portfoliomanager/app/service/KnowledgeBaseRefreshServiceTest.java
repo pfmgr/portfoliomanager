@@ -128,7 +128,11 @@ class KnowledgeBaseRefreshServiceTest {
 				7,
 				30,
 				"low",
-				List.of("example.com")
+				List.of("example.com"),
+				2,
+				true,
+				0.6,
+				true
 		);
 	}
 

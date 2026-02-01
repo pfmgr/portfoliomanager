@@ -216,7 +216,11 @@ class KnowledgeBaseServiceTest {
 				current.kbRefreshMinDaysBetweenRunsPerInstrument(),
 				current.runTimeoutMinutes(),
 				current.websearchReasoningEffort(),
-				current.websearchAllowedDomains()
+				current.websearchAllowedDomains(),
+				current.bulkMinCitations(),
+				current.bulkRequirePrimarySource(),
+				current.alternativesMinSimilarityScore(),
+				current.extractionEvidenceRequired()
 		);
 		configService.updateConfig(updated);
 

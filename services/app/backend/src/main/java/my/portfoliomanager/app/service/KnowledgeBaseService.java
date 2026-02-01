@@ -49,6 +49,7 @@ public class KnowledgeBaseService {
     private final ObjectMapper objectMapper;
     private final Map<String, Object> bulkWebsearchSchema;
     private final LlmPromptPolicy llmPromptPolicy;
+    private final KnowledgeBaseQualityGateService qualityGateService;
 
     public KnowledgeBaseService(InstrumentRepository instrumentRepository,
                                 InstrumentDossierRepository dossierRepository,
@@ -63,7 +64,8 @@ public class KnowledgeBaseService {
                                 KnowledgeBaseRunService runService,
                                 LlmClient llmClient,
                                 ObjectMapper objectMapper,
-                                LlmPromptPolicy llmPromptPolicy) {
+                                LlmPromptPolicy llmPromptPolicy,
+                                KnowledgeBaseQualityGateService qualityGateService) {
         this.instrumentRepository = instrumentRepository;
         this.dossierRepository = dossierRepository;
         this.extractionRepository = extractionRepository;
@@ -79,6 +81,7 @@ public class KnowledgeBaseService {
         this.objectMapper = objectMapper;
         this.bulkWebsearchSchema = buildBulkWebsearchSchema(objectMapper);
         this.llmPromptPolicy = llmPromptPolicy;
+        this.qualityGateService = qualityGateService;
     }
 
     public InstrumentDossierSearchPageDto searchDossiers(String query,
@@ -500,6 +503,17 @@ public class KnowledgeBaseService {
                 && extraction.getStatus() != DossierExtractionStatus.PENDING_REVIEW) {
             throw new IllegalArgumentException("Only pending extractions can be approved");
         }
+        if (autoApproved && qualityGateService != null) {
+            InstrumentDossier dossier = dossierRepository.findById(extraction.getDossierId()).orElse(null);
+            InstrumentDossierExtractionPayload payload = parsePayload(extraction.getExtractedJson());
+            KnowledgeBaseQualityGateService.EvidenceResult evidence = qualityGateService
+                    .evaluateExtractionEvidence(dossier == null ? null : dossier.getContentMd(), payload, configService.getSnapshot());
+            if (!evidence.passed()) {
+                logger.warn("Auto-approve extraction {} blocked by evidence gate: {}",
+                        extraction.getExtractionId(), evidence.missingEvidence());
+                return extraction;
+            }
+        }
         extraction.setStatus(DossierExtractionStatus.APPROVED);
         extraction.setApprovedBy(approvedBy);
         extraction.setApprovedAt(LocalDateTime.now());
@@ -524,6 +538,18 @@ public class KnowledgeBaseService {
         }
         if (dossier.getStatus() == DossierStatus.REJECTED) {
             throw new IllegalArgumentException("Rejected dossiers cannot be approved");
+        }
+        if (autoApproved && qualityGateService != null) {
+            KnowledgeBaseQualityGateService.DossierQualityResult quality = qualityGateService.evaluateDossier(
+                    dossier.getIsin(),
+                    dossier.getContentMd(),
+                    dossier.getCitationsJson(),
+                    configService.getSnapshot()
+            );
+            if (!quality.passed()) {
+                logger.warn("Auto-approve dossier {} blocked by quality gate: {}", dossier.getIsin(), quality.reasons());
+                return dossier;
+            }
         }
         LocalDateTime now = LocalDateTime.now();
         applyDossierStatus(dossier, DossierStatus.APPROVED, approvedBy, autoApproved);

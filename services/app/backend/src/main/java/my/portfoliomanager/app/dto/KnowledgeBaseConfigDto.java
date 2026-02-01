@@ -23,6 +23,10 @@ public record KnowledgeBaseConfigDto(
 		@JsonProperty("kb_refresh_min_days_between_runs_per_instrument") Integer kbRefreshMinDaysBetweenRunsPerInstrument,
 		@JsonProperty("run_timeout_minutes") Integer runTimeoutMinutes,
 		@JsonProperty("websearch_reasoning_effort") String websearchReasoningEffort,
-		@JsonProperty("websearch_allowed_domains") List<String> websearchAllowedDomains
+		@JsonProperty("websearch_allowed_domains") List<String> websearchAllowedDomains,
+		@JsonProperty("bulk_min_citations") Integer bulkMinCitations,
+		@JsonProperty("bulk_require_primary_source") Boolean bulkRequirePrimarySource,
+		@JsonProperty("alternatives_min_similarity_score") Double alternativesMinSimilarityScore,
+		@JsonProperty("extraction_evidence_required") Boolean extractionEvidenceRequired
 ) {
 }

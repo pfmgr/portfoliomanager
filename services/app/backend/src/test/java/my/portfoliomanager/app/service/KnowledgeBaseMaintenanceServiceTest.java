@@ -118,7 +118,11 @@ class KnowledgeBaseMaintenanceServiceTest {
 				current.kbRefreshMinDaysBetweenRunsPerInstrument(),
 				current.runTimeoutMinutes(),
 				current.websearchReasoningEffort(),
-				current.websearchAllowedDomains()
+				current.websearchAllowedDomains(),
+				current.bulkMinCitations(),
+				current.bulkRequirePrimarySource(),
+				current.alternativesMinSimilarityScore(),
+				current.extractionEvidenceRequired()
 		);
 		configService.updateConfig(updated);
 
@@ -150,21 +154,38 @@ class KnowledgeBaseMaintenanceServiceTest {
 			return new KnowledgeBaseLlmClient() {
 				@Override
 				public KnowledgeBaseLlmDossierDraft generateDossier(String isin,
-													 String context,
-													 List<String> allowedDomains,
-													 int maxChars) {
+											 String context,
+											 List<String> allowedDomains,
+											 int maxChars) {
 					ArrayNode citations = objectMapper.createArrayNode();
 					citations.add(objectMapper.createObjectNode()
 							.put("id", "1")
-							.put("title", "Test")
-							.put("url", "https://example.com")
-							.put("publisher", "Example")
+							.put("title", "Issuer Factsheet")
+							.put("url", "https://issuer.example.com/factsheet")
+							.put("publisher", "Issuer")
 							.put("accessed_at", "2024-01-01"));
-					String content = "name: Test Instrument\n" +
+					citations.add(objectMapper.createObjectNode()
+							.put("id", "2")
+							.put("title", "KID")
+							.put("url", "https://issuer.example.com/kid")
+							.put("publisher", "Issuer")
+							.put("accessed_at", "2024-01-01"));
+					String content = "# " + isin + " — Test Instrument\n" +
+							"## Quick profile\n" +
+							"name: Test Instrument\n" +
+							"## Classification\n" +
 							"instrument_type: ETF\n" +
 							"asset_class: Equity\n" +
 							"layer: 2\n" +
-							"layer_notes: Core";
+							"layer_notes: Core\n" +
+							"## Risk\n" +
+							"sri: 5\n" +
+							"## Costs & structure\n" +
+							"ongoing_charges_pct: 0.20\n" +
+							"benchmark_index: MSCI World\n" +
+							"## Exposures\n" +
+							"## Valuation & profitability\n" +
+							"## Sources\n";
 					return new KnowledgeBaseLlmDossierDraft(content, "Test Instrument", citations, "test-model");
 				}
 
