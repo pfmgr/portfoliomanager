@@ -38,6 +38,9 @@ public class LayerTargetConfigService {
 	private static final BigDecimal DEFAULT_VARIANCE_PCT = new BigDecimal("3.0");
 	private static final int DEFAULT_MINIMUM_SAVING_PLAN_SIZE = 15;
 	private static final int DEFAULT_MINIMUM_REBALANCING_AMOUNT = 10;
+	private static final int DEFAULT_PROJECTION_HORIZON_MONTHS = 12;
+	private static final int MIN_PROJECTION_HORIZON_MONTHS = 1;
+	private static final int MAX_PROJECTION_HORIZON_MONTHS = 120;
 	private static final int DEFAULT_MAX_SAVING_PLANS_PER_LAYER = 17;
 	private static final BigDecimal NORMALIZATION_THRESHOLD = new BigDecimal("1.5");
 	private static final Map<Integer, String> DEFAULT_LAYER_NAMES = Map.of(
@@ -127,6 +130,7 @@ public class LayerTargetConfigService {
 		BigDecimal variance = profile.getAcceptableVariancePct();
 		Integer minimumSavingPlanSize = profile.getMinimumSavingPlanSize();
 		Integer minimumRebalancingAmount = profile.getMinimumRebalancingAmount();
+		Integer projectionHorizonMonths = projectionHorizonMonthsOrDefault(profile.getProjectionHorizonMonths());
 		LayerTargetCustomOverrides overrides = config.getCustomOverrides();
 		boolean overridesActive = overrides != null && overrides.isEnabled();
 		if (overridesActive && overrides.getLayerTargets() != null && !overrides.getLayerTargets().isEmpty()) {
@@ -149,6 +153,7 @@ public class LayerTargetConfigService {
 				variance == null ? DEFAULT_VARIANCE_PCT : variance,
 				minimumSavingPlanSizeOrDefault(minimumSavingPlanSize),
 				minimumRebalancingAmountOrDefault(minimumRebalancingAmount),
+				projectionHorizonMonths,
 				overridesActive,
 				config.getLayerNames(),
 				config.getUpdatedAt()
@@ -163,6 +168,7 @@ public class LayerTargetConfigService {
 		}
 		profiles = refreshProfiles(profiles);
 		profiles = applyRiskThresholdUpdates(profiles, request == null ? null : request.profileRiskThresholds());
+		profiles = applyProjectionHorizonUpdates(profiles, request == null ? null : request.profileProjectionHorizonMonths());
 		Map<Integer, String> layerNames = current != null ? current.getLayerNames() : DEFAULT_LAYER_NAMES;
 		if (layerNames == null || layerNames.isEmpty()) {
 			layerNames = DEFAULT_LAYER_NAMES;
@@ -339,6 +345,13 @@ public class LayerTargetConfigService {
 						: DEFAULT_MINIMUM_REBALANCING_AMOUNT;
 			}
 			minimumRebalancingAmount = minimumRebalancingAmountOrDefault(minimumRebalancingAmount);
+			Integer projectionHorizonMonths = parseProjectionHorizonMonths(profileNode.path("projection_horizon_months"));
+			if (projectionHorizonMonths == null) {
+				projectionHorizonMonths = DEFAULT_PROFILES.containsKey(key)
+						? DEFAULT_PROFILES.get(key).getProjectionHorizonMonths()
+						: DEFAULT_PROJECTION_HORIZON_MONTHS;
+			}
+			projectionHorizonMonths = projectionHorizonMonthsOrDefault(projectionHorizonMonths);
 			Map<String, BigDecimal> constraints = parseConstraints(profileNode.path("constraints"));
 			if (constraints.isEmpty() && DEFAULT_PROFILES.containsKey(key)) {
 				constraints = DEFAULT_PROFILES.get(key).getConstraints();
@@ -355,6 +368,7 @@ public class LayerTargetConfigService {
 					variancePctOrDefault(variance),
 					minimumSavingPlanSize,
 					minimumRebalancingAmount,
+					projectionHorizonMonths,
 					constraints,
 					riskThresholds));
 		});
@@ -523,8 +537,45 @@ public class LayerTargetConfigService {
 					profile.getAcceptableVariancePct(),
 					profile.getMinimumSavingPlanSize(),
 					profile.getMinimumRebalancingAmount(),
+					profile.getProjectionHorizonMonths(),
 					profile.getConstraints(),
 					normalized
+			));
+		});
+		return Map.copyOf(updated);
+	}
+
+	private Map<String, LayerTargetProfile> applyProjectionHorizonUpdates(
+			Map<String, LayerTargetProfile> profiles,
+			Map<String, Integer> requested) {
+		if (profiles == null || profiles.isEmpty() || requested == null || requested.isEmpty()) {
+			return profiles == null ? Map.of() : profiles;
+		}
+		Map<String, LayerTargetProfile> updated = new LinkedHashMap<>(profiles);
+		requested.forEach((key, value) -> {
+			if (key == null || value == null) {
+				return;
+			}
+			String normalizedKey = key.trim().toUpperCase(Locale.ROOT);
+			LayerTargetProfile profile = updated.get(normalizedKey);
+			if (profile == null) {
+				return;
+			}
+			Integer normalized = normalizeProjectionHorizonMonths(value);
+			if (normalized == null) {
+				return;
+			}
+			updated.put(normalizedKey, new LayerTargetProfile(
+					profile.getKey(),
+					profile.getDisplayName(),
+					profile.getDescription(),
+					profile.getLayerTargets(),
+					profile.getAcceptableVariancePct(),
+					profile.getMinimumSavingPlanSize(),
+					profile.getMinimumRebalancingAmount(),
+					normalized,
+					profile.getConstraints(),
+					profile.getRiskThresholds()
 			));
 		});
 		return Map.copyOf(updated);
@@ -618,6 +669,9 @@ public class LayerTargetConfigService {
 			}
 			if (profile.getMinimumRebalancingAmount() != null) {
 				profileData.put("minimum_rebalancing_amount", profile.getMinimumRebalancingAmount());
+			}
+			if (profile.getProjectionHorizonMonths() != null) {
+				profileData.put("projection_horizon_months", profile.getProjectionHorizonMonths());
 			}
 			if (profile.getConstraints() != null && !profile.getConstraints().isEmpty()) {
 				profileData.put("constraints", profile.getConstraints());
@@ -772,6 +826,7 @@ public class LayerTargetConfigService {
 							: DEFAULT_VARIANCE_PCT.doubleValue(),
 					profile.getMinimumSavingPlanSize(),
 					profile.getMinimumRebalancingAmount(),
+					projectionHorizonMonthsOrDefault(profile.getProjectionHorizonMonths()),
 					buildDoubleConstraintMap(profile.getConstraints()),
 					buildRiskThresholdsDto(profile.getRiskThresholds())
 			));
@@ -846,6 +901,28 @@ public class LayerTargetConfigService {
 		return minimumRebalancingAmount;
 	}
 
+	private Integer projectionHorizonMonthsOrDefault(Integer projectionHorizonMonths) {
+		Integer clamped = clampProjectionHorizonMonths(projectionHorizonMonths);
+		return clamped == null ? DEFAULT_PROJECTION_HORIZON_MONTHS : clamped;
+	}
+
+	private Integer normalizeProjectionHorizonMonths(Integer projectionHorizonMonths) {
+		return clampProjectionHorizonMonths(projectionHorizonMonths);
+	}
+
+	private Integer clampProjectionHorizonMonths(Integer projectionHorizonMonths) {
+		if (projectionHorizonMonths == null) {
+			return null;
+		}
+		if (projectionHorizonMonths < MIN_PROJECTION_HORIZON_MONTHS) {
+			return MIN_PROJECTION_HORIZON_MONTHS;
+		}
+		if (projectionHorizonMonths > MAX_PROJECTION_HORIZON_MONTHS) {
+			return MAX_PROJECTION_HORIZON_MONTHS;
+		}
+		return projectionHorizonMonths;
+	}
+
 	private BigDecimal parseVariance(JsonNode node) {
 		BigDecimal value = toBigDecimal(node);
 		return value == null ? DEFAULT_VARIANCE_PCT : value;
@@ -887,6 +964,25 @@ public class LayerTargetConfigService {
 			}
 		}
 		return null;
+	}
+
+	private Integer parseProjectionHorizonMonths(JsonNode node) {
+		if (node == null || node.isMissingNode() || node.isNull()) {
+			return null;
+		}
+		Integer value = null;
+		if (node.isIntegralNumber()) {
+			value = node.intValue();
+		} else if (node.isNumber()) {
+			value = node.asInt();
+		} else if (node.isTextual()) {
+			try {
+				value = Integer.parseInt(node.asText().trim());
+			} catch (NumberFormatException ignored) {
+				value = null;
+			}
+		}
+		return clampProjectionHorizonMonths(value);
 	}
 
 	private String extractText(JsonNode node, String field, String fallback) {
@@ -1007,6 +1103,7 @@ public class LayerTargetConfigService {
 				new BigDecimal("3.0"),
 				DEFAULT_MINIMUM_SAVING_PLAN_SIZE,
 				DEFAULT_MINIMUM_REBALANCING_AMOUNT,
+				DEFAULT_PROJECTION_HORIZON_MONTHS,
 				Map.of(
 						"core_min", new BigDecimal("0.70"),
 						"layer5_max", new BigDecimal("0.03"),
@@ -1022,6 +1119,7 @@ public class LayerTargetConfigService {
 				new BigDecimal("3.0"),
 				DEFAULT_MINIMUM_SAVING_PLAN_SIZE,
 				DEFAULT_MINIMUM_REBALANCING_AMOUNT,
+				DEFAULT_PROJECTION_HORIZON_MONTHS,
 				Map.of(
 						"core_min", new BigDecimal("0.70"),
 						"layer5_max", new BigDecimal("0.03"),
@@ -1037,6 +1135,7 @@ public class LayerTargetConfigService {
 				new BigDecimal("3.0"),
 				DEFAULT_MINIMUM_SAVING_PLAN_SIZE,
 				DEFAULT_MINIMUM_REBALANCING_AMOUNT,
+				DEFAULT_PROJECTION_HORIZON_MONTHS,
 				Map.of(
 						"core_min", new BigDecimal("0.70"),
 						"layer5_max", new BigDecimal("0.03"),
@@ -1052,6 +1151,7 @@ public class LayerTargetConfigService {
 				new BigDecimal("3.0"),
 				DEFAULT_MINIMUM_SAVING_PLAN_SIZE,
 				DEFAULT_MINIMUM_REBALANCING_AMOUNT,
+				DEFAULT_PROJECTION_HORIZON_MONTHS,
 				Map.of(
 						"core_min", new BigDecimal("0.60"),
 						"layer5_max", new BigDecimal("0.03"),
@@ -1067,6 +1167,7 @@ public class LayerTargetConfigService {
 				new BigDecimal("3.0"),
 				DEFAULT_MINIMUM_SAVING_PLAN_SIZE,
 				DEFAULT_MINIMUM_REBALANCING_AMOUNT,
+				DEFAULT_PROJECTION_HORIZON_MONTHS,
 				Map.of(
 						"core_min", new BigDecimal("0.60"),
 						"layer5_max", new BigDecimal("0.03"),

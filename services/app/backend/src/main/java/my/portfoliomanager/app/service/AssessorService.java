@@ -108,6 +108,7 @@ public class AssessorService {
 		Integer minRebalance = applyOverrides && config.getCustomMinimumRebalancingAmount() != null
 				? config.getCustomMinimumRebalancingAmount()
 				: profile.getMinimumRebalancingAmount();
+		Integer projectionHorizonMonths = profile == null ? null : profile.getProjectionHorizonMonths();
 		Integer minInstrument = request == null ? null : request.minimumInstrumentAmountEur();
 		if (variance == null) {
 			variance = DEFAULT_VARIANCE_PCT;
@@ -165,6 +166,7 @@ public class AssessorService {
 				minSavingPlan,
 				minRebalance,
 				minInstrument,
+				profile == null ? null : profile.getProjectionHorizonMonths(),
 				plans,
 				savingPlanDelta,
 				oneTimeAmount,
@@ -214,7 +216,7 @@ public class AssessorService {
 			savingPlanAllocationNotes = savingPlanAllocation.allocationNotes();
 		}
 		NarrativeBundle narratives = buildNarratives(result, config, savingPlanSnapshot, variance, minSavingPlan,
-				minRebalance, minInstrument, oneTimeAmount, targetLayerAmounts, adjustedSuggestions,
+				minRebalance, projectionHorizonMonths, minInstrument, oneTimeAmount, targetLayerAmounts, adjustedSuggestions,
 				savingPlanNewInstruments, savingPlanAllocationNotes, oneTimeNewInstruments, adjustedOneTimeBuckets,
 				gapDetectionPolicy);
 
@@ -887,14 +889,15 @@ public class AssessorService {
 	}
 
 	private NarrativeBundle buildNarratives(AssessorEngine.AssessorEngineResult result,
-											LayerTargetConfigResponseDto config,
-											SavingPlanSnapshot savingPlanSnapshot,
-											BigDecimal variance,
-											Integer minimumSavingPlanSize,
-											Integer minimumRebalancingAmount,
-											Integer minimumInstrumentAmount,
-											BigDecimal oneTimeAmount,
-											Map<Integer, BigDecimal> targetLayerAmounts,
+									 LayerTargetConfigResponseDto config,
+									 SavingPlanSnapshot savingPlanSnapshot,
+									 BigDecimal variance,
+									 Integer minimumSavingPlanSize,
+									 Integer minimumRebalancingAmount,
+									 Integer projectionHorizonMonths,
+									 Integer minimumInstrumentAmount,
+									 BigDecimal oneTimeAmount,
+									 Map<Integer, BigDecimal> targetLayerAmounts,
 											List<AssessorSavingPlanSuggestionDto> savingPlanSuggestions,
 											List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments,
 											List<String> savingPlanAllocationNotes,
@@ -909,7 +912,7 @@ public class AssessorService {
 				|| (savingPlanNewInstruments != null && !savingPlanNewInstruments.isEmpty());
 		if (hasSavingPlanContext) {
 			String prompt = buildSavingPlanNarrativePrompt(result, config, variance,
-					minimumSavingPlanSize, minimumRebalancingAmount, targetLayerAmounts, savingPlanSuggestions,
+					minimumSavingPlanSize, minimumRebalancingAmount, projectionHorizonMonths, targetLayerAmounts, savingPlanSuggestions,
 					savingPlanNewInstruments, savingPlanAllocationNotes, gapDetectionPolicy);
 			prompt = llmPromptPolicy == null
 					? prompt
@@ -937,20 +940,22 @@ public class AssessorService {
 	}
 
 	private String buildSavingPlanNarrativePrompt(AssessorEngine.AssessorEngineResult result,
-												 LayerTargetConfigResponseDto config,
-												 BigDecimal variance,
-												 Integer minimumSavingPlanSize,
-												 Integer minimumRebalancingAmount,
-												 Map<Integer, BigDecimal> targetLayerAmounts,
-												 List<AssessorSavingPlanSuggestionDto> savingPlanSuggestions,
-												 List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments,
-												 List<String> savingPlanAllocationNotes,
-												 AssessorGapDetectionPolicy gapDetectionPolicy) {
+									 LayerTargetConfigResponseDto config,
+									 BigDecimal variance,
+									 Integer minimumSavingPlanSize,
+									 Integer minimumRebalancingAmount,
+									 Integer projectionHorizonMonths,
+									 Map<Integer, BigDecimal> targetLayerAmounts,
+									 List<AssessorSavingPlanSuggestionDto> savingPlanSuggestions,
+									 List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments,
+									 List<String> savingPlanAllocationNotes,
+									 AssessorGapDetectionPolicy gapDetectionPolicy) {
 		StringBuilder builder = new StringBuilder();
 		builder.append("Write a concise narrative (2-5 sentences) describing the savings plan proposal.\n");
 		builder.append("Rules:\n");
 		builder.append("- Use the provided layer names.\n");
 		builder.append("- Mention whether the current distribution is within tolerance.\n");
+		builder.append("- Explain that layer budgets follow a projection over projection_horizon_months using effective holdings.\n");
 		builder.append("- Summarize the proposed actions using instrument name, ISIN, layer, and delta amounts.\n");
 		builder.append("- If new_instruments is not none, add a sentence for each explaining the portfolio gap and why the specific instrument was selected, using the rationale.\n");
 		builder.append("- If new_instruments is not none, explain the weighting of new instrument amounts using allocation_rules.\n");
@@ -964,6 +969,9 @@ public class AssessorService {
 				? AssessorGapDetectionPolicy.SAVING_PLAN_GAPS.id()
 				: gapDetectionPolicy.id()).append("\n");
 		builder.append("tolerance_pct=").append(variance == null ? DEFAULT_VARIANCE_PCT : variance).append("\n");
+		builder.append("projection_horizon_months=")
+				.append(normalizeProjectionHorizonMonths(projectionHorizonMonths))
+				.append("\n");
 		builder.append("minimum_saving_plan_size_eur=").append(minimumSavingPlanSize).append("\n");
 		builder.append("minimum_rebalancing_amount_eur=").append(minimumRebalancingAmount).append("\n");
 		builder.append("allocation_rules=New instrument amounts are split evenly after reserving the minimum per instrument. ")
@@ -1017,6 +1025,7 @@ public class AssessorService {
 		builder.append("Rules:\n");
 		builder.append("- Use the provided layer names.\n");
 		builder.append("- Mention the total one-time amount.\n");
+		builder.append("- Explain that layer amounts close gaps to the target weights using effective holdings.\n");
 		builder.append("- Summarize the layer allocation and any instrument buckets if provided.\n");
 		builder.append("- If new_instruments is not none, add a sentence for each explaining the portfolio gap and why the specific instrument was selected, using the rationale.\n");
 		builder.append("- If new_instruments is none, add one sentence using no_new_instruments_reason verbatim.\n");
@@ -2121,6 +2130,19 @@ public class AssessorService {
 			return BigDecimal.ZERO;
 		}
 		return value;
+	}
+
+	private int normalizeProjectionHorizonMonths(Integer projectionHorizonMonths) {
+		if (projectionHorizonMonths == null) {
+			return 12;
+		}
+		if (projectionHorizonMonths < 1) {
+			return 1;
+		}
+		if (projectionHorizonMonths > 120) {
+			return 120;
+		}
+		return projectionHorizonMonths;
 	}
 
 	private String determinePlanType(BigDecimal oldAmount, BigDecimal newAmount) {

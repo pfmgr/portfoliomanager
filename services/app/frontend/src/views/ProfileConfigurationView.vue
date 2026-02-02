@@ -61,7 +61,14 @@
       <div class="grid grid-2">
         <div>
           <label for="variance-input">Acceptable Variance (%)</label>
-          <input id="variance-input" class="input" type="number" step="0.1" v-model.number="variance" />
+          <input
+            id="variance-input"
+            class="input"
+            type="number"
+            step="0.1"
+            aria-describedby="variance-help profile-defaults-note"
+            v-model.number="variance"
+          />
         </div>
         <div>
           <label for="minimum-saving-plan-input">Minimum Saving Plan Size (EUR)</label>
@@ -73,6 +80,7 @@
             min="1"
             inputmode="numeric"
             pattern="[0-9]*"
+            aria-describedby="minimum-amounts-help profile-defaults-note"
             v-model.number="minimumSavingPlanSize"
             @input="coerceMinimumSavingPlanSize"
             @blur="normalizeMinimumSavingPlanSize"
@@ -88,12 +96,39 @@
             min="1"
             inputmode="numeric"
             pattern="[0-9]*"
+            aria-describedby="minimum-amounts-help profile-defaults-note"
             v-model.number="minimumRebalancingAmount"
             @input="coerceMinimumRebalancingAmount"
             @blur="normalizeMinimumRebalancingAmount"
           />
         </div>
+        <div>
+          <label for="projection-horizon-input">Projection horizon (months)</label>
+          <input
+            id="projection-horizon-input"
+            class="input"
+            type="number"
+            step="1"
+            min="1"
+            max="120"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            aria-describedby="projection-horizon-help profile-defaults-note"
+            v-model.number="projectionHorizonMonths"
+            @input="coerceProjectionHorizonMonths"
+            @blur="normalizeProjectionHorizonMonths"
+          />
+        </div>
       </div>
+      <p id="variance-help" class="note small">Typical range: 1-5%.</p>
+      <p id="minimum-amounts-help" class="note small">Minimum amounts must be whole EUR (>= 1).</p>
+      <p id="projection-horizon-help" class="note small">Range 1-120 months. Whole months only.</p>
+      <p id="profile-defaults-note" class="note">
+        Profile defaults: variance {{ formatVariance(profileVariancePct) }},
+        minimum size {{ formatMinimum(profileMinimumSavingPlanSize) }} EUR,
+        minimum rebalancing {{ formatMinimum(profileMinimumRebalancingAmount) }} EUR,
+        projection horizon {{ profileProjectionHorizonMonths }} months.
+      </p>
       <h3>Risk thresholds</h3>
       <p class="note">Stored per profile and used for instrument assessment risk bands.</p>
       <div class="grid grid-2">
@@ -132,12 +167,6 @@
       </div>
       <p class="note small">Medium risk is the band between the low and high thresholds.</p>
       <p class="note">Current source for variance + minimums: <b>{{ sourceLabel }}</b></p>
-      <p class="note">
-        Profile defaults: variance {{ formatVariance(profileVariancePct) }},
-        minimum size {{ formatMinimum(profileMinimumSavingPlanSize) }} EUR,
-        minimum rebalancing {{ formatMinimum(profileMinimumRebalancingAmount) }} EUR.
-      </p>
-      <p class="note small">Minimum amounts accept whole EUR amounts only.</p>
       <p v-if="loading" class="note">Loading layer targets...</p>
 
       <div class="table-wrap">
@@ -299,6 +328,9 @@ import { apiRequest } from '../api'
 
 const layers = [1, 2, 3, 4, 5]
 const DEFAULT_RISK_THRESHOLDS = { lowMax: 30, highMin: 51 }
+const DEFAULT_PROJECTION_HORIZON_MONTHS = 12
+const MIN_PROJECTION_HORIZON_MONTHS = 1
+const MAX_PROJECTION_HORIZON_MONTHS = 120
 const activePanel = ref('ALLOCATIONS')
 const qualityGateCategories = ['FUND', 'EQUITY', 'REIT', 'UNKNOWN']
 const qualityGateEvidenceKeys = [
@@ -337,6 +369,7 @@ const maxSavingPlansPerLayer = ref({ 1: 17, 2: 17, 3: 17, 4: 17, 5: 17 })
 const variance = ref(2.0)
 const minimumSavingPlanSize = ref(15)
 const minimumRebalancingAmount = ref(10)
+const projectionHorizonMonths = ref(12)
 const riskThresholds = ref({ ...DEFAULT_RISK_THRESHOLDS })
 const message = ref('')
 const messageType = ref('success')
@@ -377,6 +410,19 @@ const profileMinimumSavingPlanSize = computed(() => {
 const profileMinimumRebalancingAmount = computed(() => {
   const value = seedProfile.value?.minimumRebalancingAmount
   return Number.isInteger(value) && value > 0 ? value : 10
+})
+const profileProjectionHorizonMonths = computed(() => {
+  const numeric = Number(seedProfile.value?.projectionHorizonMonths)
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_PROJECTION_HORIZON_MONTHS
+  }
+  if (numeric < MIN_PROJECTION_HORIZON_MONTHS) {
+    return MIN_PROJECTION_HORIZON_MONTHS
+  }
+  if (numeric > MAX_PROJECTION_HORIZON_MONTHS) {
+    return MAX_PROJECTION_HORIZON_MONTHS
+  }
+  return Math.trunc(numeric)
 })
 const profileRiskThresholdDefaults = computed(() => mapRiskThresholds(seedProfile.value?.riskThresholds))
 const orderedProfiles = computed(() => {
@@ -438,6 +484,7 @@ function applyResponse(data) {
   customOverridesEnabled.value = Boolean(data.customOverridesEnabled)
   const profile = profiles.value[selectedProfileKey.value]
   applyProfileRiskThresholds(profile)
+  applyProfileProjectionHorizon(profile)
   const effectiveTargets = mapToTargets(data.effectiveLayerTargets || {})
   profileTargets.value = profile?.layerTargets ? mapToTargets(profile.layerTargets) : effectiveTargets
   const customTargets = mapToTargets(data.customLayerTargets || {})
@@ -598,6 +645,7 @@ async function save() {
   try {
     normalizeMinimumSavingPlanSize()
     normalizeMinimumRebalancingAmount()
+    normalizeProjectionHorizonMonths()
     normalizeRiskThresholds()
     await submitConfig(
       {
@@ -610,6 +658,9 @@ async function save() {
         maxSavingPlansPerLayer: { ...maxSavingPlansPerLayer.value },
         profileRiskThresholds: {
           [selectedProfileKey.value]: { ...riskThresholds.value }
+        },
+        profileProjectionHorizonMonths: {
+          [selectedProfileKey.value]: projectionHorizonMonths.value
         }
       },
       'Layer targets saved.'
@@ -634,6 +685,7 @@ async function applyProfile() {
   if (profile?.minimumRebalancingAmount !== undefined && profile?.minimumRebalancingAmount !== null) {
     minimumRebalancingAmount.value = profile.minimumRebalancingAmount
   }
+  applyProfileProjectionHorizon(profile)
   try {
     await submitConfig(
       {
@@ -670,6 +722,11 @@ async function resetToProfileDefault() {
   }
   if (seed?.minimumRebalancingAmount !== undefined && seed?.minimumRebalancingAmount !== null) {
     minimumRebalancingAmount.value = seed.minimumRebalancingAmount
+  }
+  if (seed?.projectionHorizonMonths !== undefined && seed?.projectionHorizonMonths !== null) {
+    projectionHorizonMonths.value = clampProjectionHorizonMonths(Math.trunc(seed.projectionHorizonMonths))
+  } else {
+    projectionHorizonMonths.value = profileProjectionHorizonMonths.value
   }
 }
 
@@ -743,6 +800,15 @@ function mapRiskThresholds(source) {
 
 function applyProfileRiskThresholds(profile) {
   riskThresholds.value = mapRiskThresholds(profile?.riskThresholds)
+}
+
+function applyProfileProjectionHorizon(profile) {
+  const numeric = Number(profile?.projectionHorizonMonths)
+  if (!Number.isFinite(numeric)) {
+    projectionHorizonMonths.value = profileProjectionHorizonMonths.value
+    return
+  }
+  projectionHorizonMonths.value = clampProjectionHorizonMonths(Math.trunc(numeric))
 }
 
 function resolveSeedProfile(key) {
@@ -929,6 +995,19 @@ function clampRiskValue(value) {
   return value
 }
 
+function clampProjectionHorizonMonths(value) {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_PROJECTION_HORIZON_MONTHS
+  }
+  if (value < MIN_PROJECTION_HORIZON_MONTHS) {
+    return MIN_PROJECTION_HORIZON_MONTHS
+  }
+  if (value > MAX_PROJECTION_HORIZON_MONTHS) {
+    return MAX_PROJECTION_HORIZON_MONTHS
+  }
+  return value
+}
+
 function coerceMinimumSavingPlanSize() {
   if (minimumSavingPlanSize.value === null || minimumSavingPlanSize.value === undefined) {
     return
@@ -969,6 +1048,26 @@ function normalizeMinimumRebalancingAmount() {
   minimumRebalancingAmount.value = Math.trunc(numeric)
 }
 
+function coerceProjectionHorizonMonths() {
+  if (projectionHorizonMonths.value === null || projectionHorizonMonths.value === undefined) {
+    return
+  }
+  const numeric = Number(projectionHorizonMonths.value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  projectionHorizonMonths.value = clampProjectionHorizonMonths(Math.trunc(numeric))
+}
+
+function normalizeProjectionHorizonMonths() {
+  const numeric = Number(projectionHorizonMonths.value)
+  if (!Number.isFinite(numeric)) {
+    projectionHorizonMonths.value = profileProjectionHorizonMonths.value
+    return
+  }
+  projectionHorizonMonths.value = clampProjectionHorizonMonths(Math.trunc(numeric))
+}
+
 function layerLabel(layer) {
   return layerNames.value[layer] || `Layer ${layer}`
 }
@@ -989,6 +1088,7 @@ watch(selectedProfileKey, (key) => {
     }
   }
   applyProfileRiskThresholds(profile)
+  applyProfileProjectionHorizon(profile)
   if (!customOverridesEnabled.value && profile?.acceptableVariancePct) {
     variance.value = profile.acceptableVariancePct
   }

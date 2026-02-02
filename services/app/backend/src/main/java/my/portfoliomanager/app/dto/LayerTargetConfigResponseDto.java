@@ -68,23 +68,26 @@ public class LayerTargetConfigResponseDto {
 		private final Double acceptableVariancePct;
 		private final Integer minimumSavingPlanSize;
 		private final Integer minimumRebalancingAmount;
+		private final Integer projectionHorizonMonths;
 		private final Map<String, Double> constraints;
 		private final LayerTargetRiskThresholdsDto riskThresholds;
 
 		public LayerTargetProfileDto(String displayName,
 							 String description,
 							 Map<Integer, Double> layerTargets,
-							 Double acceptableVariancePct,
-							 Integer minimumSavingPlanSize,
-							 Integer minimumRebalancingAmount,
-							 Map<String, Double> constraints,
-							 LayerTargetRiskThresholdsDto riskThresholds) {
+						 Double acceptableVariancePct,
+						 Integer minimumSavingPlanSize,
+						 Integer minimumRebalancingAmount,
+						 Integer projectionHorizonMonths,
+						 Map<String, Double> constraints,
+						 LayerTargetRiskThresholdsDto riskThresholds) {
 			this.displayName = displayName;
 			this.description = description;
 			this.layerTargets = layerTargets;
 			this.acceptableVariancePct = acceptableVariancePct;
 			this.minimumSavingPlanSize = minimumSavingPlanSize;
 			this.minimumRebalancingAmount = minimumRebalancingAmount;
+			this.projectionHorizonMonths = projectionHorizonMonths;
 			this.constraints = constraints;
 			this.riskThresholds = riskThresholds;
 		}

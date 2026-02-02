@@ -6,11 +6,12 @@ import java.util.Map;
 
 public record LayerTargetEffectiveConfig(String selectedProfileKey,
 										 LayerTargetProfile selectedProfile,
-										 Map<Integer, BigDecimal> effectiveLayerTargets,
-										 BigDecimal acceptableVariancePct,
-										 Integer minimumSavingPlanSize,
-										 Integer minimumRebalancingAmount,
-										 boolean customOverridesActive,
-										 Map<Integer, String> layerNames,
-										 OffsetDateTime updatedAt) {
+							 Map<Integer, BigDecimal> effectiveLayerTargets,
+							 BigDecimal acceptableVariancePct,
+							 Integer minimumSavingPlanSize,
+							 Integer minimumRebalancingAmount,
+							 Integer projectionHorizonMonths,
+							 boolean customOverridesActive,
+							 Map<Integer, String> layerNames,
+							 OffsetDateTime updatedAt) {
 }

@@ -188,6 +188,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
   - Preferred: `services/app/backend/run-gradle-build.sh` (starts the int-test env, runs `./gradlew clean build`, and tears down).
   - Manual:
     - Start DB: `docker compose -f services/app/backend/int-test-env/compose.yaml up -d` (exposes Postgres on `localhost:5439`, db `mydatabase`, user `myuser`, password `secret`)
+    - Note: `services/app/backend/int-test-env/compose.yaml` uses the local image `portfoliomanager-postgres:16`; avoid `--pull` unless you have registry access.
     - `cd services/app/backend`
     - `GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test`
 - Frontend (Vitest):

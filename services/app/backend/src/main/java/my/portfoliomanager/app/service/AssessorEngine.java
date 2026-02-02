@@ -21,6 +21,9 @@ public class AssessorEngine {
 	private static final List<Integer> LAYERS = List.of(1, 2, 3, 4, 5);
 	private static final List<Integer> ONE_TIME_PRIORITY = List.of(1, 2, 3, 4);
 	private static final int DEFAULT_MIN_INSTRUMENT = 25;
+	private static final int DEFAULT_PROJECTION_HORIZON_MONTHS = 12;
+	private static final int MIN_PROJECTION_HORIZON_MONTHS = 1;
+	private static final int MAX_PROJECTION_HORIZON_MONTHS = 120;
 
 	public AssessorEngineResult assess(AssessorEngineInput input) {
 		if (input == null) {
@@ -46,11 +49,19 @@ public class AssessorEngine {
 		}
 
 		Map<Integer, BigDecimal> normalizedTargets = normalizeTargets(input.targetWeights());
-		Map<Integer, BigDecimal> targetAmounts = buildTargetAmounts(normalizedTargets, monthlyTotal);
+		Map<Integer, BigDecimal> targetAmounts = buildProjectedSavingPlanTargets(
+				normalizedTargets,
+				input.holdingsByLayer(),
+				monthlyTotal,
+				normalizeProjectionHorizonMonths(input.projectionHorizonMonths()),
+				input.acceptableVariancePct()
+		);
 		Map<Integer, BigDecimal> effectiveTargetAmounts = targetAmounts;
 		Map<Integer, BigDecimal> currentDistribution = computeDistribution(currentByLayer, monthlyTotal);
+		Map<Integer, BigDecimal> targetDistribution = computeDistribution(targetAmounts, monthlyTotal);
 		boolean budgetEmpty = monthlyTotal.signum() <= 0;
-		boolean withinTolerance = budgetEmpty || isWithinTolerance(currentDistribution, normalizedTargets, input.acceptableVariancePct());
+		boolean withinTolerance = budgetEmpty
+				|| isWithinTolerance(currentDistribution, targetDistribution, input.acceptableVariancePct());
 
 		Diagnostics diagnostics;
 		List<SavingPlanSuggestion> suggestions = List.of();
@@ -563,26 +574,37 @@ public class AssessorEngine {
 	}
 
 	private Map<Integer, BigDecimal> computeOneTimeLayers(BigDecimal oneTimeAmount,
-														  Map<Integer, BigDecimal> targetWeights,
-														  Map<Integer, BigDecimal> holdingsByLayer) {
+									  Map<Integer, BigDecimal> targetWeights,
+									  Map<Integer, BigDecimal> holdingsByLayer) {
 		Map<Integer, BigDecimal> normalizedTargets = normalizeTargets(targetWeights);
-		Map<Integer, BigDecimal> allocations;
 		if (holdingsByLayer != null && !holdingsByLayer.isEmpty()) {
-			Map<Integer, BigDecimal> holdingsDistribution = computeDistribution(holdingsByLayer, sumAmounts(holdingsByLayer));
-			Map<Integer, BigDecimal> gaps = new LinkedHashMap<>();
-			BigDecimal gapTotal = ZERO;
-			for (int layer : ONE_TIME_PRIORITY) {
-				BigDecimal target = normalizedTargets.getOrDefault(layer, ZERO);
-				BigDecimal current = holdingsDistribution.getOrDefault(layer, ZERO);
-				BigDecimal gap = target.subtract(current);
-				if (gap.signum() > 0) {
-					gaps.put(layer, gap);
-					gapTotal = gapTotal.add(gap);
+			Map<Integer, BigDecimal> holdings = normalizeHoldingsByLayer(holdingsByLayer);
+			BigDecimal holdingsTotal = sumAmounts(holdings);
+			if (holdingsTotal.signum() > 0) {
+				BigDecimal projectedTotal = holdingsTotal.add(oneTimeAmount);
+				Map<Integer, BigDecimal> gaps = new LinkedHashMap<>();
+				BigDecimal gapTotal = ZERO;
+				for (int layer : ONE_TIME_PRIORITY) {
+					BigDecimal targetWeight = normalizedTargets.getOrDefault(layer, ZERO);
+					BigDecimal targetValue = projectedTotal.multiply(targetWeight);
+					BigDecimal holding = holdings.getOrDefault(layer, ZERO);
+					BigDecimal gap = targetValue.subtract(holding);
+					if (gap.signum() > 0) {
+						gaps.put(layer, gap);
+						gapTotal = gapTotal.add(gap);
+					}
 				}
-			}
-			if (gapTotal.signum() > 0) {
-				allocations = allocateByWeights(oneTimeAmount, gaps);
-				return allocations;
+				if (gapTotal.signum() > 0) {
+					Map<Integer, BigDecimal> weights = new LinkedHashMap<>();
+					for (int layer : ONE_TIME_PRIORITY) {
+						BigDecimal gap = gaps.getOrDefault(layer, ZERO);
+						BigDecimal weight = gap.signum() == 0
+								? ZERO
+								: gap.divide(gapTotal, 8, RoundingMode.HALF_UP);
+						weights.put(layer, weight);
+					}
+					return allocateByWeights(oneTimeAmount, weights);
+				}
 			}
 		}
 		Map<Integer, BigDecimal> reducedTargets = new LinkedHashMap<>();
@@ -753,6 +775,102 @@ public class AssessorEngine {
 			}
 		}
 		return adjusted;
+	}
+
+	private Map<Integer, BigDecimal> buildProjectedSavingPlanTargets(Map<Integer, BigDecimal> targetWeights,
+									  Map<Integer, BigDecimal> holdingsByLayer,
+									  BigDecimal monthlyTotal,
+									  int projectionHorizonMonths,
+									  BigDecimal acceptableVariancePct) {
+		Map<Integer, BigDecimal> fallback = buildTargetAmounts(targetWeights, monthlyTotal);
+		if (monthlyTotal == null || monthlyTotal.signum() <= 0) {
+			return fallback;
+		}
+		if (targetWeights == null || targetWeights.isEmpty()) {
+			return fallback;
+		}
+		Map<Integer, BigDecimal> holdings = normalizeHoldingsByLayer(holdingsByLayer);
+		BigDecimal holdingsTotal = sumAmounts(holdings);
+		if (holdingsTotal.signum() <= 0) {
+			return fallback;
+		}
+		BigDecimal horizon = BigDecimal.valueOf(projectionHorizonMonths);
+		BigDecimal projectedTotal = holdingsTotal.add(monthlyTotal.multiply(horizon));
+		BigDecimal varianceFraction = varianceFraction(acceptableVariancePct);
+		Map<Integer, BigDecimal> gaps = initLayerAmounts();
+		BigDecimal gapTotal = ZERO;
+		for (int layer : LAYERS) {
+			BigDecimal targetWeight = targetWeights.getOrDefault(layer, ZERO);
+			BigDecimal targetValue = projectedTotal.multiply(targetWeight);
+			BigDecimal holding = holdings.getOrDefault(layer, ZERO);
+			BigDecimal gap = targetValue.subtract(holding);
+			if (gap.signum() > 0) {
+				BigDecimal currentWeight = holding.divide(holdingsTotal, 8, RoundingMode.HALF_UP);
+				if (currentWeight.compareTo(targetWeight.add(varianceFraction)) > 0) {
+					gap = ZERO;
+				}
+			} else {
+				gap = ZERO;
+			}
+			gaps.put(layer, gap);
+			gapTotal = gapTotal.add(gap);
+		}
+		if (gapTotal.signum() <= 0) {
+			return fallback;
+		}
+		Map<Integer, BigDecimal> weights = initLayerAmounts();
+		for (int layer : LAYERS) {
+			BigDecimal gap = gaps.getOrDefault(layer, ZERO);
+			BigDecimal weight = gap.signum() == 0
+					? ZERO
+					: gap.divide(gapTotal, 8, RoundingMode.HALF_UP);
+			weights.put(layer, weight);
+		}
+		Map<Integer, BigDecimal> desired = allocateByWeightsRaw(monthlyTotal, weights);
+		return roundProposalTargets(desired, monthlyTotal);
+	}
+
+	private Map<Integer, BigDecimal> normalizeHoldingsByLayer(Map<Integer, BigDecimal> holdingsByLayer) {
+		Map<Integer, BigDecimal> normalized = initLayerAmounts();
+		if (holdingsByLayer == null || holdingsByLayer.isEmpty()) {
+			return normalized;
+		}
+		for (int layer : LAYERS) {
+			normalized.put(layer, safeAmount(holdingsByLayer.getOrDefault(layer, ZERO)));
+		}
+		return normalized;
+	}
+
+	private int normalizeProjectionHorizonMonths(Integer projectionHorizonMonths) {
+		if (projectionHorizonMonths == null) {
+			return DEFAULT_PROJECTION_HORIZON_MONTHS;
+		}
+		if (projectionHorizonMonths < MIN_PROJECTION_HORIZON_MONTHS) {
+			return MIN_PROJECTION_HORIZON_MONTHS;
+		}
+		if (projectionHorizonMonths > MAX_PROJECTION_HORIZON_MONTHS) {
+			return MAX_PROJECTION_HORIZON_MONTHS;
+		}
+		return projectionHorizonMonths;
+	}
+
+	private BigDecimal varianceFraction(BigDecimal variancePct) {
+		BigDecimal variance = variancePct == null || variancePct.signum() <= 0
+				? DEFAULT_VARIANCE_PCT
+				: variancePct;
+		return variance.divide(ONE_HUNDRED, 6, RoundingMode.HALF_UP);
+	}
+
+	private Map<Integer, BigDecimal> allocateByWeightsRaw(BigDecimal total, Map<Integer, BigDecimal> weights) {
+		Map<Integer, BigDecimal> raw = initLayerAmounts();
+		if (weights == null || weights.isEmpty() || total == null || total.signum() <= 0) {
+			return raw;
+		}
+		for (int layer : LAYERS) {
+			BigDecimal weight = weights.getOrDefault(layer, ZERO);
+			raw.put(layer, total.multiply(weight));
+		}
+		return raw;
 	}
 
 	private Map<Integer, BigDecimal> buildTargetAmounts(Map<Integer, BigDecimal> targets, BigDecimal total) {
@@ -1337,16 +1455,17 @@ public class AssessorEngine {
 	}
 
 	public record AssessorEngineInput(String selectedProfile,
-									  Map<Integer, BigDecimal> targetWeights,
-									  BigDecimal acceptableVariancePct,
-									  Integer minimumSavingPlanSize,
-									  Integer minimumRebalancingAmount,
-									  Integer minimumInstrumentAmount,
-									  List<SavingPlanItem> savingPlans,
-									  BigDecimal savingPlanAmountDelta,
-									  BigDecimal oneTimeAmount,
-									  Map<Integer, BigDecimal> holdingsByLayer,
-									  boolean instrumentAllocationEnabled) {
+								  Map<Integer, BigDecimal> targetWeights,
+								  BigDecimal acceptableVariancePct,
+								  Integer minimumSavingPlanSize,
+								  Integer minimumRebalancingAmount,
+								  Integer minimumInstrumentAmount,
+								  Integer projectionHorizonMonths,
+								  List<SavingPlanItem> savingPlans,
+								  BigDecimal savingPlanAmountDelta,
+								  BigDecimal oneTimeAmount,
+								  Map<Integer, BigDecimal> holdingsByLayer,
+								  boolean instrumentAllocationEnabled) {
 	}
 
 	public record AssessorEngineResult(String selectedProfile,
