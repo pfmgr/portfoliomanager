@@ -146,6 +146,7 @@ Important: All unknown instruments should remain `layer=5` until explicitly clas
 - The `layer_target_config` table stores a single row (`id=1`). `LayerTargetConfigService` and Liquibase ensure the JSON supports the new schema plus backwards compatibility for legacy `{layer_targets, acceptable_variance_pct}` payloads. The service feeds `LayerTargetEffectiveConfig` to the rebalancer, merges custom overrides when enabled, and exposes `LayerTargetConfigResponseDto` to the UI.
 - API endpoints: `GET /api/layer-targets`, `PUT /api/layer-targets`, `POST /api/layer-targets/reset`. They supply/accept the active profile key, profile display metadata, effective layer targets, variance, layer name mapping, and custom override flags. Liquibase handles default inserts for Postgres, migrating legacy configs into the new shape.
 - The Vue UI (`ProfileConfigurationView.vue`) renders the “Rebalancer Profile” panel + new layer target table using the API response. It lets you switch profiles, enable overrides, edit per-layer weights (0–1), variance, minimum saving plan size, minimum rebalancing amount, and max saving plans per layer, and see delta warnings alongside layer names (Global Core, Core-Plus, Themes, Individual Stocks, Unclassified). Overridden weights flow back into the rebalancer narrative so the LLM and summaries always describe the actual profile in play.
+- Saving plan projection budgets blend projected gap weights (using effective holdings) with the current savings plan distribution. Each profile defines `projection_blend_min`/`projection_blend_max` (default 0.15 -> 0.45), and the blend factor increases linearly over 1-120 months (longer horizons are more conservative). The rebalancer and Assessor share this logic.
 
 ---
 
@@ -263,6 +264,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/RebalancerController.java`
   - `services/app/frontend/src/views/RebalancerView.vue`
   - `services/app/frontend/src/views/RebalancerHistoryView.vue`
+  - Proposal table shows amounts only (Current EUR, Proposed EUR, Delta EUR); percent columns are intentionally omitted.
 - **Assessor analysis + UI**:
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/AssessorController.java`
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/AssessorService.java`

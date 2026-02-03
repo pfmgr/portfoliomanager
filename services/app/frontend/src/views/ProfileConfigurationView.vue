@@ -119,15 +119,49 @@
             @blur="normalizeProjectionHorizonMonths"
           />
         </div>
+        <div>
+          <label for="projection-blend-min-input">Projection blend min (0-1)</label>
+          <input
+            id="projection-blend-min-input"
+            class="input"
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            inputmode="decimal"
+            aria-describedby="projection-blend-help profile-defaults-note"
+            v-model.number="projectionBlendMin"
+            @input="coerceProjectionBlendMin"
+            @blur="normalizeProjectionBlendRange"
+          />
+        </div>
+        <div>
+          <label for="projection-blend-max-input">Projection blend max (0-1)</label>
+          <input
+            id="projection-blend-max-input"
+            class="input"
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            inputmode="decimal"
+            aria-describedby="projection-blend-help profile-defaults-note"
+            v-model.number="projectionBlendMax"
+            @input="coerceProjectionBlendMax"
+            @blur="normalizeProjectionBlendRange"
+          />
+        </div>
       </div>
       <p id="variance-help" class="note small">Typical range: 1-5%.</p>
       <p id="minimum-amounts-help" class="note small">Minimum amounts must be whole EUR (>= 1).</p>
       <p id="projection-horizon-help" class="note small">Range 1-120 months. Whole months only.</p>
+      <p id="projection-blend-help" class="note small">Blend range 0-1. Larger values keep proposals closer to the current distribution.</p>
       <p id="profile-defaults-note" class="note">
         Profile defaults: variance {{ formatVariance(profileVariancePct) }},
         minimum size {{ formatMinimum(profileMinimumSavingPlanSize) }} EUR,
         minimum rebalancing {{ formatMinimum(profileMinimumRebalancingAmount) }} EUR,
-        projection horizon {{ profileProjectionHorizonMonths }} months.
+        projection horizon {{ profileProjectionHorizonMonths }} months,
+        projection blend {{ formatBlend(profileProjectionBlendMin) }}–{{ formatBlend(profileProjectionBlendMax) }}.
       </p>
       <h3>Risk thresholds</h3>
       <p class="note">Stored per profile and used for instrument assessment risk bands.</p>
@@ -220,7 +254,8 @@
         </button>
       </div>
       <p class="note small">
-        This button only reloads the layer targets, variance, minimum saving plan size, and minimum rebalancing amount from the selected profile. Use "Save" to persist the change.
+        This button only reloads the layer targets, variance, minimum saving plan size, minimum rebalancing amount,
+        projection horizon, and projection blend range from the selected profile. Use "Save" to persist the change.
       </p>
     </div>
 
@@ -331,6 +366,10 @@ const DEFAULT_RISK_THRESHOLDS = { lowMax: 30, highMin: 51 }
 const DEFAULT_PROJECTION_HORIZON_MONTHS = 12
 const MIN_PROJECTION_HORIZON_MONTHS = 1
 const MAX_PROJECTION_HORIZON_MONTHS = 120
+const DEFAULT_PROJECTION_BLEND_MIN = 0.15
+const DEFAULT_PROJECTION_BLEND_MAX = 0.45
+const MIN_PROJECTION_BLEND = 0
+const MAX_PROJECTION_BLEND = 1
 const activePanel = ref('ALLOCATIONS')
 const qualityGateCategories = ['FUND', 'EQUITY', 'REIT', 'UNKNOWN']
 const qualityGateEvidenceKeys = [
@@ -370,6 +409,8 @@ const variance = ref(2.0)
 const minimumSavingPlanSize = ref(15)
 const minimumRebalancingAmount = ref(10)
 const projectionHorizonMonths = ref(12)
+const projectionBlendMin = ref(DEFAULT_PROJECTION_BLEND_MIN)
+const projectionBlendMax = ref(DEFAULT_PROJECTION_BLEND_MAX)
 const riskThresholds = ref({ ...DEFAULT_RISK_THRESHOLDS })
 const message = ref('')
 const messageType = ref('success')
@@ -423,6 +464,20 @@ const profileProjectionHorizonMonths = computed(() => {
     return MAX_PROJECTION_HORIZON_MONTHS
   }
   return Math.trunc(numeric)
+})
+const profileProjectionBlendMin = computed(() => {
+  const numeric = Number(seedProfile.value?.projectionBlendMin)
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_PROJECTION_BLEND_MIN
+  }
+  return clampProjectionBlend(numeric)
+})
+const profileProjectionBlendMax = computed(() => {
+  const numeric = Number(seedProfile.value?.projectionBlendMax)
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_PROJECTION_BLEND_MAX
+  }
+  return clampProjectionBlend(numeric)
 })
 const profileRiskThresholdDefaults = computed(() => mapRiskThresholds(seedProfile.value?.riskThresholds))
 const orderedProfiles = computed(() => {
@@ -485,6 +540,7 @@ function applyResponse(data) {
   const profile = profiles.value[selectedProfileKey.value]
   applyProfileRiskThresholds(profile)
   applyProfileProjectionHorizon(profile)
+  applyProfileProjectionBlend(profile)
   const effectiveTargets = mapToTargets(data.effectiveLayerTargets || {})
   profileTargets.value = profile?.layerTargets ? mapToTargets(profile.layerTargets) : effectiveTargets
   const customTargets = mapToTargets(data.customLayerTargets || {})
@@ -646,6 +702,7 @@ async function save() {
     normalizeMinimumSavingPlanSize()
     normalizeMinimumRebalancingAmount()
     normalizeProjectionHorizonMonths()
+    normalizeProjectionBlendRange()
     normalizeRiskThresholds()
     await submitConfig(
       {
@@ -661,6 +718,12 @@ async function save() {
         },
         profileProjectionHorizonMonths: {
           [selectedProfileKey.value]: projectionHorizonMonths.value
+        },
+        profileProjectionBlendMin: {
+          [selectedProfileKey.value]: projectionBlendMin.value
+        },
+        profileProjectionBlendMax: {
+          [selectedProfileKey.value]: projectionBlendMax.value
         }
       },
       'Layer targets saved.'
@@ -686,6 +749,7 @@ async function applyProfile() {
     minimumRebalancingAmount.value = profile.minimumRebalancingAmount
   }
   applyProfileProjectionHorizon(profile)
+  applyProfileProjectionBlend(profile)
   try {
     await submitConfig(
       {
@@ -728,6 +792,17 @@ async function resetToProfileDefault() {
   } else {
     projectionHorizonMonths.value = profileProjectionHorizonMonths.value
   }
+  if (seed?.projectionBlendMin !== undefined && seed?.projectionBlendMin !== null) {
+    projectionBlendMin.value = clampProjectionBlend(Number(seed.projectionBlendMin))
+  } else {
+    projectionBlendMin.value = profileProjectionBlendMin.value
+  }
+  if (seed?.projectionBlendMax !== undefined && seed?.projectionBlendMax !== null) {
+    projectionBlendMax.value = clampProjectionBlend(Number(seed.projectionBlendMax))
+  } else {
+    projectionBlendMax.value = profileProjectionBlendMax.value
+  }
+  normalizeProjectionBlendRange()
 }
 
 async function saveQualityGates() {
@@ -809,6 +884,22 @@ function applyProfileProjectionHorizon(profile) {
     return
   }
   projectionHorizonMonths.value = clampProjectionHorizonMonths(Math.trunc(numeric))
+}
+
+function applyProfileProjectionBlend(profile) {
+  const min = Number(profile?.projectionBlendMin)
+  const max = Number(profile?.projectionBlendMax)
+  if (Number.isFinite(min)) {
+    projectionBlendMin.value = clampProjectionBlend(min)
+  } else {
+    projectionBlendMin.value = profileProjectionBlendMin.value
+  }
+  if (Number.isFinite(max)) {
+    projectionBlendMax.value = clampProjectionBlend(max)
+  } else {
+    projectionBlendMax.value = profileProjectionBlendMax.value
+  }
+  normalizeProjectionBlendRange()
 }
 
 function resolveSeedProfile(key) {
@@ -943,6 +1034,17 @@ function formatVariance(value) {
   return `${value.toFixed(1)}%`
 }
 
+function formatBlend(value) {
+  if (value === null || value === undefined) {
+    return 'n/a'
+  }
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return 'n/a'
+  }
+  return numeric.toFixed(2)
+}
+
 function formatMinimum(value) {
   if (value === null || value === undefined) {
     return 'n/a'
@@ -1008,6 +1110,19 @@ function clampProjectionHorizonMonths(value) {
   return value
 }
 
+function clampProjectionBlend(value) {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_PROJECTION_BLEND_MIN
+  }
+  if (value < MIN_PROJECTION_BLEND) {
+    return MIN_PROJECTION_BLEND
+  }
+  if (value > MAX_PROJECTION_BLEND) {
+    return MAX_PROJECTION_BLEND
+  }
+  return value
+}
+
 function coerceMinimumSavingPlanSize() {
   if (minimumSavingPlanSize.value === null || minimumSavingPlanSize.value === undefined) {
     return
@@ -1068,6 +1183,40 @@ function normalizeProjectionHorizonMonths() {
   projectionHorizonMonths.value = clampProjectionHorizonMonths(Math.trunc(numeric))
 }
 
+function coerceProjectionBlendMin() {
+  if (projectionBlendMin.value === null || projectionBlendMin.value === undefined) {
+    return
+  }
+  const numeric = Number(projectionBlendMin.value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  projectionBlendMin.value = clampProjectionBlend(numeric)
+}
+
+function coerceProjectionBlendMax() {
+  if (projectionBlendMax.value === null || projectionBlendMax.value === undefined) {
+    return
+  }
+  const numeric = Number(projectionBlendMax.value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  projectionBlendMax.value = clampProjectionBlend(numeric)
+}
+
+function normalizeProjectionBlendRange() {
+  const minNumeric = Number(projectionBlendMin.value)
+  const maxNumeric = Number(projectionBlendMax.value)
+  let min = Number.isFinite(minNumeric) ? clampProjectionBlend(minNumeric) : profileProjectionBlendMin.value
+  let max = Number.isFinite(maxNumeric) ? clampProjectionBlend(maxNumeric) : profileProjectionBlendMax.value
+  if (max < min) {
+    max = min
+  }
+  projectionBlendMin.value = min
+  projectionBlendMax.value = max
+}
+
 function layerLabel(layer) {
   return layerNames.value[layer] || `Layer ${layer}`
 }
@@ -1089,6 +1238,7 @@ watch(selectedProfileKey, (key) => {
   }
   applyProfileRiskThresholds(profile)
   applyProfileProjectionHorizon(profile)
+  applyProfileProjectionBlend(profile)
   if (!customOverridesEnabled.value && profile?.acceptableVariancePct) {
     variance.value = profile.acceptableVariancePct
   }

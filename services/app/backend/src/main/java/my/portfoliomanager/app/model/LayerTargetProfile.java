@@ -16,6 +16,8 @@ public class LayerTargetProfile {
 	private final Integer minimumSavingPlanSize;
 	private final Integer minimumRebalancingAmount;
 	private final Integer projectionHorizonMonths;
+	private final BigDecimal projectionBlendMin;
+	private final BigDecimal projectionBlendMax;
 	private final Map<String, BigDecimal> constraints;
 	private final LayerTargetRiskThresholds riskThresholds;
 }

@@ -63,6 +63,8 @@ class LayerTargetConfigServiceTest {
 				10,
 				null,
 				null,
+				null,
+				null,
 				null
 		));
 
@@ -117,6 +119,8 @@ class LayerTargetConfigServiceTest {
 				10,
 				null,
 				null,
+				null,
+				null,
 				null
 		);
 
@@ -144,6 +148,8 @@ class LayerTargetConfigServiceTest {
 				10,
 				Map.of(1, 10, 2, 10, 3, 10, 4, 10, 5, 10),
 				null,
+				null,
+				null,
 				null
 		));
 
@@ -165,7 +171,7 @@ class LayerTargetConfigServiceTest {
 		targets.put(2, 0.3);
 		targets.put(5, null);
 
-		LayerTargetConfigRequestDto request = new LayerTargetConfigRequestDto(null, null, targets, -5.0, null, null, null, null, null);
+		LayerTargetConfigRequestDto request = new LayerTargetConfigRequestDto(null, null, targets, -5.0, null, null, null, null, null, null, null);
 
 		LayerTargetConfigResponseDto response = layerTargetConfigService.saveConfig(request);
 
@@ -183,7 +189,7 @@ class LayerTargetConfigServiceTest {
 		when(resourceLoader.getResource(anyString())).thenReturn(new ClassPathResource("layer_targets.json"));
 
 		LayerTargetConfigResponseDto response = layerTargetConfigService.saveConfig(
-				new LayerTargetConfigRequestDto("CLASSIC", false, null, null, null, null, null, null, null));
+				new LayerTargetConfigRequestDto("CLASSIC", false, null, null, null, null, null, null, null, null, null));
 
 		assertThat(response.getActiveProfileKey()).isEqualTo("CLASSIC");
 		assertThat(response.getEffectiveLayerTargets()).containsEntry(1, 0.8);
@@ -208,7 +214,9 @@ class LayerTargetConfigServiceTest {
 				null,
 				null,
 				null,
-				Map.of("BALANCED", 0)
+				Map.of("BALANCED", 0),
+				null,
+				null
 		));
 
 		LayerTargetConfigResponseDto high = layerTargetConfigService.saveConfig(new LayerTargetConfigRequestDto(
@@ -220,7 +228,9 @@ class LayerTargetConfigServiceTest {
 				null,
 				null,
 				null,
-				Map.of("BALANCED", 180)
+				Map.of("BALANCED", 180),
+				null,
+				null
 		));
 
 		assertThat(low.getProfiles().get("BALANCED").getProjectionHorizonMonths()).isEqualTo(1);

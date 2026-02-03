@@ -11,6 +11,8 @@ public record LayerTargetEffectiveConfig(String selectedProfileKey,
 							 Integer minimumSavingPlanSize,
 							 Integer minimumRebalancingAmount,
 							 Integer projectionHorizonMonths,
+							 BigDecimal projectionBlendMin,
+							 BigDecimal projectionBlendMax,
 							 boolean customOverridesActive,
 							 Map<Integer, String> layerNames,
 							 OffsetDateTime updatedAt) {

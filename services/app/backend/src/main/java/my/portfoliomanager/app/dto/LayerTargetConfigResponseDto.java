@@ -69,6 +69,8 @@ public class LayerTargetConfigResponseDto {
 		private final Integer minimumSavingPlanSize;
 		private final Integer minimumRebalancingAmount;
 		private final Integer projectionHorizonMonths;
+		private final Double projectionBlendMin;
+		private final Double projectionBlendMax;
 		private final Map<String, Double> constraints;
 		private final LayerTargetRiskThresholdsDto riskThresholds;
 
@@ -79,6 +81,8 @@ public class LayerTargetConfigResponseDto {
 						 Integer minimumSavingPlanSize,
 						 Integer minimumRebalancingAmount,
 						 Integer projectionHorizonMonths,
+						 Double projectionBlendMin,
+						 Double projectionBlendMax,
 						 Map<String, Double> constraints,
 						 LayerTargetRiskThresholdsDto riskThresholds) {
 			this.displayName = displayName;
@@ -88,6 +92,8 @@ public class LayerTargetConfigResponseDto {
 			this.minimumSavingPlanSize = minimumSavingPlanSize;
 			this.minimumRebalancingAmount = minimumRebalancingAmount;
 			this.projectionHorizonMonths = projectionHorizonMonths;
+			this.projectionBlendMin = projectionBlendMin;
+			this.projectionBlendMax = projectionBlendMax;
 			this.constraints = constraints;
 			this.riskThresholds = riskThresholds;
 		}

@@ -167,6 +167,8 @@ public class AssessorService {
 				minRebalance,
 				minInstrument,
 				profile == null ? null : profile.getProjectionHorizonMonths(),
+				profile == null ? null : toBigDecimal(profile.getProjectionBlendMin()),
+				profile == null ? null : toBigDecimal(profile.getProjectionBlendMax()),
 				plans,
 				savingPlanDelta,
 				oneTimeAmount,
@@ -955,7 +957,7 @@ public class AssessorService {
 		builder.append("Rules:\n");
 		builder.append("- Use the provided layer names.\n");
 		builder.append("- Mention whether the current distribution is within tolerance.\n");
-		builder.append("- Explain that layer budgets follow a projection over projection_horizon_months using effective holdings.\n");
+		builder.append("- Explain that layer budgets blend projected gap weights (using effective holdings) with the current savings plan distribution; longer horizons weight the current distribution more.\n");
 		builder.append("- Summarize the proposed actions using instrument name, ISIN, layer, and delta amounts.\n");
 		builder.append("- If new_instruments is not none, add a sentence for each explaining the portfolio gap and why the specific instrument was selected, using the rationale.\n");
 		builder.append("- If new_instruments is not none, explain the weighting of new instrument amounts using allocation_rules.\n");
@@ -972,6 +974,17 @@ public class AssessorService {
 		builder.append("projection_horizon_months=")
 				.append(normalizeProjectionHorizonMonths(projectionHorizonMonths))
 				.append("\n");
+		LayerTargetConfigResponseDto.LayerTargetProfileDto profile = null;
+		if (config != null && config.getProfiles() != null) {
+			profile = config.getProfiles().get(result.selectedProfile());
+			if (profile == null) {
+				profile = config.getProfiles().get(config.getActiveProfileKey());
+			}
+		}
+		Double projectionBlendMin = profile == null ? null : profile.getProjectionBlendMin();
+		Double projectionBlendMax = profile == null ? null : profile.getProjectionBlendMax();
+		builder.append("projection_blend_min=").append(projectionBlendMin).append("\n");
+		builder.append("projection_blend_max=").append(projectionBlendMax).append("\n");
 		builder.append("minimum_saving_plan_size_eur=").append(minimumSavingPlanSize).append("\n");
 		builder.append("minimum_rebalancing_amount_eur=").append(minimumRebalancingAmount).append("\n");
 		builder.append("allocation_rules=New instrument amounts are split evenly after reserving the minimum per instrument. ")

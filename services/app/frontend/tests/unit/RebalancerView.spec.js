@@ -128,7 +128,7 @@ describe('RebalancerView', () => {
     expect(text).toContain('Layer Allocations')
     expect(text).toContain('Savings plan Rebalancing')
     expect(text).toContain('Monthly by Layer')
-    expect(text).toContain('Rebalancing Proposal (Savings plan weights)')
+    expect(text).toContain('Rebalancing Proposal (Savings plan amounts, EUR)')
     expect(text).toContain('Instrument Proposal')
     expect(text).toContain('Instrument proposal warnings')
     expect(text).toContain('KB')

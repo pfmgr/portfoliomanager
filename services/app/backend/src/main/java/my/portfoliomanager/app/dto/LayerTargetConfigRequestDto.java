@@ -7,8 +7,10 @@ public record LayerTargetConfigRequestDto(String activeProfile,
 						  Map<Integer, Double> layerTargets,
 						  Double acceptableVariancePct,
 						  Integer minimumSavingPlanSize,
-						  Integer minimumRebalancingAmount,
-						  Map<Integer, Integer> maxSavingPlansPerLayer,
-						  Map<String, LayerTargetRiskThresholdsDto> profileRiskThresholds,
-						  Map<String, Integer> profileProjectionHorizonMonths) {
+					  Integer minimumRebalancingAmount,
+					  Map<Integer, Integer> maxSavingPlansPerLayer,
+					  Map<String, LayerTargetRiskThresholdsDto> profileRiskThresholds,
+					  Map<String, Integer> profileProjectionHorizonMonths,
+					  Map<String, Double> profileProjectionBlendMin,
+					  Map<String, Double> profileProjectionBlendMax) {
 }

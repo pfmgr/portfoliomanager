@@ -19,6 +19,8 @@
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "projection_horizon_months": 12,
+      "projection_blend_min": 0.15,
+      "projection_blend_max": 0.45,
       "constraints": {
         "core_min": 0.70,
         "layer5_max": 0.03,
@@ -43,6 +45,8 @@
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "projection_horizon_months": 12,
+      "projection_blend_min": 0.15,
+      "projection_blend_max": 0.45,
       "constraints": {
         "core_min": 0.70,
         "layer5_max": 0.03,
@@ -67,6 +71,8 @@
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "projection_horizon_months": 12,
+      "projection_blend_min": 0.15,
+      "projection_blend_max": 0.45,
       "constraints": {
         "core_min": 0.70,
         "layer5_max": 0.03,
@@ -91,6 +97,8 @@
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "projection_horizon_months": 12,
+      "projection_blend_min": 0.15,
+      "projection_blend_max": 0.45,
       "constraints": {
         "core_min": 0.60,
         "layer5_max": 0.03,
@@ -115,6 +123,8 @@
       "minimum_saving_plan_size": 15,
       "minimum_rebalancing_amount": 10,
       "projection_horizon_months": 12,
+      "projection_blend_min": 0.15,
+      "projection_blend_max": 0.45,
       "constraints": {
         "core_min": 0.60,
         "layer5_max": 0.03,

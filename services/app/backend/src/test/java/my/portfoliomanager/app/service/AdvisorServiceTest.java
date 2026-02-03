@@ -13,9 +13,13 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import my.portfoliomanager.app.dto.LayerTargetConfigRequestDto;
+import my.portfoliomanager.app.dto.LayerTargetConfigResponseDto;
+import my.portfoliomanager.app.dto.SavingPlanProposalDto;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +32,9 @@ class AdvisorServiceTest {
 
 	@Autowired
 	private AdvisorService advisorService;
+
+	@Autowired
+	private LayerTargetConfigService layerTargetConfigService;
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -132,6 +139,67 @@ class AdvisorServiceTest {
 		assertThat(proposalTotal).isEqualTo(10.0d);
 		assertThat(summary.savingPlanProposal().getNotes())
 				.anyMatch(note -> note.contains("minimum rebalancing amount"));
+	}
+
+	@Test
+	void longerProjectionHorizonKeepsProposalCloserToCurrentDistribution() {
+		layerTargetConfigService.resetToDefault();
+		LayerTargetConfigResponseDto config = layerTargetConfigService.getConfigResponse();
+		String profileKey = config.getActiveProfileKey();
+
+		jdbcTemplate.update("delete from sparplans");
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (10, 1, 'DE000B', 500.00, 'monthly', true)");
+
+		LayerTargetConfigRequestDto request12 = new LayerTargetConfigRequestDto(
+				profileKey,
+				false,
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+				Map.of(profileKey, 12),
+				null,
+				null
+		);
+		layerTargetConfigService.saveConfig(request12);
+		var summary12 = advisorService.summary(null);
+		assertThat(summary12.savingPlanProposal()).isNotNull();
+		double delta12 = distributionDelta(summary12.savingPlanProposal());
+
+		LayerTargetConfigRequestDto request120 = new LayerTargetConfigRequestDto(
+				profileKey,
+				false,
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+				Map.of(profileKey, 120),
+				null,
+				null
+		);
+		layerTargetConfigService.saveConfig(request120);
+		var summary120 = advisorService.summary(null);
+		assertThat(summary120.savingPlanProposal()).isNotNull();
+		double delta120 = distributionDelta(summary120.savingPlanProposal());
+
+		assertThat(delta12).isGreaterThan(0.0d);
+		assertThat(delta120).isLessThan(delta12);
+	}
+
+	private double distributionDelta(SavingPlanProposalDto proposal) {
+		Map<Integer, Double> actual = proposal == null ? null : proposal.getActualDistributionByLayer();
+		Map<Integer, Double> proposed = proposal == null ? null : proposal.getProposedDistributionByLayer();
+		double total = 0.0d;
+		for (int layer = 1; layer <= 5; layer++) {
+			double actualValue = actual == null ? 0.0d : actual.getOrDefault(layer, 0.0d);
+			double proposedValue = proposed == null ? 0.0d : proposed.getOrDefault(layer, 0.0d);
+			total += Math.abs(proposedValue - actualValue);
+		}
+		return total;
 	}
 
 	@Configuration

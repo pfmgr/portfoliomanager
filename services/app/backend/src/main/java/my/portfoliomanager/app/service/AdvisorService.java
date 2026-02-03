@@ -48,6 +48,8 @@ public class AdvisorService {
 	private static final int DEFAULT_PROJECTION_HORIZON_MONTHS = 12;
 	private static final int MIN_PROJECTION_HORIZON_MONTHS = 1;
 	private static final int MAX_PROJECTION_HORIZON_MONTHS = 120;
+	private static final BigDecimal PROJECTION_BLEND_MIN = new BigDecimal("0.15");
+	private static final BigDecimal PROJECTION_BLEND_MAX = new BigDecimal("0.45");
 
 	private final JdbcTemplate jdbcTemplate;
 	private final ObjectMapper summaryMapper;
@@ -512,7 +514,9 @@ public class AdvisorService {
 				targetWeights,
 				holdingsByLayer,
 				targetConfig.projectionHorizonMonths(),
-				targetConfig.acceptableVariancePct()
+				targetConfig.acceptableVariancePct(),
+				targetConfig.projectionBlendMin(),
+				targetConfig.projectionBlendMax()
 		);
 		Map<Integer, BigDecimal> projectedDistribution = computeDistribution(roundedTargets, monthlyTotal);
 		boolean withinTolerance = isWithinTolerance(actualDistribution, projectedDistribution, targetConfig.acceptableVariancePct());
@@ -669,28 +673,30 @@ public class AdvisorService {
 	}
 
 	private String buildLlmPrompt(SavingPlanMetrics metrics,
-								  LayerTargetEffectiveConfig targetConfig,
-								  Map<Integer, Double> actualDistribution,
-								  Map<Integer, Double> targetDistribution,
-								  Map<Integer, Double> proposedDistribution,
-								  boolean withinTolerance,
-								  List<ConstraintResultDto> constraints,
-								  boolean minimumSavingPlanRebalanced,
-								  boolean minimumSavingPlanIncreaseLayerOne,
-								  Integer minimumSavingPlanSize,
-								  BigDecimal proposedLayerOneAmount,
-								  List<InstrumentDiscard> instrumentDiscards,
-								  List<InstrumentProposalDto> instrumentProposals,
-								  List<InstrumentRebalanceService.LayerWeightingSummary> instrumentWeightingSummaries,
-								  boolean minimumRebalancingApplied,
-								  Integer minimumRebalancingAmount,
-								  List<Integer> minimumRebalancingLayers) {
+							  LayerTargetEffectiveConfig targetConfig,
+							  Map<Integer, Double> actualDistribution,
+							  Map<Integer, Double> targetDistribution,
+							  Map<Integer, Double> proposedDistribution,
+							  boolean withinTolerance,
+							  List<ConstraintResultDto> constraints,
+							  boolean minimumSavingPlanRebalanced,
+							  boolean minimumSavingPlanIncreaseLayerOne,
+							  Integer minimumSavingPlanSize,
+							  BigDecimal proposedLayerOneAmount,
+							  List<InstrumentDiscard> instrumentDiscards,
+							  List<InstrumentProposalDto> instrumentProposals,
+							  List<InstrumentRebalanceService.LayerWeightingSummary> instrumentWeightingSummaries,
+							  boolean minimumRebalancingApplied,
+							  Integer minimumRebalancingAmount,
+							  List<Integer> minimumRebalancingLayers) {
+		int horizon = normalizeProjectionHorizonMonths(targetConfig.projectionHorizonMonths());
+		BigDecimal blendFactor = projectionBlendFactor(horizon, targetConfig.projectionBlendMin(), targetConfig.projectionBlendMax());
 		StringBuilder builder = new StringBuilder();
 		builder.append("Explain how the current savings plan distribution relates to the selected profile.\n");
 		builder.append("Rules:\n");
 		builder.append("- Refer to the provided layer names.\n");
 		builder.append("- Mention whether the distribution is within tolerance and highlight the tolerance value.\n");
-		builder.append("- Explain that layer budgets follow a projection over projection_horizon_months using effective holdings.\n");
+		builder.append("- Explain that layer budgets blend projected gap weights (using effective holdings) with the current savings plan distribution; longer horizons weight the current distribution more.\n");
 		builder.append("- If within tolerance, explicitly state that no changes are needed.\n");
 		builder.append("- Mention any constraint violations clearly.\n");
 		builder.append("- If minimum saving plan rebalancing occurred, explain that lower layers below the minimum were set to 0 and redistributed upward.\n");
@@ -710,7 +716,16 @@ public class AdvisorService {
 		builder.append("profile_display_name=").append(targetConfig.selectedProfile().getDisplayName()).append("\n");
 		builder.append("tolerance_pct=").append(targetConfig.acceptableVariancePct()).append("\n");
 		builder.append("projection_horizon_months=")
-				.append(normalizeProjectionHorizonMonths(targetConfig.projectionHorizonMonths()))
+				.append(horizon)
+				.append("\n");
+		builder.append("projection_blend_min=")
+				.append(normalizeProjectionBlendMin(targetConfig.projectionBlendMin()).stripTrailingZeros().toPlainString())
+				.append("\n");
+		builder.append("projection_blend_max=")
+				.append(normalizeProjectionBlendMax(targetConfig.projectionBlendMax()).stripTrailingZeros().toPlainString())
+				.append("\n");
+		builder.append("projection_blend_factor=")
+				.append(blendFactor.stripTrailingZeros().toPlainString())
 				.append("\n");
 		builder.append("minimum_saving_plan_size_eur=").append(minimumSavingPlanSize).append("\n");
 		builder.append("minimum_saving_plan_rebalanced=").append(minimumSavingPlanRebalanced).append("\n");
@@ -1157,8 +1172,8 @@ public class AdvisorService {
 		int horizon = normalizeProjectionHorizonMonths(projectionHorizonMonths);
 		if (withinTolerance) {
 			String toleranceText = variancePct == null ? "3.0" : variancePct.stripTrailingZeros().toPlainString();
-			return "Savings plan structure matches the selected profile within tolerance (<= " + toleranceText + "%). Projection horizon: "
-					+ horizon + " months.";
+			return "Savings plan structure matches the selected profile within tolerance (<= " + toleranceText + "%). "
+					+ "Projection horizon: " + horizon + " months. Longer horizons keep proposals closer to the current savings plan distribution.";
 		}
 		int layer = findLayerWithMaxDeviation(actualDistribution, targetDistribution);
 		double actual = actualDistribution.getOrDefault(layer, 0.0d);
@@ -1192,7 +1207,8 @@ public class AdvisorService {
 			}
 			builder.append(" are not proposed.");
 		}
-		builder.append(" Projection horizon: ").append(horizon).append(" months.");
+		builder.append(" Projection horizon: ").append(horizon).append(" months.")
+				.append(" Longer horizons keep proposals closer to the current savings plan distribution.");
 		return builder.toString();
 	}
 
@@ -1370,6 +1386,74 @@ public class AdvisorService {
 		return projectionHorizonMonths;
 	}
 
+	private BigDecimal projectionBlendFactor(int projectionHorizonMonths,
+								 BigDecimal projectionBlendMin,
+								 BigDecimal projectionBlendMax) {
+		BigDecimal min = normalizeProjectionBlendMin(projectionBlendMin);
+		BigDecimal max = normalizeProjectionBlendMax(projectionBlendMax);
+		if (max.compareTo(min) < 0) {
+			max = min;
+		}
+		int bounded = Math.max(MIN_PROJECTION_HORIZON_MONTHS,
+				Math.min(MAX_PROJECTION_HORIZON_MONTHS, projectionHorizonMonths));
+		if (bounded <= MIN_PROJECTION_HORIZON_MONTHS) {
+			return min;
+		}
+		if (bounded >= MAX_PROJECTION_HORIZON_MONTHS) {
+			return max;
+		}
+		BigDecimal span = BigDecimal.valueOf(MAX_PROJECTION_HORIZON_MONTHS - MIN_PROJECTION_HORIZON_MONTHS);
+		BigDecimal offset = BigDecimal.valueOf(bounded - MIN_PROJECTION_HORIZON_MONTHS);
+		BigDecimal ratio = offset.divide(span, 6, RoundingMode.HALF_UP);
+		BigDecimal diff = max.subtract(min);
+		return min.add(diff.multiply(ratio)).setScale(6, RoundingMode.HALF_UP);
+	}
+
+	private BigDecimal normalizeProjectionBlendMin(BigDecimal value) {
+		if (value == null) {
+			return PROJECTION_BLEND_MIN;
+		}
+		if (value.compareTo(BigDecimal.ZERO) < 0) {
+			return BigDecimal.ZERO;
+		}
+		if (value.compareTo(BigDecimal.ONE) > 0) {
+			return BigDecimal.ONE;
+		}
+		return value;
+	}
+
+	private BigDecimal normalizeProjectionBlendMax(BigDecimal value) {
+		if (value == null) {
+			return PROJECTION_BLEND_MAX;
+		}
+		if (value.compareTo(BigDecimal.ZERO) < 0) {
+			return BigDecimal.ZERO;
+		}
+		if (value.compareTo(BigDecimal.ONE) > 0) {
+			return BigDecimal.ONE;
+		}
+		return value;
+	}
+
+	private Map<Integer, BigDecimal> blendWeights(Map<Integer, BigDecimal> gapWeights,
+								 Map<Integer, BigDecimal> currentWeights,
+								 BigDecimal blendFactor) {
+		Map<Integer, BigDecimal> blended = new HashMap<>();
+		BigDecimal clamped = blendFactor == null ? BigDecimal.ZERO : blendFactor;
+		if (clamped.signum() < 0) {
+			clamped = BigDecimal.ZERO;
+		} else if (clamped.compareTo(BigDecimal.ONE) > 0) {
+			clamped = BigDecimal.ONE;
+		}
+		BigDecimal inverse = BigDecimal.ONE.subtract(clamped);
+		for (int layer = 1; layer <= 5; layer++) {
+			BigDecimal gap = gapWeights.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal current = currentWeights.getOrDefault(layer, BigDecimal.ZERO);
+			blended.put(layer, gap.multiply(inverse).add(current.multiply(clamped)));
+		}
+		return normalizeTargetWeights(blended);
+	}
+
 	private BigDecimal varianceFraction(BigDecimal variancePct) {
 		BigDecimal variance = variancePct == null || variancePct.signum() <= 0
 				? new BigDecimal("3.0")
@@ -1497,7 +1581,9 @@ public class AdvisorService {
 								  Map<Integer, BigDecimal> targetWeights,
 								  Map<Integer, BigDecimal> holdingsByLayer,
 								  Integer projectionHorizonMonths,
-								  BigDecimal variancePct) {
+								  BigDecimal variancePct,
+								  BigDecimal projectionBlendMin,
+								  BigDecimal projectionBlendMax) {
 		if (metrics == null || targetWeights == null || targetWeights.isEmpty()) {
 			return buildRuleBasedTargets(metrics, targetWeights);
 		}
@@ -1506,6 +1592,10 @@ public class AdvisorService {
 		if (monthlyTotal.signum() <= 0) {
 			return fallback;
 		}
+		Map<Integer, BigDecimal> currentAmounts = metrics.monthlyByLayer() == null
+				? initLayerAmounts()
+				: metrics.monthlyByLayer();
+		Map<Integer, BigDecimal> currentWeights = computeDistribution(currentAmounts, monthlyTotal);
 		Map<Integer, BigDecimal> holdings = normalizeHoldingsByLayer(holdingsByLayer);
 		BigDecimal holdingsTotal = sumAmounts(holdings);
 		if (holdingsTotal.signum() <= 0) {
@@ -1532,15 +1622,29 @@ public class AdvisorService {
 			gaps.put(layer, gap);
 			gapTotal = gapTotal.add(gap);
 		}
+		Map<Integer, BigDecimal> gapWeights = initLayerAmounts();
+		if (gapTotal.signum() > 0) {
+			for (int layer = 1; layer <= 5; layer++) {
+				BigDecimal gap = gaps.getOrDefault(layer, BigDecimal.ZERO);
+				BigDecimal weight = gap.signum() == 0
+						? BigDecimal.ZERO
+						: gap.divide(gapTotal, 6, RoundingMode.HALF_UP);
+				gapWeights.put(layer, weight);
+			}
+		}
+		Map<Integer, BigDecimal> weights;
 		if (gapTotal.signum() <= 0) {
+			weights = normalizeTargetWeights(currentWeights);
+		} else {
+			BigDecimal blendFactor = projectionBlendFactor(horizon, projectionBlendMin, projectionBlendMax);
+			weights = blendWeights(gapWeights, currentWeights, blendFactor);
+		}
+		if (sumAmounts(weights).signum() <= 0) {
 			return fallback;
 		}
 		Map<Integer, BigDecimal> desired = new HashMap<>();
 		for (int layer = 1; layer <= 5; layer++) {
-			BigDecimal gap = gaps.getOrDefault(layer, BigDecimal.ZERO);
-			BigDecimal weight = gap.signum() == 0
-					? BigDecimal.ZERO
-					: gap.divide(gapTotal, 6, RoundingMode.HALF_UP);
+			BigDecimal weight = weights.getOrDefault(layer, BigDecimal.ZERO);
 			desired.put(layer, monthlyTotal.multiply(weight));
 		}
 		return roundProposalTargets(desired, monthlyTotal);

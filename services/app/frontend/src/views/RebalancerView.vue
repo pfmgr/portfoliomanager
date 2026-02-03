@@ -259,7 +259,7 @@
       </div>
 
       <div v-if="summary.savingPlanProposal">
-        <h4>Rebalancing Proposal (Savings plan weights)</h4>
+        <h4>Rebalancing Proposal (Savings plan amounts, EUR)</h4>
         <p v-if="summary.savingPlanProposal.source">
           Proposal source: <b>{{ formatSource(summary.savingPlanProposal.source) }}</b>
         </p>
@@ -269,6 +269,8 @@
             {{ note }}
           </li>
         </ul>
+        <p class="note">Percentages are omitted because proposal weights blend projected gaps with the current savings plan distribution.</p>
+        <p class="note">Longer projection horizons keep proposals closer to the current distribution.</p>
         <p class="note">Delta shows proposed minus current amounts.</p>
         <div class="table-wrap">
           <table class="table">
@@ -277,8 +279,6 @@
               <tr>
                 <th scope="col">Layer</th>
                 <th scope="col" class="num">Current €</th>
-                <th scope="col" class="num">Current %</th>
-                <th scope="col" class="num">Target %</th>
                 <th scope="col" class="num">Proposed €</th>
                 <th scope="col" class="num">Delta €</th>
               </tr>
@@ -286,12 +286,10 @@
             <tbody>
               <template v-if="loading">
                 <tr class="sr-only">
-                  <td colspan="6">Loading rebalancing proposal...</td>
+                  <td colspan="4">Loading rebalancing proposal...</td>
                 </tr>
                 <tr v-for="n in 3" :key="`proposal-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
                   <td><span class="skeleton-block"></span></td>
-                  <td class="num"><span class="skeleton-block"></span></td>
-                  <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
@@ -299,15 +297,13 @@
               </template>
               <template v-else-if="summary.savingPlanProposal.layers.length === 0">
                 <tr>
-                  <td colspan="6">No rebalancing proposal available.</td>
+                  <td colspan="4">No rebalancing proposal available.</td>
                 </tr>
               </template>
               <template v-else>
                 <tr v-for="row in summary.savingPlanProposal.layers" :key="row.layer">
                   <th scope="row">{{ row.layerName }}</th>
                   <td class="num">{{ formatAmount(row.currentAmountEur) }}</td>
-                  <td class="num">{{ formatWeight(row.currentWeightPct) }}</td>
-                  <td class="num">{{ formatWeight(row.targetWeightPct) }}</td>
                   <td class="num">{{ formatAmount(row.targetAmountEur) }}</td>
                   <td class="num">{{ formatAmount(row.deltaEur) }}</td>
                 </tr>

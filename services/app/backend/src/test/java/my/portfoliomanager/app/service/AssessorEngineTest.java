@@ -3,6 +3,7 @@ package my.portfoliomanager.app.service;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
 
@@ -29,6 +30,8 @@ class AssessorEngineTest {
 				15,
 				10,
 				25,
+				null,
+				null,
 				null,
 				plans,
 				null,
@@ -102,6 +105,8 @@ class AssessorEngineTest {
 				10,
 				25,
 				null,
+				null,
+				null,
 				plans,
 				null,
 				null,
@@ -138,6 +143,8 @@ class AssessorEngineTest {
 				10,
 				25,
 				null,
+				null,
+				null,
 				plans,
 				null,
 				null,
@@ -172,6 +179,8 @@ class AssessorEngineTest {
 				10,
 				25,
 				null,
+				null,
+				null,
 				plans,
 				null,
 				null,
@@ -200,6 +209,8 @@ class AssessorEngineTest {
 				15,
 				10,
 				60,
+				null,
+				null,
 				null,
 				plans,
 				null,
@@ -232,6 +243,8 @@ class AssessorEngineTest {
 				10,
 				25,
 				null,
+				null,
+				null,
 				plans,
 				new BigDecimal("50"),
 				null,
@@ -241,6 +254,79 @@ class AssessorEngineTest {
 
 		assertThat(result.currentMonthlyTotal()).isEqualByComparingTo(new BigDecimal("150"));
 		assertThat(result.targetLayerDistribution().get(1)).isEqualByComparingTo(new BigDecimal("150"));
+	}
+
+	@Test
+	void longerProjectionHorizonKeepsTargetsCloserToCurrentDistribution() {
+		List<AssessorEngine.SavingPlanItem> plans = List.of(
+				plan("AAA111", 1L, 500.0, 2)
+		);
+		Map<Integer, BigDecimal> targets = Map.of(
+				1, new BigDecimal("0.60"),
+				2, new BigDecimal("0.20"),
+				3, new BigDecimal("0.15"),
+				4, new BigDecimal("0.05")
+		);
+		Map<Integer, BigDecimal> holdings = Map.of(
+				2, new BigDecimal("2000")
+		);
+
+		AssessorEngine.AssessorEngineResult result12 = engine.assess(new AssessorEngine.AssessorEngineInput(
+				"BALANCED",
+				targets,
+				new BigDecimal("3.0"),
+				15,
+				10,
+				25,
+				12,
+				null,
+				null,
+				plans,
+				null,
+				null,
+				holdings,
+				false
+		));
+
+		AssessorEngine.AssessorEngineResult result120 = engine.assess(new AssessorEngine.AssessorEngineInput(
+				"BALANCED",
+				targets,
+				new BigDecimal("3.0"),
+				15,
+				10,
+				25,
+				120,
+				null,
+				null,
+				plans,
+				null,
+				null,
+				holdings,
+				false
+		));
+
+		double delta12 = distributionDelta(result12.currentLayerDistribution(), result12.targetLayerDistribution(), result12.currentMonthlyTotal());
+		double delta120 = distributionDelta(result120.currentLayerDistribution(), result120.targetLayerDistribution(), result120.currentMonthlyTotal());
+
+		assertThat(delta12).isGreaterThan(0.0d);
+		assertThat(delta120).isLessThan(delta12);
+	}
+
+	private double distributionDelta(Map<Integer, BigDecimal> current,
+								 Map<Integer, BigDecimal> proposed,
+								 BigDecimal total) {
+		if (total == null || total.signum() <= 0) {
+			return 0.0d;
+		}
+		double sum = 0.0d;
+		for (int layer = 1; layer <= 5; layer++) {
+			BigDecimal currentAmount = current.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal proposedAmount = proposed.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal currentWeight = currentAmount.divide(total, 6, RoundingMode.HALF_UP);
+			BigDecimal proposedWeight = proposedAmount.divide(total, 6, RoundingMode.HALF_UP);
+			sum += currentWeight.subtract(proposedWeight).abs().doubleValue();
+		}
+		return sum;
 	}
 
 	@Test
@@ -261,6 +347,8 @@ class AssessorEngineTest {
 				1,
 				1,
 				25,
+				null,
+				null,
 				null,
 				plans,
 				new BigDecimal("20"),
@@ -296,6 +384,8 @@ class AssessorEngineTest {
 				15,
 				10,
 				25,
+				null,
+				null,
 				null,
 				plans,
 				null,
