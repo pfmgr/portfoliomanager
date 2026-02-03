@@ -105,6 +105,36 @@ public class AssessorInstrumentAssessmentService {
 				criteria.allocationCriteria(), allocation.layerBudgets());
 	}
 
+	public Map<String, Integer> assessScores(Set<String> instrumentIsins,
+									 LayerTargetRiskThresholds riskThresholds) {
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		int scoreCutoff = thresholds.getHighMin();
+		List<String> normalizedIsins = normalizeIsins(instrumentIsins == null
+				? List.of()
+				: new ArrayList<>(instrumentIsins));
+		if (normalizedIsins.isEmpty()) {
+			return Map.of();
+		}
+		boolean kbEnabled = properties != null && properties.kb() != null && properties.kb().enabled();
+		if (!kbEnabled) {
+			return Map.of();
+		}
+		Set<String> isinSet = new LinkedHashSet<>(normalizedIsins);
+		Map<String, KbExtraction> kbExtractions = loadLatestExtractions(isinSet);
+		Map<String, Integer> scores = new LinkedHashMap<>();
+		CriteriaTracker criteria = new CriteriaTracker();
+		for (String isin : normalizedIsins) {
+			KbExtraction extraction = kbExtractions.get(isin);
+			InstrumentDossierExtractionPayload payload = extraction == null ? null : extraction.payload();
+			if (payload == null) {
+				continue;
+			}
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, scoreCutoff);
+			scores.put(isin, scoreResult.score());
+		}
+		return scores;
+	}
+
 	private List<String> normalizeIsins(List<String> isins) {
 		if (isins == null || isins.isEmpty()) {
 			return List.of();

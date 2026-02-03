@@ -2,6 +2,8 @@ package my.portfoliomanager.app.service;
 
 import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
+import my.portfoliomanager.app.service.util.RiskThresholdsUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -92,11 +94,14 @@ public class AssessorInstrumentSuggestionService {
 
 	private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 	private final ObjectMapper objectMapper;
+	private final AssessorInstrumentAssessmentService assessmentService;
 
 	public AssessorInstrumentSuggestionService(NamedParameterJdbcTemplate namedParameterJdbcTemplate,
-											   ObjectMapper objectMapper) {
+										   ObjectMapper objectMapper,
+										   AssessorInstrumentAssessmentService assessmentService) {
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
 		this.objectMapper = objectMapper;
+		this.assessmentService = assessmentService;
 	}
 
 	public SuggestionResult suggest(SuggestionRequest request) {
@@ -146,6 +151,7 @@ public class AssessorInstrumentSuggestionService {
 		if (!fallbackCandidates.isEmpty()) {
 			candidateProfiles.putAll(fallbackCandidates);
 		}
+		candidateProfiles = filterCandidatesByRisk(candidateProfiles, request.riskThresholds());
 		Map<Integer, List<InstrumentProfile>> candidatesByLayer = groupByLayer(candidateProfiles.values());
 		Map<Integer, LayerCoverage> candidateCoverage = buildCoverageByLayer(candidatesByLayer);
 		Set<String> preferredSavingPlanIsins = new HashSet<>(coverageIsins);
@@ -1503,6 +1509,32 @@ public class AssessorInstrumentSuggestionService {
 		return grouped;
 	}
 
+	private Map<String, InstrumentProfile> filterCandidatesByRisk(Map<String, InstrumentProfile> candidates,
+															 LayerTargetRiskThresholds riskThresholds) {
+		if (candidates == null || candidates.isEmpty()) {
+			return Map.of();
+		}
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		Map<String, Integer> scores = assessmentService == null
+				? Map.of()
+				: assessmentService.assessScores(candidates.keySet(), thresholds);
+		if (scores.isEmpty()) {
+			return Map.of();
+		}
+		int cutoff = thresholds.getHighMin();
+		Map<String, InstrumentProfile> filtered = new LinkedHashMap<>();
+		for (Map.Entry<String, InstrumentProfile> entry : candidates.entrySet()) {
+			if (entry.getKey() == null || entry.getValue() == null) {
+				continue;
+			}
+			Integer score = scores.get(entry.getKey());
+			if (score != null && score < cutoff) {
+				filtered.put(entry.getKey(), entry.getValue());
+			}
+		}
+		return filtered;
+	}
+
 	private Set<String> normalizeRegionNames(List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions) {
 		if (regions == null || regions.isEmpty()) {
 			return Set.of();
@@ -1702,7 +1734,30 @@ public class AssessorInstrumentSuggestionService {
 									int minimumInstrumentAmount,
 									Map<Integer, Integer> maxSavingPlansPerLayer,
 									Set<String> excludedSnapshotIsins,
+									AssessorGapDetectionPolicy gapDetectionPolicy,
+									LayerTargetRiskThresholds riskThresholds) {
+		public SuggestionRequest(List<AssessorEngine.SavingPlanItem> savingPlans,
+									Set<String> existingInstrumentIsins,
+									Map<Integer, BigDecimal> savingPlanBudgets,
+									Map<Integer, BigDecimal> oneTimeBudgets,
+									int minimumSavingPlanSize,
+									int minimumRebalancingAmount,
+									int minimumInstrumentAmount,
+									Map<Integer, Integer> maxSavingPlansPerLayer,
+									Set<String> excludedSnapshotIsins,
 									AssessorGapDetectionPolicy gapDetectionPolicy) {
+			this(savingPlans,
+				existingInstrumentIsins,
+				savingPlanBudgets,
+				oneTimeBudgets,
+				minimumSavingPlanSize,
+				minimumRebalancingAmount,
+				minimumInstrumentAmount,
+				maxSavingPlansPerLayer,
+				excludedSnapshotIsins,
+				gapDetectionPolicy,
+				new LayerTargetRiskThresholds(0, 100));
+		}
 	}
 
 	record SavingPlanWeightRequest(List<AssessorEngine.SavingPlanItem> savingPlans,

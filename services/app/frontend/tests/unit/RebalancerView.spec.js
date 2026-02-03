@@ -89,7 +89,9 @@ describe('RebalancerView', () => {
             currentWeightPct: 62.5,
             targetWeightPct: 60,
             targetAmountEur: 48,
-            deltaEur: -2
+            deltaEur: -2,
+            targetTotalWeightPct: 60,
+            targetTotalAmountEur: 60000
           }
         ]
       }

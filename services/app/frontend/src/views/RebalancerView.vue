@@ -269,9 +269,11 @@
             {{ note }}
           </li>
         </ul>
-        <p class="note">Percentages are omitted because proposal weights blend projected gaps with the current savings plan distribution.</p>
+        <p class="note">Target totals combine current holdings with projected saving plan contributions over the horizon.</p>
+        <p class="note">Target Total %% reflects the projected total distribution (holdings + projected contributions), not the target weights.</p>
+        <p class="note">Market price changes are not included in target totals.</p>
         <p class="note">Longer projection horizons keep proposals closer to the current distribution.</p>
-        <p class="note">Delta shows proposed minus current amounts.</p>
+        <p class="note">Saving Plan Delta shows proposed minus current amounts.</p>
         <div class="table-wrap">
           <table class="table">
             <caption class="sr-only">Savings plan rebalancing proposal by layer.</caption>
@@ -280,16 +282,20 @@
                 <th scope="col">Layer</th>
                 <th scope="col" class="num">Current €</th>
                 <th scope="col" class="num">Proposed €</th>
-                <th scope="col" class="num">Delta €</th>
+                <th scope="col" class="num">Saving Plan Delta €</th>
+                <th scope="col" class="num">Target Total %%</th>
+                <th scope="col" class="num">Target Total Amount €</th>
               </tr>
             </thead>
             <tbody>
               <template v-if="loading">
                 <tr class="sr-only">
-                  <td colspan="4">Loading rebalancing proposal...</td>
+                  <td colspan="6">Loading rebalancing proposal...</td>
                 </tr>
                 <tr v-for="n in 3" :key="`proposal-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
                   <td><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
@@ -297,7 +303,7 @@
               </template>
               <template v-else-if="summary.savingPlanProposal.layers.length === 0">
                 <tr>
-                  <td colspan="4">No rebalancing proposal available.</td>
+                  <td colspan="6">No rebalancing proposal available.</td>
                 </tr>
               </template>
               <template v-else>
@@ -306,6 +312,8 @@
                   <td class="num">{{ formatAmount(row.currentAmountEur) }}</td>
                   <td class="num">{{ formatAmount(row.targetAmountEur) }}</td>
                   <td class="num">{{ formatAmount(row.deltaEur) }}</td>
+                  <td class="num">{{ formatWeight(row.targetTotalWeightPct) }}</td>
+                  <td class="num">{{ formatAmount(row.targetTotalAmountEur) }}</td>
                 </tr>
               </template>
             </tbody>
@@ -346,6 +354,8 @@
               valuation signals (earnings yield, EV/EBITDA, profitability in EUR, and P/B when available). Scores are normalized
               within each layer. See the valuation glossary below for definitions.
             </dd>
+            <dt>New suggestion (gap detection)</dt>
+            <dd>Suggested new saving plan instruments to close coverage gaps when a layer moves from 0 to a positive budget.</dd>
             <dt>Equal weight</dt>
             <dd>Used when KB factors are missing or only one instrument is in the layer.</dd>
             <dt>Dropped (below minimum)</dt>
@@ -476,6 +486,9 @@
             </tbody>
           </table>
         </div>
+        <p v-if="instrumentProposals.length" class="note">
+          Net saving plan delta: {{ formatSignedAmount(instrumentNetDelta) }} EUR ({{ instrumentNetDeltaLabel }}).
+        </p>
       </div>
     </div>
   </div>
@@ -512,6 +525,33 @@ const instrumentGating = computed(() => summary.value.savingPlanProposal?.gating
 const instrumentProposals = computed(() => summary.value.savingPlanProposal?.instrumentProposals || [])
 const instrumentWarnings = computed(() => summary.value.savingPlanProposal?.instrumentWarnings || [])
 const instrumentWarningCodes = computed(() => summary.value.savingPlanProposal?.instrumentWarningCodes || [])
+const instrumentNetDelta = computed(() =>
+  instrumentProposals.value.reduce((total, row) => {
+    const delta = Number(row?.deltaEur)
+    if (!Number.isFinite(delta)) {
+      return total
+    }
+    return total + delta
+  }, 0)
+)
+const instrumentHasDiscarded = computed(() =>
+  instrumentProposals.value.some((row) =>
+    row?.reasonCodes?.some((code) => code === 'MIN_AMOUNT_DROPPED' || code === 'LAYER_BUDGET_ZERO')
+  )
+)
+const instrumentNetDeltaLabel = computed(() => {
+  const delta = instrumentNetDelta.value
+  if (delta > 0) {
+    return 'increased'
+  }
+  if (delta < 0) {
+    return 'decreased'
+  }
+  if (instrumentHasDiscarded.value) {
+    return 'discarded instruments'
+  }
+  return 'unchanged'
+})
 const missingIsins = computed(() => new Set(instrumentGating.value?.missingIsins || []))
 const instrumentRationaleNote = computed(() => {
   if (!summary.value.savingPlanProposal) {
@@ -664,6 +704,24 @@ function formatAmount(value) {
   return value.toFixed(2)
 }
 
+function formatSignedAmount(value) {
+  if (value === null || value === undefined) {
+    return 'n/a'
+  }
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return 'n/a'
+  }
+  const amount = Math.abs(numeric).toFixed(2)
+  if (numeric > 0) {
+    return `+${amount}`
+  }
+  if (numeric < 0) {
+    return `-${amount}`
+  }
+  return amount
+}
+
 function formatProposedAmount(value) {
   if (value === null || value === undefined) {
     return 'n/a'
@@ -739,6 +797,7 @@ function formatReasons(reasons) {
     MIN_AMOUNT_DROPPED: 'Dropped (below minimum)',
     MIN_REBALANCE_AMOUNT: 'No change (below minimum rebalancing)',
     KB_WEIGHTED: 'KB-weighted',
+    KB_GAP_SUGGESTION: 'New suggestion (gap detection)',
     EQUAL_WEIGHT: 'Equal weight',
     LAYER_BUDGET_ZERO: 'Layer budget 0'
   }
@@ -759,7 +818,8 @@ function buildWarningDetails(codes, messages) {
 function warningLabelFromCode(code) {
   const labels = {
     LAYER_NO_INSTRUMENTS: 'Layer budget has no active instruments',
-    LAYER_ALL_BELOW_MINIMUM: 'All instruments below minimum saving plan size'
+    LAYER_ALL_BELOW_MINIMUM: 'All instruments below minimum saving plan size',
+    RISK_NOT_ACCEPTABLE: 'Existing instrument exceeds acceptable risk'
   }
   return labels[code] || null
 }

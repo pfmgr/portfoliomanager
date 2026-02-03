@@ -373,15 +373,20 @@
             <dt>Suppressed amount</dt>
             <dd>{{ formatAmount(diagnostics.suppressed_amount_total ?? 0) }} EUR</dd>
           </dl>
-          <div>
-            <h4>Redistribution notes</h4>
-            <ul v-if="redistributionNotes.length">
-              <li v-for="note in redistributionNotes" :key="note">{{ note }}</li>
-            </ul>
-            <p v-else class="note">No redistribution needed.</p>
+            <div>
+              <h4>Redistribution notes</h4>
+              <ul v-if="redistributionNotes.length">
+                <li v-for="note in redistributionNotes" :key="note">{{ note }}</li>
+              </ul>
+              <p v-else class="note">No redistribution needed.</p>
+              <h4>Risk warnings</h4>
+              <ul v-if="riskWarnings.length">
+                <li v-for="warning in riskWarnings" :key="warning">{{ warning }}</li>
+              </ul>
+              <p v-else class="note">No risk warnings.</p>
+            </div>
           </div>
         </div>
-      </div>
     </div>
   </div>
 </template>
@@ -409,6 +414,7 @@ const suggestions = computed(() => assessment.value?.saving_plan_suggestions ?? 
 const savingPlanNewInstruments = computed(() => assessment.value?.saving_plan_new_instruments ?? [])
 const diagnostics = computed(() => assessment.value?.diagnostics ?? {})
 const redistributionNotes = computed(() => diagnostics.value.redistribution_notes ?? [])
+const riskWarnings = computed(() => diagnostics.value.risk_warnings ?? diagnostics.value.riskWarnings ?? [])
 const kbMissingIsins = computed(() => diagnostics.value.missing_kb_isins ?? [])
 const kbSuggestionHint = computed(() => {
   if (!assessment.value) {
