@@ -3,6 +3,7 @@ package my.portfoliomanager.app.service;
 import my.portfoliomanager.app.dto.InstrumentProposalDto;
 import my.portfoliomanager.app.dto.InstrumentProposalGatingDto;
 import my.portfoliomanager.app.dto.SavingPlanProposalLayerDto;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -80,7 +81,8 @@ class AdvisorServiceInstrumentTotalsTest {
 						Mockito.anyMap(),
 						ArgumentMatchers.<Integer>any(),
 						ArgumentMatchers.<Integer>any(),
-						Mockito.anyBoolean()))
+						Mockito.anyBoolean(),
+						ArgumentMatchers.<LayerTargetRiskThresholds>any()))
 				.thenReturn(result);
 	}
 

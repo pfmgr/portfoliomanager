@@ -89,7 +89,9 @@ describe('RebalancerView', () => {
             currentWeightPct: 62.5,
             targetWeightPct: 60,
             targetAmountEur: 48,
-            deltaEur: -2
+            deltaEur: -2,
+            targetTotalWeightPct: 60,
+            targetTotalAmountEur: 60000
           }
         ]
       }
@@ -128,7 +130,7 @@ describe('RebalancerView', () => {
     expect(text).toContain('Layer Allocations')
     expect(text).toContain('Savings plan Rebalancing')
     expect(text).toContain('Monthly by Layer')
-    expect(text).toContain('Rebalancing Proposal (Savings plan weights)')
+    expect(text).toContain('Rebalancing Proposal (Savings plan amounts, EUR)')
     expect(text).toContain('Instrument Proposal')
     expect(text).toContain('Instrument proposal warnings')
     expect(text).toContain('KB')

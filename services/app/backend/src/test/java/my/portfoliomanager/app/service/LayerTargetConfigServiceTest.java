@@ -62,6 +62,9 @@ class LayerTargetConfigServiceTest {
 				15,
 				10,
 				null,
+				null,
+				null,
+				null,
 				null
 		));
 
@@ -84,6 +87,7 @@ class LayerTargetConfigServiceTest {
 		assertThat(config.effectiveLayerTargets().get(1)).isEqualByComparingTo(new BigDecimal("0.70"));
 		assertThat(config.minimumSavingPlanSize()).isEqualTo(15);
 		assertThat(config.minimumRebalancingAmount()).isEqualTo(10);
+		assertThat(config.projectionHorizonMonths()).isEqualTo(12);
 	}
 
 	@Test
@@ -114,6 +118,9 @@ class LayerTargetConfigServiceTest {
 				20,
 				10,
 				null,
+				null,
+				null,
+				null,
 				null
 		);
 
@@ -140,6 +147,9 @@ class LayerTargetConfigServiceTest {
 				20,
 				10,
 				Map.of(1, 10, 2, 10, 3, 10, 4, 10, 5, 10),
+				null,
+				null,
+				null,
 				null
 		));
 
@@ -161,7 +171,7 @@ class LayerTargetConfigServiceTest {
 		targets.put(2, 0.3);
 		targets.put(5, null);
 
-		LayerTargetConfigRequestDto request = new LayerTargetConfigRequestDto(null, null, targets, -5.0, null, null, null, null);
+		LayerTargetConfigRequestDto request = new LayerTargetConfigRequestDto(null, null, targets, -5.0, null, null, null, null, null, null, null);
 
 		LayerTargetConfigResponseDto response = layerTargetConfigService.saveConfig(request);
 
@@ -179,12 +189,51 @@ class LayerTargetConfigServiceTest {
 		when(resourceLoader.getResource(anyString())).thenReturn(new ClassPathResource("layer_targets.json"));
 
 		LayerTargetConfigResponseDto response = layerTargetConfigService.saveConfig(
-				new LayerTargetConfigRequestDto("CLASSIC", false, null, null, null, null, null, null));
+				new LayerTargetConfigRequestDto("CLASSIC", false, null, null, null, null, null, null, null, null, null));
 
 		assertThat(response.getActiveProfileKey()).isEqualTo("CLASSIC");
 		assertThat(response.getEffectiveLayerTargets()).containsEntry(1, 0.8);
 		assertThat(response.getEffectiveLayerTargets()).containsEntry(4, 0.01);
 		assertThat(response.isCustomOverridesEnabled()).isFalse();
 		assertThat(response.getMaxSavingPlansPerLayer()).containsEntry(1, 2);
+	}
+
+	@Test
+	void saveConfigClampsProjectionHorizon() {
+		when(jdbcTemplate.update(anyString())).thenReturn(1);
+		when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+		when(jdbcTemplate.execute(any(ConnectionCallback.class))).thenReturn(false);
+		when(resourceLoader.getResource(anyString())).thenReturn(new ClassPathResource("layer_targets.json"));
+
+		LayerTargetConfigResponseDto low = layerTargetConfigService.saveConfig(new LayerTargetConfigRequestDto(
+				"BALANCED",
+				false,
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+				Map.of("BALANCED", 0),
+				null,
+				null
+		));
+
+		LayerTargetConfigResponseDto high = layerTargetConfigService.saveConfig(new LayerTargetConfigRequestDto(
+				"BALANCED",
+				false,
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+				Map.of("BALANCED", 180),
+				null,
+				null
+		));
+
+		assertThat(low.getProfiles().get("BALANCED").getProjectionHorizonMonths()).isEqualTo(1);
+		assertThat(high.getProfiles().get("BALANCED").getProjectionHorizonMonths()).isEqualTo(120);
 	}
 }

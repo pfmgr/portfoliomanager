@@ -5,6 +5,9 @@ import my.portfoliomanager.app.config.AppProperties;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
 import my.portfoliomanager.app.dto.InstrumentProposalDto;
 import my.portfoliomanager.app.dto.InstrumentProposalGatingDto;
+import my.portfoliomanager.app.service.AssessorInstrumentAssessmentService;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
+import my.portfoliomanager.app.service.util.RiskThresholdsUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -33,12 +36,14 @@ public class InstrumentRebalanceService {
 	private static final String REASON_MIN_REBALANCE = "MIN_REBALANCE_AMOUNT";
 	private static final String REASON_WEIGHTED = "KB_WEIGHTED";
 	private static final String REASON_EQUAL_WEIGHT = "EQUAL_WEIGHT";
+	private static final String REASON_SCORE_WEIGHTED = "SCORE_WEIGHTED";
 	private static final String REASON_LAYER_BUDGET_ZERO = "LAYER_BUDGET_ZERO";
 	private static final String WARNING_NO_INSTRUMENTS = "LAYER_NO_INSTRUMENTS";
 	private static final double DEFAULT_PB_TARGET = 2.0;
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 0.01;
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 0.05;
 	private static final double MAX_DATA_QUALITY_PENALTY = 0.25;
+	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final double ETF_HOLDINGS_YIELD_WEIGHT = 0.65;
 	private static final double ETF_CURRENT_YIELD_WEIGHT = 0.20;
 	private static final double ETF_PB_WEIGHT = 0.10;
@@ -58,22 +63,26 @@ public class InstrumentRebalanceService {
 	private final ObjectMapper objectMapper;
 	private final AppProperties properties;
 	private final SavingPlanDeltaAllocator savingPlanDeltaAllocator;
+	private final AssessorInstrumentAssessmentService assessmentService;
 
 	public InstrumentRebalanceService(NamedParameterJdbcTemplate namedParameterJdbcTemplate,
 									  ObjectMapper objectMapper,
 									  AppProperties properties,
-									  SavingPlanDeltaAllocator savingPlanDeltaAllocator) {
+									  SavingPlanDeltaAllocator savingPlanDeltaAllocator,
+									  AssessorInstrumentAssessmentService assessmentService) {
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
 		this.objectMapper = objectMapper;
 		this.properties = properties;
 		this.savingPlanDeltaAllocator = savingPlanDeltaAllocator;
+		this.assessmentService = assessmentService;
 	}
 
 	public InstrumentProposalResult buildInstrumentProposals(List<SavingPlanInstrument> instruments,
-															 Map<Integer, BigDecimal> layerBudgets,
-															 Integer minimumSavingPlanSize,
-															 Integer minimumRebalancingAmount,
-															 boolean withinTolerance) {
+									 Map<Integer, BigDecimal> layerBudgets,
+									 Integer minimumSavingPlanSize,
+									 Integer minimumRebalancingAmount,
+									 boolean withinTolerance,
+									 LayerTargetRiskThresholds riskThresholds) {
 		List<SavingPlanInstrument> normalized = normalizeInstruments(instruments);
 		Set<String> isins = normalized.stream()
 				.map(SavingPlanInstrument::isin)
@@ -106,6 +115,12 @@ public class InstrumentRebalanceService {
 			proposals.sort(instrumentOrder());
 			return new InstrumentProposalResult(gating, proposals, List.of(), List.of());
 		}
+
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		Map<String, Integer> assessmentScores = assessmentService == null
+				? Map.of()
+				: assessmentService.assessScores(isins, thresholds);
+		int scoreCutoff = thresholds.getHighMin();
 
 		Map<Integer, List<SavingPlanInstrument>> byLayer = groupByLayer(normalized);
 		List<InstrumentProposalDto> proposals = new ArrayList<>();
@@ -143,7 +158,8 @@ public class InstrumentRebalanceService {
 				continue;
 			}
 
-			LayerAllocation allocation = allocateLayerBudget(layer, budget, layerInstruments, minimumSavingPlanSize, minimumRebalancingAmount, extractions);
+			LayerAllocation allocation = allocateLayerBudget(layer, budget, layerInstruments, minimumSavingPlanSize,
+					minimumRebalancingAmount, extractions, assessmentScores, scoreCutoff);
 			if (allocation.weightingSummary() != null) {
 				weightingSummaries.add(allocation.weightingSummary());
 			}
@@ -203,17 +219,19 @@ public class InstrumentRebalanceService {
 	}
 
 	private LayerAllocation allocateLayerBudget(int layer,
-												BigDecimal budget,
-												List<SavingPlanInstrument> instruments,
-												Integer minimumSavingPlanSize,
-												Integer minimumRebalancingAmount,
-												Map<String, KbExtraction> extractions) {
+								BigDecimal budget,
+								List<SavingPlanInstrument> instruments,
+								Integer minimumSavingPlanSize,
+								Integer minimumRebalancingAmount,
+								Map<String, KbExtraction> extractions,
+								Map<String, Integer> assessmentScores,
+								int scoreCutoff) {
 		Map<String, List<String>> reasonCodes = new HashMap<>();
 		List<InstrumentWarning> warnings = new ArrayList<>();
 		BigDecimal minSavingPlan = minimumSavingPlanSize == null ? null : new BigDecimal(minimumSavingPlanSize);
 		BigDecimal minRebalance = minimumRebalancingAmount == null ? null : new BigDecimal(minimumRebalancingAmount);
 
-		WeightingResult weighting = computeWeights(instruments, extractions);
+		WeightingResult weighting = computeWeights(instruments, extractions, assessmentScores, scoreCutoff);
 		List<SavingPlanDeltaAllocator.PlanInput> inputs = new ArrayList<>();
 		Map<AssessorEngine.PlanKey, String> keyToIsin = new HashMap<>();
 		Map<String, BigDecimal> currentByIsin = new HashMap<>();
@@ -239,6 +257,9 @@ public class InstrumentRebalanceService {
 		String weightCode = weighting.weighted() ? REASON_WEIGHTED : REASON_EQUAL_WEIGHT;
 		for (SavingPlanInstrument instrument : instruments) {
 			addReasonCode(reasonCodes, instrument.isin(), weightCode);
+			if (weighting.scoreWeighted()) {
+				addReasonCode(reasonCodes, instrument.isin(), REASON_SCORE_WEIGHTED);
+			}
 		}
 		if (minRebalance != null && minRebalance.signum() > 0) {
 			for (Map.Entry<AssessorEngine.PlanKey, BigDecimal> entry : allocation.proposedAmounts().entrySet()) {
@@ -272,6 +293,7 @@ public class InstrumentRebalanceService {
 				layer,
 				instruments.size(),
 				weighting.weighted(),
+				weighting.scoreWeighted(),
 				weighting.costUsed(),
 				weighting.benchmarkUsed(),
 				weighting.regionsUsed(),
@@ -411,7 +433,9 @@ public class InstrumentRebalanceService {
 	}
 
 	private WeightingResult computeWeights(List<SavingPlanInstrument> instruments,
-										   Map<String, KbExtraction> extractions) {
+								   Map<String, KbExtraction> extractions,
+								   Map<String, Integer> assessmentScores,
+								   int scoreCutoff) {
 		if (instruments == null || instruments.isEmpty()) {
 			return WeightingResult.equal(instruments);
 		}
@@ -419,6 +443,11 @@ public class InstrumentRebalanceService {
 			SavingPlanInstrument instrument = instruments.get(0);
 			return WeightingResult.single(instrument.isin());
 		}
+		boolean useScoreWeighting = instruments.size() > 1;
+		Map<String, Double> scoreFactors = useScoreWeighting
+				? buildScoreWeightFactors(instruments, assessmentScores, scoreCutoff)
+				: Map.of();
+		boolean hasScoreWeights = useScoreWeighting && !scoreFactors.isEmpty();
 
 		boolean useCost = true;
 		boolean useBenchmark = true;
@@ -493,7 +522,9 @@ public class InstrumentRebalanceService {
 
 		boolean useRedundancy = useBenchmark || useRegions || useHoldings;
 		if (!useCost && !useRedundancy && !useValuation) {
-			return WeightingResult.equal(instruments);
+			return hasScoreWeights
+					? scoreWeightedResult(instruments, scoreFactors)
+					: WeightingResult.equal(instruments);
 		}
 
 		Map<String, Integer> benchmarkCounts = new HashMap<>();
@@ -537,12 +568,18 @@ public class InstrumentRebalanceService {
 				double factor = Math.max(0.0, 1.0 - penalty);
 				score = score.multiply(BigDecimal.valueOf(factor));
 			}
+			if (hasScoreWeights) {
+				double scoreFactor = scoreFactors.getOrDefault(instrument.isin(), 1.0);
+				score = score.multiply(BigDecimal.valueOf(scoreFactor));
+			}
 			scores.put(instrument.isin(), score);
 			total = total.add(score);
 		}
 
 		if (total.signum() <= 0) {
-			return WeightingResult.equal(instruments);
+			return hasScoreWeights
+					? scoreWeightedResult(instruments, scoreFactors)
+					: WeightingResult.equal(instruments);
 		}
 
 		Map<String, BigDecimal> weights = new HashMap<>();
@@ -550,8 +587,77 @@ public class InstrumentRebalanceService {
 			BigDecimal score = scores.getOrDefault(instrument.isin(), BigDecimal.ZERO);
 			weights.put(instrument.isin(), score.divide(total, 8, RoundingMode.HALF_UP));
 		}
-		return new WeightingResult(weights, useCost || useRedundancy || useValuation, useCost, useBenchmark, useRegions,
-				useHoldings, useValuation);
+		return new WeightingResult(weights, useCost || useRedundancy || useValuation, hasScoreWeights, useCost,
+				useBenchmark, useRegions, useHoldings, useValuation);
+	}
+
+	private Map<String, Double> buildScoreWeightFactors(List<SavingPlanInstrument> instruments,
+											 Map<String, Integer> assessmentScores,
+											 int scoreCutoff) {
+		if (instruments == null || instruments.isEmpty() || assessmentScores == null || assessmentScores.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, Double> factors = new HashMap<>();
+		for (SavingPlanInstrument instrument : instruments) {
+			if (instrument == null || instrument.isin() == null) {
+				continue;
+			}
+			Integer score = assessmentScores.get(instrument.isin());
+			double factor = score == null ? 1.0 : scoreWeightFactor(score, scoreCutoff);
+			factors.put(instrument.isin(), factor);
+		}
+		return factors;
+	}
+
+	private WeightingResult scoreWeightedResult(List<SavingPlanInstrument> instruments,
+										 Map<String, Double> scoreFactors) {
+		Map<String, BigDecimal> weights = scoreWeightedWeights(instruments, scoreFactors);
+		boolean scoreWeighted = instruments != null && instruments.size() > 1 && scoreFactors != null && !scoreFactors.isEmpty();
+		return new WeightingResult(weights, false, scoreWeighted, false, false, false, false, false);
+	}
+
+	private Map<String, BigDecimal> scoreWeightedWeights(List<SavingPlanInstrument> instruments,
+												 Map<String, Double> scoreFactors) {
+		if (instruments == null || instruments.isEmpty()) {
+			return Map.of();
+		}
+		if (instruments.size() == 1) {
+			SavingPlanInstrument instrument = instruments.get(0);
+			return Map.of(instrument.isin(), BigDecimal.ONE);
+		}
+		Map<String, BigDecimal> raw = new HashMap<>();
+		BigDecimal total = BigDecimal.ZERO;
+		for (SavingPlanInstrument instrument : instruments) {
+			if (instrument == null || instrument.isin() == null) {
+				continue;
+			}
+			double factor = scoreFactors == null ? 1.0 : scoreFactors.getOrDefault(instrument.isin(), 1.0);
+			BigDecimal weight = BigDecimal.valueOf(Math.max(0.0, factor));
+			raw.put(instrument.isin(), weight);
+			total = total.add(weight);
+		}
+		if (total.signum() <= 0) {
+			return WeightingResult.equal(instruments).weights();
+		}
+		Map<String, BigDecimal> normalized = new HashMap<>();
+		for (Map.Entry<String, BigDecimal> entry : raw.entrySet()) {
+			normalized.put(entry.getKey(), entry.getValue().divide(total, 8, RoundingMode.HALF_UP));
+		}
+		return normalized;
+	}
+
+	private double scoreWeightFactor(int score, int scoreCutoff) {
+		if (scoreCutoff <= 0) {
+			return 1.0;
+		}
+		double normalized = ((double) scoreCutoff - (double) score + 1.0) / (double) scoreCutoff;
+		if (normalized > 1.0) {
+			return 1.0;
+		}
+		if (normalized < MIN_SCORE_WEIGHT_FACTOR) {
+			return MIN_SCORE_WEIGHT_FACTOR;
+		}
+		return normalized;
 	}
 
 	private BigDecimal computeValuationScore(InstrumentDossierExtractionPayload payload) {
@@ -1566,6 +1672,7 @@ public class InstrumentRebalanceService {
 	public record LayerWeightingSummary(int layer,
 										int instrumentCount,
 										boolean weighted,
+										boolean scoreWeighted,
 										boolean costUsed,
 										boolean benchmarkUsed,
 										boolean regionsUsed,
@@ -1592,6 +1699,7 @@ public class InstrumentRebalanceService {
 
 	private record WeightingResult(Map<String, BigDecimal> weights,
 								   boolean weighted,
+								   boolean scoreWeighted,
 								   boolean costUsed,
 								   boolean benchmarkUsed,
 								   boolean regionsUsed,
@@ -1605,13 +1713,13 @@ public class InstrumentRebalanceService {
 					weights.put(instrument.isin(), share);
 				}
 			}
-			return new WeightingResult(weights, false, false, false, false, false, false);
+			return new WeightingResult(weights, false, false, false, false, false, false, false);
 		}
 
 		private static WeightingResult single(String isin) {
 			Map<String, BigDecimal> weights = new HashMap<>();
 			weights.put(isin, BigDecimal.ONE);
-			return new WeightingResult(weights, false, false, false, false, false, false);
+			return new WeightingResult(weights, false, false, false, false, false, false, false);
 		}
 	}
 }

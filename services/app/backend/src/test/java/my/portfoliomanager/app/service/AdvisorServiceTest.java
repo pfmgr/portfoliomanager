@@ -13,9 +13,15 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import my.portfoliomanager.app.dto.LayerTargetConfigRequestDto;
+import my.portfoliomanager.app.dto.LayerTargetConfigResponseDto;
+import my.portfoliomanager.app.dto.SavingPlanProposalDto;
+import my.portfoliomanager.app.dto.SavingPlanProposalLayerDto;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 
 import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +34,9 @@ class AdvisorServiceTest {
 
 	@Autowired
 	private AdvisorService advisorService;
+
+	@Autowired
+	private LayerTargetConfigService layerTargetConfigService;
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -113,6 +122,65 @@ class AdvisorServiceTest {
 	}
 
 	@Test
+	void targetTotalsMatchHoldingsPlusProjectedContributions() {
+		layerTargetConfigService.resetToDefault();
+		LayerTargetConfigResponseDto config = layerTargetConfigService.getConfigResponse();
+		String profileKey = config.getActiveProfileKey();
+		layerTargetConfigService.saveConfig(new LayerTargetConfigRequestDto(
+				profileKey,
+				false,
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+				Map.of(profileKey, 120),
+				null,
+				null
+		));
+
+		jdbcTemplate.update("delete from snapshot_positions");
+		jdbcTemplate.update("delete from sparplans");
+		jdbcTemplate.update("delete from instruments");
+
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, asset_class, is_deleted) values ('L1', 'Layer1 ETF', 'tr', 1, 'Equity', false)");
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, asset_class, is_deleted) values ('L2', 'Layer2 ETF', 'tr', 2, 'Bonds', false)");
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, asset_class, is_deleted) values ('L3', 'Layer3 ETF', 'tr', 3, 'Themes', false)");
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, asset_class, is_deleted) values ('L4', 'Layer4 Stock', 'tr', 4, 'Equity', false)");
+
+		jdbcTemplate.update("insert into snapshot_positions (snapshot_id, isin, name, value_eur, currency) values (11, 'L1', 'Layer1 ETF', 70000.00, 'EUR')");
+		jdbcTemplate.update("insert into snapshot_positions (snapshot_id, isin, name, value_eur, currency) values (11, 'L2', 'Layer2 ETF', 20000.00, 'EUR')");
+		jdbcTemplate.update("insert into snapshot_positions (snapshot_id, isin, name, value_eur, currency) values (11, 'L3', 'Layer3 ETF', 8000.00, 'EUR')");
+		jdbcTemplate.update("insert into snapshot_positions (snapshot_id, isin, name, value_eur, currency) values (11, 'L4', 'Layer4 Stock', 2000.00, 'EUR')");
+
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (11, 1, 'L1', 700.00, 'monthly', true)");
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (12, 1, 'L2', 200.00, 'monthly', true)");
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (13, 1, 'L3', 80.00, 'monthly', true)");
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (14, 1, 'L4', 20.00, 'monthly', true)");
+
+		var summary = advisorService.summary(null);
+		assertThat(summary.savingPlanProposal()).isNotNull();
+		var layers = summary.savingPlanProposal().getLayers();
+		double totalTarget = layers.stream()
+				.mapToDouble(layer -> layer.getTargetTotalAmountEur() == null ? 0.0d : layer.getTargetTotalAmountEur())
+				.sum();
+		assertThat(totalTarget).isEqualTo(220000.0d);
+		Map<Integer, SavingPlanProposalLayerDto> byLayer = new HashMap<>();
+		for (SavingPlanProposalLayerDto layer : layers) {
+			byLayer.put(layer.getLayer(), layer);
+		}
+		assertThat(byLayer.get(1).getTargetTotalAmountEur()).isEqualTo(154000.0d);
+		assertThat(byLayer.get(2).getTargetTotalAmountEur()).isEqualTo(44000.0d);
+		assertThat(byLayer.get(3).getTargetTotalAmountEur()).isEqualTo(17600.0d);
+		assertThat(byLayer.get(4).getTargetTotalAmountEur()).isEqualTo(4400.0d);
+		assertThat(byLayer.get(1).getTargetTotalWeightPct()).isCloseTo(70.0d, org.assertj.core.data.Offset.offset(0.01d));
+		assertThat(byLayer.get(2).getTargetTotalWeightPct()).isCloseTo(20.0d, org.assertj.core.data.Offset.offset(0.01d));
+		assertThat(byLayer.get(3).getTargetTotalWeightPct()).isCloseTo(8.0d, org.assertj.core.data.Offset.offset(0.01d));
+		assertThat(byLayer.get(4).getTargetTotalWeightPct()).isCloseTo(2.0d, org.assertj.core.data.Offset.offset(0.01d));
+	}
+
+	@Test
 	void proposalIncreasesLayerOneWhenTotalBelowMinimum() {
 		jdbcTemplate.update("delete from sparplans");
 		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (3, 1, 'DE000S', 10.00, 'monthly', true)");
@@ -132,6 +200,67 @@ class AdvisorServiceTest {
 		assertThat(proposalTotal).isEqualTo(10.0d);
 		assertThat(summary.savingPlanProposal().getNotes())
 				.anyMatch(note -> note.contains("minimum rebalancing amount"));
+	}
+
+	@Test
+	void longerProjectionHorizonKeepsProposalCloserToCurrentDistribution() {
+		layerTargetConfigService.resetToDefault();
+		LayerTargetConfigResponseDto config = layerTargetConfigService.getConfigResponse();
+		String profileKey = config.getActiveProfileKey();
+
+		jdbcTemplate.update("delete from sparplans");
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (10, 1, 'DE000B', 500.00, 'monthly', true)");
+
+		LayerTargetConfigRequestDto request12 = new LayerTargetConfigRequestDto(
+				profileKey,
+				false,
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+				Map.of(profileKey, 12),
+				null,
+				null
+		);
+		layerTargetConfigService.saveConfig(request12);
+		var summary12 = advisorService.summary(null);
+		assertThat(summary12.savingPlanProposal()).isNotNull();
+		double delta12 = distributionDelta(summary12.savingPlanProposal());
+
+		LayerTargetConfigRequestDto request120 = new LayerTargetConfigRequestDto(
+				profileKey,
+				false,
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+				Map.of(profileKey, 120),
+				null,
+				null
+		);
+		layerTargetConfigService.saveConfig(request120);
+		var summary120 = advisorService.summary(null);
+		assertThat(summary120.savingPlanProposal()).isNotNull();
+		double delta120 = distributionDelta(summary120.savingPlanProposal());
+
+		assertThat(delta12).isGreaterThan(0.0d);
+		assertThat(delta120).isLessThan(delta12);
+	}
+
+	private double distributionDelta(SavingPlanProposalDto proposal) {
+		Map<Integer, Double> actual = proposal == null ? null : proposal.getActualDistributionByLayer();
+		Map<Integer, Double> proposed = proposal == null ? null : proposal.getProposedDistributionByLayer();
+		double total = 0.0d;
+		for (int layer = 1; layer <= 5; layer++) {
+			double actualValue = actual == null ? 0.0d : actual.getOrDefault(layer, 0.0d);
+			double proposedValue = proposed == null ? 0.0d : proposed.getOrDefault(layer, 0.0d);
+			total += Math.abs(proposedValue - actualValue);
+		}
+		return total;
 	}
 
 	@Configuration
