@@ -561,7 +561,7 @@ public class AdvisorService {
 		List<SavingPlanInstrument> savingPlanInstruments = loadSavingPlanInstruments();
 		InstrumentRebalanceService.InstrumentProposalResult instrumentResult = instrumentRebalanceService
 				.buildInstrumentProposals(savingPlanInstruments, proposalAmounts, targetConfig.minimumSavingPlanSize(),
-						targetConfig.minimumRebalancingAmount(), effectiveWithinTolerance);
+						targetConfig.minimumRebalancingAmount(), effectiveWithinTolerance, resolveRiskThresholds(targetConfig));
 		List<InstrumentProposalDto> instrumentProposals = instrumentResult == null
 				? new ArrayList<>()
 				: new ArrayList<>(instrumentResult.proposals());
@@ -760,7 +760,8 @@ public class AdvisorService {
 		builder.append("- Use instrument_proposal_highlights as the only examples; do not introduce other instruments.\n");
 		builder.append("- If any instrument has KB_WEIGHTED, explain the weighting method using kb_weighting_method and instrument_weighting_by_layer.\n");
 		builder.append("- When KB_WEIGHTED applies, mention the factors listed per layer (ter, benchmark_overlap, region_overlap, holdings_overlap) and relate them to lower costs and lower overlap/redundancy.\n");
-		builder.append("- If instrument_weighting_by_layer shows weighted=false, say equal weights were applied (single instrument or missing KB data).\n");
+		builder.append("- If instrument_weighting_by_layer shows score_weighted=true, explain that assessment scores (lower is better) tilt weights toward lower scores.\n");
+		builder.append("- If instrument_weighting_by_layer shows weighted=false and score_weighted=false, say equal weights were applied (single instrument or missing KB data).\n");
 		builder.append("- Do not invent weighting factors or data that are not listed in the context.\n");
 		builder.append("- Do not calculate or adjust numeric targets; they are fixed.\n");
 		builder.append("Context:\n");
@@ -800,6 +801,9 @@ public class AdvisorService {
 		builder.append("minimum_rebalancing_instruments=").append(formatMinimumRebalancingInstruments(instrumentProposals)).append("\n");
 		if (hasReasonCode(instrumentProposals, "KB_WEIGHTED")) {
 			builder.append("kb_weighting_method=score = (1 / (1 + TER)) * (1 - redundancy); redundancy is average overlap of benchmark, regions, and top holdings when available; weights are normalized scores.\n");
+		}
+		if (hasReasonCode(instrumentProposals, "SCORE_WEIGHTED")) {
+			builder.append("score_weighting_method=assessment score factor (lower score -> higher weight), applied as a multiplier and normalized within each layer.\n");
 		}
 		return builder.toString();
 	}
@@ -920,6 +924,7 @@ public class AdvisorService {
 		int decreases = 0;
 		int unchanged = 0;
 		int kbWeighted = 0;
+		int scoreWeighted = 0;
 		int equalWeight = 0;
 		int minDropped = 0;
 		int budgetZero = 0;
@@ -950,6 +955,7 @@ public class AdvisorService {
 				}
 				switch (code) {
 					case "KB_WEIGHTED" -> kbWeighted += 1;
+					case "SCORE_WEIGHTED" -> scoreWeighted += 1;
 					case "EQUAL_WEIGHT" -> equalWeight += 1;
 					case "MIN_AMOUNT_DROPPED" -> minDropped += 1;
 					case "LAYER_BUDGET_ZERO" -> budgetZero += 1;
@@ -967,6 +973,7 @@ public class AdvisorService {
 				+ ", decreases=" + decreases
 				+ ", unchanged=" + unchanged
 				+ ", kb_weighted=" + kbWeighted
+				+ ", score_weighted=" + scoreWeighted
 				+ ", equal_weight=" + equalWeight
 				+ ", min_dropped=" + minDropped
 				+ ", layer_budget_zero=" + budgetZero
@@ -1068,6 +1075,7 @@ public class AdvisorService {
 			builder.append("{layer=").append(summary.layer());
 			builder.append(", instruments=").append(summary.instrumentCount());
 			builder.append(", weighted=").append(summary.weighted());
+			builder.append(", score_weighted=").append(summary.scoreWeighted());
 			List<String> factors = weightingFactors(summary);
 			builder.append(", factors=").append(factors.isEmpty() ? "[]" : factors);
 			String note = weightingNote(summary);
@@ -1084,6 +1092,9 @@ public class AdvisorService {
 
 	private List<String> weightingFactors(InstrumentRebalanceService.LayerWeightingSummary summary) {
 		List<String> factors = new ArrayList<>();
+		if (summary.scoreWeighted()) {
+			factors.add("assessment_score");
+		}
 		if (summary.costUsed()) {
 			factors.add("ter");
 		}
@@ -1102,6 +1113,9 @@ public class AdvisorService {
 	private String weightingNote(InstrumentRebalanceService.LayerWeightingSummary summary) {
 		if (summary.weighted()) {
 			return null;
+		}
+		if (summary.scoreWeighted()) {
+			return "score-weighted (assessment scores)";
 		}
 		if (summary.instrumentCount() <= 1) {
 			return "single instrument";

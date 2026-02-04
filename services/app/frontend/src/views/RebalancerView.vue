@@ -270,7 +270,7 @@
           </li>
         </ul>
         <p class="note">Target totals combine current holdings with projected saving plan contributions over the horizon.</p>
-        <p class="note">Target Total %% reflects the projected total distribution (holdings + projected contributions), not the target weights.</p>
+        <p class="note">Target Total % reflects the projected total distribution (holdings + projected contributions), not the target weights.</p>
         <p class="note">Market price changes are not included in target totals.</p>
         <p class="note">Longer projection horizons keep proposals closer to the current distribution.</p>
         <p class="note">Saving Plan Delta shows proposed minus current amounts.</p>
@@ -283,7 +283,7 @@
                 <th scope="col" class="num">Current €</th>
                 <th scope="col" class="num">Proposed €</th>
                 <th scope="col" class="num">Saving Plan Delta €</th>
-                <th scope="col" class="num">Target Total %%</th>
+                <th scope="col" class="num">Target Total %</th>
                 <th scope="col" class="num">Target Total Amount €</th>
               </tr>
             </thead>
@@ -792,15 +792,16 @@ function formatReasons(reasons) {
   if (!reasons || reasons.length === 0) {
     return 'n/a'
   }
-  const labels = {
-    NO_CHANGE_WITHIN_TOLERANCE: 'No change (within tolerance)',
-    MIN_AMOUNT_DROPPED: 'Dropped (below minimum)',
-    MIN_REBALANCE_AMOUNT: 'No change (below minimum rebalancing)',
-    KB_WEIGHTED: 'KB-weighted',
-    KB_GAP_SUGGESTION: 'New suggestion (gap detection)',
-    EQUAL_WEIGHT: 'Equal weight',
-    LAYER_BUDGET_ZERO: 'Layer budget 0'
-  }
+    const labels = {
+      NO_CHANGE_WITHIN_TOLERANCE: 'No change (within tolerance)',
+      MIN_AMOUNT_DROPPED: 'Dropped (below minimum)',
+      MIN_REBALANCE_AMOUNT: 'No change (below minimum rebalancing)',
+      KB_WEIGHTED: 'KB-weighted',
+      SCORE_WEIGHTED: 'Score-weighted',
+      KB_GAP_SUGGESTION: 'New suggestion (gap detection)',
+      EQUAL_WEIGHT: 'Equal weight',
+      LAYER_BUDGET_ZERO: 'Layer budget 0'
+    }
   return reasons.map((code) => labels[code] || code).join(', ')
 }
 

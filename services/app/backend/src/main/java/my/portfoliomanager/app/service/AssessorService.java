@@ -44,6 +44,7 @@ public class AssessorService {
 	private static final int DEFAULT_MIN_SAVING_PLAN = 15;
 	private static final int DEFAULT_MIN_REBALANCE = 10;
 	private static final int DEFAULT_MIN_INSTRUMENT = 25;
+	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final String ASSESSMENT_TYPE_INSTRUMENT_ONE_TIME = "instrument_one_time";
 
 	private final SavingPlanRepository savingPlanRepository;
@@ -328,6 +329,7 @@ public class AssessorService {
 		builder.append("- High risk is not_acceptable_risk and should be called out clearly.\n");
 		builder.append("- Use recommendation_status exactly as given; do not infer or invert the risk bands.\n");
 		builder.append("- Explain how the amount was distributed across layers and instruments.\n");
+		builder.append("- If allocation_criteria includes Assessment score weighting, explain that lower scores receive higher weights.\n");
 		builder.append("- Use instrument name, ISIN, score, allocation amounts, and score component points.\n");
 		builder.append("- You may use short bullets for the score breakdown.\n");
 		builder.append("- Do not invent instruments or criteria.\n");
@@ -1864,17 +1866,17 @@ public class AssessorService {
 				boolean hasPlans = planCounts.getOrDefault(layer, 0) > 0;
 				BigDecimal used = newInstrumentTotals.getOrDefault(layer, BigDecimal.ZERO);
 				BigDecimal remainder = budget.subtract(used);
-				if (hasPlans && remainder.signum() > 0) {
-					if (used.signum() > 0) {
-						allocationNotes.add(String.format(
-								"Layer %d remaining budget %s EUR was allocated to existing saving plans (KB-weighted) after new plan gates/gaps.",
-								layer, toAmount(remainder)));
-					} else {
-						allocationNotes.add(String.format(
-								"Layer %d budget %s EUR was allocated to existing saving plans (KB-weighted) because no eligible new saving plans were proposed.",
-								layer, toAmount(remainder)));
+					if (hasPlans && remainder.signum() > 0) {
+						if (used.signum() > 0) {
+							allocationNotes.add(String.format(
+									"Layer %d remaining budget %s EUR was allocated to existing saving plans (KB- and score-weighted) after new plan gates/gaps.",
+									layer, toAmount(remainder)));
+						} else {
+							allocationNotes.add(String.format(
+									"Layer %d budget %s EUR was allocated to existing saving plans (KB- and score-weighted) because no eligible new saving plans were proposed.",
+									layer, toAmount(remainder)));
+						}
 					}
-				}
 				if (hasPlans) {
 					continue;
 				}
@@ -1907,7 +1909,23 @@ public class AssessorService {
 						existingCoverageIsins,
 						gapDetectionPolicy
 				));
-		Map<AssessorEngine.PlanKey, BigDecimal> planWeights = buildPlanWeights(savingPlanSnapshot.plans(), weightsByLayer);
+		Set<String> planIsins = new LinkedHashSet<>();
+		for (AssessorEngine.SavingPlanItem plan : savingPlanSnapshot.plans()) {
+			if (plan == null || plan.isin() == null) {
+				continue;
+			}
+			String isin = normalizeIsin(plan.isin());
+			if (isin != null) {
+				planIsins.add(isin);
+			}
+		}
+		Map<String, Integer> assessmentScores = instrumentAssessmentService.assessScores(planIsins, riskThresholds);
+		Map<AssessorEngine.PlanKey, BigDecimal> planWeights = buildPlanWeights(
+				savingPlanSnapshot.plans(),
+				weightsByLayer,
+				assessmentScores,
+				riskThresholds
+		);
 		List<AssessorEngine.SavingPlanSuggestion> weightedSuggestions = buildWeightedSavingPlanSuggestions(
 				savingPlanSnapshot.plans(),
 				effectiveTargets,
@@ -2099,11 +2117,15 @@ public class AssessorService {
 	}
 
 	private Map<AssessorEngine.PlanKey, BigDecimal> buildPlanWeights(List<AssessorEngine.SavingPlanItem> plans,
-																	 Map<Integer, Map<String, BigDecimal>> weightsByLayer) {
+														 Map<Integer, Map<String, BigDecimal>> weightsByLayer,
+														 Map<String, Integer> assessmentScores,
+														 LayerTargetRiskThresholds riskThresholds) {
 		Map<AssessorEngine.PlanKey, BigDecimal> weights = new LinkedHashMap<>();
 		if (plans == null) {
 			return weights;
 		}
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		int scoreCutoff = thresholds.getHighMin();
 		for (AssessorEngine.SavingPlanItem plan : plans) {
 			if (plan == null) {
 				continue;
@@ -2117,9 +2139,26 @@ public class AssessorService {
 			if (weight == null || weight.signum() <= 0) {
 				weight = BigDecimal.ONE;
 			}
+			Integer score = assessmentScores == null ? null : assessmentScores.get(isin);
+			double factor = score == null ? 1.0 : scoreWeightFactor(score, scoreCutoff);
+			weight = weight.multiply(BigDecimal.valueOf(factor));
 			weights.put(new AssessorEngine.PlanKey(isin, plan.depotId()), weight);
 		}
 		return weights;
+	}
+
+	private double scoreWeightFactor(int score, int scoreCutoff) {
+		if (scoreCutoff <= 0) {
+			return 1.0;
+		}
+		double normalized = ((double) scoreCutoff - (double) score + 1.0) / (double) scoreCutoff;
+		if (normalized > 1.0) {
+			return 1.0;
+		}
+		if (normalized < MIN_SCORE_WEIGHT_FACTOR) {
+			return MIN_SCORE_WEIGHT_FACTOR;
+		}
+		return normalized;
 	}
 
 	private List<AssessorEngine.SavingPlanSuggestion> buildWeightedSavingPlanSuggestions(

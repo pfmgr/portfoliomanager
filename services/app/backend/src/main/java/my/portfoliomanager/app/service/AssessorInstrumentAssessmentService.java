@@ -31,6 +31,8 @@ public class AssessorInstrumentAssessmentService {
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 3.0;
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 5.0;
 	private static final double MAX_DATA_QUALITY_PENALTY = 20.0;
+	private static final double SINGLE_STOCK_PENALTY = 15.0;
+	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final double ETF_HOLDINGS_YIELD_WEIGHT = 0.65;
 	private static final double ETF_CURRENT_YIELD_WEIGHT = 0.20;
 	private static final double ETF_PB_WEIGHT = 0.10;
@@ -341,7 +343,8 @@ public class AssessorInstrumentAssessmentService {
 		double valuationPenalty = scoreValuationPenalty(payload, criteria, components);
 		double concentrationPenalty = scoreConcentrationPenalty(payload, criteria, components);
 		double dataPenalty = scoreDataQualityPenalty(payload, criteria, components);
-		double rawScore = costPenalty + riskPenalty + valuationPenalty + concentrationPenalty + dataPenalty;
+		double singleStockPenalty = scoreSingleStockPenalty(payload, criteria, components);
+		double rawScore = costPenalty + riskPenalty + valuationPenalty + concentrationPenalty + dataPenalty + singleStockPenalty;
 		List<ScoreComponent> adjustedComponents = scaleComponentsIfNeeded(components, rawScore, 100.0);
 		double adjustedScore = sumComponents(adjustedComponents);
 		int rounded = (int) Math.round(Math.min(100.0, Math.max(0.0, adjustedScore)));
@@ -540,6 +543,30 @@ public class AssessorInstrumentAssessmentService {
 		double cappedPenalty = Math.min(MAX_DATA_QUALITY_PENALTY, penalty);
 		recordScoreComponent(components, "Data quality", cappedPenalty);
 		return cappedPenalty;
+	}
+
+	private double scoreSingleStockPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
+									  List<ScoreComponent> components) {
+		if (!isSingleStock(payload)) {
+			return 0.0;
+		}
+		criteria.addScoreCriterion("Single-stock risk premium");
+		recordScoreComponent(components, "Single-stock risk premium", SINGLE_STOCK_PENALTY);
+		return SINGLE_STOCK_PENALTY;
+	}
+
+	private double scoreWeightFactor(int score, int scoreCutoff) {
+		if (scoreCutoff <= 0) {
+			return 1.0;
+		}
+		double normalized = ((double) scoreCutoff - (double) score + 1.0) / (double) scoreCutoff;
+		if (normalized > 1.0) {
+			return 1.0;
+		}
+		if (normalized < MIN_SCORE_WEIGHT_FACTOR) {
+			return MIN_SCORE_WEIGHT_FACTOR;
+		}
+		return normalized;
 	}
 
 	private void recordScoreComponent(List<ScoreComponent> components, String criterion, double points) {
@@ -787,6 +814,10 @@ public class AssessorInstrumentAssessmentService {
 		if (eligible.size() == 1) {
 			return Map.of(eligible.get(0).isin(), BigDecimal.ONE);
 		}
+		boolean useScoreWeighting = eligible.size() > 1;
+		Map<String, Double> scoreFactors = useScoreWeighting
+				? buildScoreWeightFactors(eligible, scoreCutoff)
+				: Map.of();
 		boolean useCost = true;
 		boolean useBenchmark = true;
 		boolean useRegions = true;
@@ -860,7 +891,7 @@ public class AssessorInstrumentAssessmentService {
 
 		boolean useRedundancy = useBenchmark || useRegions || useHoldings;
 		if (!useCost && !useRedundancy && !useValuation) {
-			return equalWeights(eligible);
+			return scoreWeightedWeights(eligible, scoreFactors, criteria, useScoreWeighting);
 		}
 
 		Map<String, Integer> benchmarkCounts = new HashMap<>();
@@ -903,19 +934,69 @@ public class AssessorInstrumentAssessmentService {
 				double factor = Math.max(0.0, 1.0 - penalty);
 				score = score.multiply(BigDecimal.valueOf(factor));
 			}
+			if (useScoreWeighting) {
+				double scoreFactor = scoreFactors.getOrDefault(item.isin(), 1.0);
+				score = score.multiply(BigDecimal.valueOf(scoreFactor));
+			}
 			scores.put(item.isin(), score);
 			total = total.add(score);
 		}
 		if (total.signum() <= 0) {
-			return equalWeights(eligible);
+			return scoreWeightedWeights(eligible, scoreFactors, criteria, useScoreWeighting);
 		}
 		Map<String, BigDecimal> weights = new HashMap<>();
 		for (AssessmentItem item : eligible) {
 			BigDecimal score = scores.getOrDefault(item.isin(), BigDecimal.ZERO);
 			weights.put(item.isin(), score.divide(total, 8, RoundingMode.HALF_UP));
 		}
+		if (useScoreWeighting) {
+			criteria.addAllocationCriterion("Assessment score weighting");
+		}
 		criteria.addAllocationCriterion("KB weighting");
 		return weights;
+	}
+
+	private Map<String, Double> buildScoreWeightFactors(List<AssessmentItem> eligible, int scoreCutoff) {
+		Map<String, Double> factors = new HashMap<>();
+		for (AssessmentItem item : eligible) {
+			if (item == null || item.isin() == null) {
+				continue;
+			}
+			factors.put(item.isin(), scoreWeightFactor(item.score(), scoreCutoff));
+		}
+		return factors;
+	}
+
+	private Map<String, BigDecimal> scoreWeightedWeights(List<AssessmentItem> eligible,
+												 Map<String, Double> scoreFactors,
+												 CriteriaTracker criteria,
+												 boolean useScoreWeighting) {
+		if (eligible == null || eligible.isEmpty()) {
+			return Map.of();
+		}
+		if (eligible.size() == 1) {
+			return Map.of(eligible.get(0).isin(), BigDecimal.ONE);
+		}
+		Map<String, BigDecimal> weights = new HashMap<>();
+		BigDecimal total = BigDecimal.ZERO;
+		for (AssessmentItem item : eligible) {
+			double factor = scoreFactors == null ? 1.0 : scoreFactors.getOrDefault(item.isin(), 1.0);
+			BigDecimal weight = BigDecimal.valueOf(Math.max(0.0, factor));
+			weights.put(item.isin(), weight);
+			total = total.add(weight);
+		}
+		if (total.signum() <= 0) {
+			return equalWeights(eligible);
+		}
+		Map<String, BigDecimal> normalized = new HashMap<>();
+		for (AssessmentItem item : eligible) {
+			BigDecimal weight = weights.getOrDefault(item.isin(), BigDecimal.ZERO);
+			normalized.put(item.isin(), weight.divide(total, 8, RoundingMode.HALF_UP));
+		}
+		if (useScoreWeighting) {
+			criteria.addAllocationCriterion("Assessment score weighting");
+		}
+		return normalized;
 	}
 
 	private Map<String, BigDecimal> equalWeights(List<AssessmentItem> items) {
@@ -1395,6 +1476,28 @@ public class AssessorInstrumentAssessmentService {
 		return type != null && type.toLowerCase(Locale.ROOT).contains("etf");
 	}
 
+	private boolean isSingleStock(InstrumentDossierExtractionPayload payload) {
+		if (payload == null) {
+			return false;
+		}
+		String type = normalizeLabel(payload.instrumentType());
+		String subClass = normalizeLabel(payload.subClass());
+		String notes = normalizeLabel(payload.layerNotes());
+		if (notes != null && (notes.contains("single stock") || notes.contains("single-company") || notes.contains("single issuer"))) {
+			return true;
+		}
+		if (subClass != null && subClass.contains("single-stock")) {
+			return true;
+		}
+		if (type == null) {
+			return false;
+		}
+		if (type.contains("etf") || type.contains("fund")) {
+			return false;
+		}
+		return type.contains("stock") || type.contains("share") || type.contains("equity");
+	}
+
 	private boolean isReit(InstrumentDossierExtractionPayload payload) {
 		if (payload == null) {
 			return false;
@@ -1405,6 +1508,13 @@ public class AssessorInstrumentAssessmentService {
 		return (type != null && type.toLowerCase(Locale.ROOT).contains("reit"))
 				|| (subClass != null && subClass.toLowerCase(Locale.ROOT).contains("reit"))
 				|| (notes != null && notes.toLowerCase(Locale.ROOT).contains("reit"));
+	}
+
+	private String normalizeLabel(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		return value.trim().toLowerCase(Locale.ROOT);
 	}
 
 	private record KbExtraction(String isin, String status, InstrumentDossierExtractionPayload payload) {

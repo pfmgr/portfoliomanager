@@ -103,6 +103,44 @@ class AssessorInstrumentAssessmentIntegrationTest {
 				.satisfies(item -> assertThat(item.isin()).isEqualTo(isin));
 	}
 
+	@Test
+	void singleStockPenaltyAppearsInScoreBreakdown() throws Exception {
+		String etfIsin = "TEST00000003";
+		String stockIsin = "TEST00000004";
+		Long etfDossierId = insertDossier(etfIsin);
+		Long stockDossierId = insertDossier(stockIsin);
+		InstrumentDossierExtractionPayload etfPayload = buildSimplePayload(etfIsin, "Sample ETF", "ETF", 4, "core");
+		InstrumentDossierExtractionPayload stockPayload = buildSimplePayload(stockIsin, "Sample Stock", "Stock", 4, "single stock");
+		insertExtraction(etfDossierId, etfPayload, "APPROVED", true);
+		insertExtraction(stockDossierId, stockPayload, "APPROVED", true);
+		insertKnowledgeBaseExtraction(etfIsin, etfPayload);
+		insertKnowledgeBaseExtraction(stockIsin, stockPayload);
+
+		AssessorRunResponseDto result = assessorService.run(new AssessorRunRequestDto(
+				null,
+				"instrument_one_time",
+				null,
+				null,
+				null,
+				null,
+				null,
+				List.of(etfIsin, stockIsin),
+				100
+		));
+
+		assertThat(result.instrumentAssessment()).isNotNull();
+		var items = result.instrumentAssessment().items();
+		assertThat(items).hasSize(2);
+		var etfItem = items.stream().filter(item -> etfIsin.equals(item.isin())).findFirst().orElseThrow();
+		var stockItem = items.stream().filter(item -> stockIsin.equals(item.isin())).findFirst().orElseThrow();
+		assertThat(stockItem.score()).isGreaterThan(etfItem.score());
+		assertThat(stockItem.scoreComponents())
+				.anySatisfy(component -> {
+					assertThat(component.criterion()).isEqualTo("Single-stock risk premium");
+					assertThat(component.points()).isEqualTo(15.0);
+				});
+	}
+
 	private Long insertDossier(String isin) {
 		jdbcTemplate.update("""
 				insert into instrument_dossiers
@@ -158,6 +196,29 @@ class AssessorInstrumentAssessmentIntegrationTest {
 				),
 				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
 				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5"))),
+				null,
+				null,
+				null
+		);
+	}
+
+	private InstrumentDossierExtractionPayload buildSimplePayload(String isin,
+										String name,
+										String instrumentType,
+										Integer layer,
+										String layerNotes) {
+		return new InstrumentDossierExtractionPayload(
+				isin,
+				name,
+				instrumentType,
+				"Equity",
+				null,
+				layer,
+				layerNotes,
+				null,
+				null,
+				null,
+				null,
 				null,
 				null,
 				null
