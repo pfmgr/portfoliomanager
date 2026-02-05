@@ -322,6 +322,9 @@
                   <span v-if="instrumentRiskThresholdLabel" class="table-header-note">
                     Risk bands: {{ instrumentRiskThresholdLabel }}
                   </span>
+                  <span v-if="instrumentRiskThresholdByLayerLabel" class="table-header-note">
+                    Layer bands: {{ instrumentRiskThresholdByLayerLabel }}
+                  </span>
                 </th>
                 <th scope="col">Score breakdown</th>
                 <th scope="col" class="num">Allocation €</th>
@@ -408,6 +411,7 @@ const loading = ref(false)
 const error = ref('')
 const stale = ref(false)
 const jobState = ref(null)
+const layers = [1, 2, 3, 4, 5]
 let pollTimer = null
 
 const suggestions = computed(() => assessment.value?.saving_plan_suggestions ?? [])
@@ -449,7 +453,13 @@ const formattedInstrumentNarrative = computed(() => formatNarrative(instrumentAs
 const instrumentRiskThresholds = computed(() =>
   instrumentAssessment.value?.risk_thresholds ?? instrumentAssessment.value?.riskThresholds ?? null
 )
+const instrumentRiskThresholdsByLayer = computed(() =>
+  instrumentAssessment.value?.risk_thresholds_by_layer ?? instrumentAssessment.value?.riskThresholdsByLayer ?? null
+)
 const instrumentRiskThresholdLabel = computed(() => formatRiskThresholdLabel(instrumentRiskThresholds.value))
+const instrumentRiskThresholdByLayerLabel = computed(() =>
+  formatRiskThresholdsByLayerLabel(instrumentRiskThresholdsByLayer.value)
+)
 const oneTimeNewInstruments = computed(() => assessment.value?.one_time_allocation?.new_instruments ?? [])
 const oneTimeSuggestionSort = ref({ key: 'action', direction: 'asc' })
 const savingPlanMinimumDelta = computed(() => {
@@ -862,10 +872,28 @@ function scoreBadgeClass(row) {
     return 'ok'
   }
   const score = Number(row?.score)
-  if (!Number.isNaN(score) && score >= instrumentScoreCutoff.value) {
+  const cutoff = resolveInstrumentScoreCutoff(row?.layer)
+  if (!Number.isNaN(score) && score >= cutoff) {
     return 'warn'
   }
   return 'ok'
+}
+
+function resolveInstrumentScoreCutoff(layer) {
+  const thresholdsByLayer = instrumentRiskThresholdsByLayer.value
+  if (thresholdsByLayer && layer != null) {
+    const entry = thresholdsByLayer[layer]
+    const highMin = Number(entry?.highMin ?? entry?.high_min)
+    if (Number.isFinite(highMin)) {
+      return highMin
+    }
+  }
+  const thresholds = instrumentRiskThresholds.value
+  const fallbackHigh = Number(thresholds?.highMin ?? thresholds?.high_min)
+  if (Number.isFinite(fallbackHigh)) {
+    return fallbackHigh
+  }
+  return instrumentScoreCutoff.value
 }
 
 function normalizeRiskCategory(value) {
@@ -875,7 +903,7 @@ function normalizeRiskCategory(value) {
   return String(value).trim().toLowerCase()
 }
 
-function formatRiskThresholdLabel(thresholds) {
+function formatRiskThresholdLabel(thresholds, compact = false) {
   if (!thresholds) {
     return ''
   }
@@ -884,12 +912,38 @@ function formatRiskThresholdLabel(thresholds) {
   if (!Number.isFinite(lowMax) || !Number.isFinite(highMin)) {
     return ''
   }
-  const mediumMin = Math.min(100, lowMax + 1)
-  const mediumMax = Math.max(0, highMin - 1)
-  if (mediumMax < mediumMin) {
-    return `Low <= ${lowMax}, High >= ${highMin}`
+  const lowLabel = formatScoreValue(lowMax)
+  const highLabel = formatScoreValue(highMin)
+  if (compact) {
+    return `Low <= ${lowLabel}, High >= ${highLabel}`
   }
-  return `Low <= ${lowMax}, Medium ${mediumMin}-${mediumMax}, High >= ${highMin}`
+  return `Low <= ${lowLabel}, Medium ${lowLabel}–${highLabel}, High >= ${highLabel}`
+}
+
+function formatRiskThresholdsByLayerLabel(thresholdsByLayer) {
+  if (!thresholdsByLayer) {
+    return ''
+  }
+  const entries = []
+  layers.forEach((layer) => {
+    const entry = thresholdsByLayer[layer]
+    const label = formatRiskThresholdLabel(entry, true)
+    if (label) {
+      entries.push(`L${layer}: ${label}`)
+    }
+  })
+  return entries.join(' · ')
+}
+
+function formatScoreValue(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return ''
+  }
+  if (Number.isInteger(numeric)) {
+    return `${numeric}`
+  }
+  return numeric.toFixed(1)
 }
 
 function scoreComponentEntries(components) {

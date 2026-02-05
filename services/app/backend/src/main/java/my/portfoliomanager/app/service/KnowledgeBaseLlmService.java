@@ -127,13 +127,17 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			  "$schema": "https://json-schema.org/draft/2020-12/schema",
 			  "type": "object",
 			  "additionalProperties": false,
-		  "required": ["isin","name","instrument_type","asset_class","sub_class","layer","layer_notes","etf","risk","regions","top_holdings","financials","valuation","missing_fields","warnings"],
+		  "required": ["isin","name","instrument_type","asset_class","sub_class","gics_sector","gics_industry_group","gics_industry","gics_sub_industry","layer","layer_notes","etf","risk","regions","sectors","top_holdings","financials","valuation","missing_fields","warnings"],
 			  "properties": {
 			    "isin": { "type": ["string","null"] },
 			    "name": { "type": ["string","null"] },
 			    "instrument_type": { "type": ["string","null"] },
 			    "asset_class": { "type": ["string","null"] },
-			    "sub_class": { "type": ["string","null"] },
+		    "sub_class": { "type": ["string","null"] },
+		    "gics_sector": { "type": ["string","null"] },
+		    "gics_industry_group": { "type": ["string","null"] },
+		    "gics_industry": { "type": ["string","null"] },
+		    "gics_sub_industry": { "type": ["string","null"] },
 			    "layer": { "type": ["integer","null"] },
 			    "layer_notes": { "type": ["string","null"] },
 			    "etf": {
@@ -175,18 +179,30 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			        }
 			      ]
 			    },
-			    "regions": {
-			      "type": ["array","null"],
-			      "items": {
-			        "type": "object",
-			        "additionalProperties": false,
-			        "required": ["name","weight_pct"],
-			        "properties": {
-			          "name": { "type": ["string","null"] },
-			          "weight_pct": { "type": ["number","null"] }
-			        }
-			      }
-			    },
+		    "regions": {
+		      "type": ["array","null"],
+		      "items": {
+		        "type": "object",
+		        "additionalProperties": false,
+		        "required": ["name","weight_pct"],
+		        "properties": {
+		          "name": { "type": ["string","null"] },
+		          "weight_pct": { "type": ["number","null"] }
+		        }
+		      }
+		    },
+		    "sectors": {
+		      "type": ["array","null"],
+		      "items": {
+		        "type": "object",
+		        "additionalProperties": false,
+		        "required": ["name","weight_pct"],
+		        "properties": {
+		          "name": { "type": ["string","null"] },
+		          "weight_pct": { "type": ["number","null"] }
+		        }
+		      }
+		    },
 		    "top_holdings": {
 		      "type": ["array","null"],
 		      "items": {
@@ -1321,8 +1337,8 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				
 				The Markdown dossier must follow:
 				# <ISIN> — <Name>
-                ## Quick profile (table)
-                ## Classification (instrument type, asset class, subclass, suggested layer per Core/Satellite)
+				## Quick profile (table)
+				## Classification (instrument type, asset class, subclass, GICS sector/industry group/industry/sub-industry for single stocks/REITs, suggested layer per Core/Satellite)
                 ## Risk (SRI and notes)
                 ## Costs & structure (TER, replication, domicile, distribution, currency if relevant)
                 ## Exposures (regions, sectors, top holdings/top-10, benchmark/index)
@@ -1333,8 +1349,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 Additional requirements:
                 - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.
                 - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
-                - For exposures, provide region and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
-                - In the Exposures section, do not include valuation/template fields (e.g., holdings_weight_method, pe_method, pe_horizon); keep it to regions, sectors, holdings, and benchmark only.
+				- For exposures, provide region and sector weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
+				- Use GICS sector names for sector exposures whenever possible. For single stocks/REITs, if no sector weights are available, include a single sector exposure with the GICS sector at 100%%.
+				- In the Exposures section, do not include valuation/template fields (e.g., holdings_weight_method, pe_method, pe_horizon); keep it to regions, sectors, holdings, and benchmark only.
                 - If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
                 - Keep contentMd under %d characters.
                 - Single Stocks should always be classified as layer 4= Single Stock. REITs are single stocks unless explicitly a fund/ETF; classify REIT equities as layer 4.
@@ -1481,6 +1498,8 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- etf.ongoing_charges_pct is a number in percent units (e.g., 0.20 for 0.20%%). Strip "%%" if present.
 				- If both ETF fields are null, set "etf" to null. If the risk indicator is null, set "risk" to null.
 				- regions is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
+				- sectors is an array of { name, weight_pct } with weights in percent (0..100), using GICS sector names. Use null if unavailable.
+				- gics_* fields use official GICS labels when present in the dossier.
 				- top_holdings is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
 				- If a numeric value is given as a range (e.g., 19-20), use the midpoint and add a warning message (e.g., "Used midpoint for range: pe_current 19-20").
 				- If a range spans multiple dates, use the latest as-of date for *_asof and mention that in warnings.
@@ -1515,11 +1534,16 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- instrument_type
 				- asset_class
 				- sub_class
+				- gics_sector
+				- gics_industry_group
+				- gics_industry
+				- gics_sub_industry
 				- layer
 				- layer_notes
 				- etf: { ongoing_charges_pct, benchmark_index } | null
 				- risk: { summary_risk_indicator: { value } } | null
 				- regions
+				- sectors
 				- top_holdings
 				- financials: {
 				    revenue, revenue_currency, revenue_eur, revenue_period_end, revenue_period_type,

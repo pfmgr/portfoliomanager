@@ -83,6 +83,10 @@ public class LlmExtractorService implements ExtractorService {
 		String instrumentType = textOrNull(data, "instrument_type", "instrumentType");
 		String assetClass = textOrNull(data, "asset_class", "assetClass");
 		String subClass = textOrNull(data, "sub_class", "subClass");
+		String gicsSector = textOrNull(data, "gics_sector", "gicsSector");
+		String gicsIndustryGroup = textOrNull(data, "gics_industry_group", "gicsIndustryGroup");
+		String gicsIndustry = textOrNull(data, "gics_industry", "gicsIndustry");
+		String gicsSubIndustry = textOrNull(data, "gics_sub_industry", "gicsSubIndustry");
 		Integer layer = integerOrNull(data, "layer");
 		if (layer != null && (layer < 1 || layer > 5)) {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
@@ -115,6 +119,8 @@ public class LlmExtractorService implements ExtractorService {
 		}
 
 		List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions = parseRegions(data, warnings);
+		List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors = parseSectors(data, warnings);
+		sectors = applySingleStockSectorFallback(sectors, gicsSector, instrumentType, warnings);
 		List<InstrumentDossierExtractionPayload.HoldingPayload> topHoldings = parseTopHoldings(data, warnings);
 		InstrumentDossierExtractionPayload.FinancialsPayload financials = parsePayload(
 				data == null ? null : data.get("financials"),
@@ -149,14 +155,20 @@ public class LlmExtractorService implements ExtractorService {
 					instrumentType,
 					assetClass,
 					subClass,
-					layer,
-					layerNotes,
-					ongoingChargesPct,
-					benchmarkIndex,
-					sriValue,
-					financials,
-					valuation
-			);
+				layer,
+				layerNotes,
+				ongoingChargesPct,
+				benchmarkIndex,
+				sriValue,
+				financials,
+				valuation,
+				gicsSector,
+				gicsIndustryGroup,
+				gicsIndustry,
+				gicsSubIndustry,
+				sectors,
+				instrumentType
+		);
 		}
 		if (fallbackResult.applied() && missingFields != null && !missingFields.isEmpty()) {
 			List<InstrumentDossierExtractionPayload.MissingFieldPayload> updatedMissing = new ArrayList<>(missingFields);
@@ -175,11 +187,16 @@ public class LlmExtractorService implements ExtractorService {
 				instrumentType,
 				assetClass,
 				subClass,
+				gicsSector,
+				gicsIndustryGroup,
+				gicsIndustry,
+				gicsSubIndustry,
 				layer,
 				layerNotes,
 				etfPayload,
 				riskPayload,
 				regions,
+				sectors,
 				topHoldings,
 				financials,
 				valuation,
@@ -232,7 +249,13 @@ public class LlmExtractorService implements ExtractorService {
 			String benchmarkIndex,
 			Integer summaryRiskIndicator,
 			InstrumentDossierExtractionPayload.FinancialsPayload financials,
-			InstrumentDossierExtractionPayload.ValuationPayload valuation
+			InstrumentDossierExtractionPayload.ValuationPayload valuation,
+			String gicsSector,
+			String gicsIndustryGroup,
+			String gicsIndustry,
+			String gicsSubIndustry,
+			List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+			String instrumentTypeHint
 	) {
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing = new ArrayList<>();
 		addMissing(missing, "name", name);
@@ -246,6 +269,17 @@ public class LlmExtractorService implements ExtractorService {
 		addMissing(missing, "risk.summary_risk_indicator.value", summaryRiskIndicator);
 		addMissing(missing, "financials", financials);
 		addMissing(missing, "valuation", valuation);
+		boolean isEtf = isEtfType(instrumentTypeHint);
+		boolean isSingleStock = isSingleStockType(instrumentTypeHint);
+		if (isSingleStock) {
+			addMissing(missing, "gics_sector", gicsSector);
+			addMissing(missing, "gics_industry_group", gicsIndustryGroup);
+			addMissing(missing, "gics_industry", gicsIndustry);
+			addMissing(missing, "gics_sub_industry", gicsSubIndustry);
+		}
+		if (isEtf) {
+			addMissing(missing, "sectors", sectors);
+		}
 		return missing;
 	}
 
@@ -393,10 +427,10 @@ public class LlmExtractorService implements ExtractorService {
 	}
 
 	private ThemeLayerDecision forceThemeLayerIfNeeded(Integer layer,
-													   String instrumentType,
-													   String name,
-													   String subClass,
-													   String layerNotes) {
+									   String instrumentType,
+									   String name,
+									   String subClass,
+									   String layerNotes) {
 		if (instrumentType == null) {
 			return new ThemeLayerDecision(layer, layerNotes);
 		}
@@ -420,6 +454,22 @@ public class LlmExtractorService implements ExtractorService {
 			}
 		}
 		return new ThemeLayerDecision(layer, layerNotes);
+	}
+
+	private boolean isEtfType(String instrumentType) {
+		if (instrumentType == null || instrumentType.isBlank()) {
+			return false;
+		}
+		String normalized = instrumentType.toLowerCase(Locale.ROOT);
+		return normalized.contains("etf") || normalized.contains("fund") || normalized.contains("etp");
+	}
+
+	private boolean isSingleStockType(String instrumentType) {
+		if (instrumentType == null || instrumentType.isBlank()) {
+			return false;
+		}
+		String normalized = instrumentType.toLowerCase(Locale.ROOT);
+		return normalized.contains("equity") || normalized.contains("stock") || normalized.contains("reit");
 	}
 
 	private String normalizeThemeNotes(String layerNotes) {
@@ -583,6 +633,35 @@ public class LlmExtractorService implements ExtractorService {
 		return parseRegionWeights(array, warnings);
 	}
 
+	private List<InstrumentDossierExtractionPayload.SectorExposurePayload> parseSectors(
+			JsonNode data,
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
+		JsonNode array = arrayOrNull(data, "sectors", "sector_allocations", "sectorAllocations");
+		return parseSectorWeights(array, warnings);
+	}
+
+	private List<InstrumentDossierExtractionPayload.SectorExposurePayload> applySingleStockSectorFallback(
+			List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+			String gicsSector,
+			String instrumentType,
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
+		if (sectors != null && !sectors.isEmpty()) {
+			return sectors;
+		}
+		if (!isSingleStockType(instrumentType)) {
+			return sectors;
+		}
+		if (gicsSector == null || gicsSector.isBlank()) {
+			return sectors;
+		}
+		List<InstrumentDossierExtractionPayload.SectorExposurePayload> fallback = new ArrayList<>();
+		fallback.add(new InstrumentDossierExtractionPayload.SectorExposurePayload(gicsSector, new BigDecimal("100")));
+		warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+				"Sector exposures missing; defaulted to GICS sector " + gicsSector + " at 100% for single stock."
+		));
+		return fallback;
+	}
+
 	private List<InstrumentDossierExtractionPayload.HoldingPayload> parseTopHoldings(
 			JsonNode data,
 			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
@@ -613,6 +692,33 @@ public class LlmExtractorService implements ExtractorService {
 				continue;
 			}
 			result.add(new InstrumentDossierExtractionPayload.RegionExposurePayload(name, weight));
+		}
+		return result.isEmpty() ? null : result;
+	}
+
+	private List<InstrumentDossierExtractionPayload.SectorExposurePayload> parseSectorWeights(
+			JsonNode array,
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
+		if (array == null || !array.isArray()) {
+			return null;
+		}
+		List<InstrumentDossierExtractionPayload.SectorExposurePayload> result = new ArrayList<>();
+		for (JsonNode item : array) {
+			if (item == null || !item.isObject()) {
+				continue;
+			}
+			String name = textOrNull(item, "name", "sector");
+			BigDecimal weight = decimalOrNull(item, "weight_pct", "weightPct", "weight");
+			if (weight != null && (weight.compareTo(BigDecimal.ZERO) < 0 || weight.compareTo(new BigDecimal("100")) > 0)) {
+				warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+						"Invalid weight_pct value (" + weight + "); expected 0..100, set to null."
+				));
+				weight = null;
+			}
+			if (name == null) {
+				continue;
+			}
+			result.add(new InstrumentDossierExtractionPayload.SectorExposurePayload(name, weight));
 		}
 		return result.isEmpty() ? null : result;
 	}

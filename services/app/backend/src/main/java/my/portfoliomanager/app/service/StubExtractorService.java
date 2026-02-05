@@ -25,6 +25,10 @@ public class StubExtractorService implements ExtractorService {
 		String instrumentType = findValue(values, "instrument_type", "instrument type", "type");
 		String assetClass = findValue(values, "asset_class", "asset class");
 		String subClass = findValue(values, "sub_class", "sub class", "subclass");
+		String gicsSector = findValue(values, "gics_sector", "gics sector");
+		String gicsIndustryGroup = findValue(values, "gics_industry_group", "gics industry group");
+		String gicsIndustry = findValue(values, "gics_industry", "gics industry");
+		String gicsSubIndustry = findValue(values, "gics_sub_industry", "gics sub industry");
 		Integer layer = parseInteger(findValue(values, "layer"));
 		if (layer != null && (layer < 1 || layer > 5)) {
 			layer = null;
@@ -39,7 +43,20 @@ public class StubExtractorService implements ExtractorService {
 
 		List<InstrumentDossierExtractionPayload.SourcePayload> sources = extractSources(dossier.getCitationsJson());
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields = buildMissingFields(
-				name, instrumentType, assetClass, subClass, layer, layerNotes, ongoingChargesPct, benchmarkIndex, summaryRiskIndicator
+				name,
+				instrumentType,
+				assetClass,
+				subClass,
+				layer,
+				layerNotes,
+				ongoingChargesPct,
+				benchmarkIndex,
+				summaryRiskIndicator,
+				gicsSector,
+				gicsIndustryGroup,
+				gicsIndustry,
+				gicsSubIndustry,
+				instrumentType
 		);
 		List<InstrumentDossierExtractionPayload.WarningPayload> warnings = List.of(
 				new InstrumentDossierExtractionPayload.WarningPayload("Stub extractor used; validate fields before applying.")
@@ -62,10 +79,15 @@ public class StubExtractorService implements ExtractorService {
 				instrumentType,
 				assetClass,
 				subClass,
+				gicsSector,
+				gicsIndustryGroup,
+				gicsIndustry,
+				gicsSubIndustry,
 				layer,
 				layerNotes,
 				etfPayload,
 				riskPayload,
+				null,
 				null,
 				null,
 				sources,
@@ -170,7 +192,12 @@ public class StubExtractorService implements ExtractorService {
 			String layerNotes,
 			BigDecimal ongoingChargesPct,
 			String benchmarkIndex,
-			Integer summaryRiskIndicator
+			Integer summaryRiskIndicator,
+			String gicsSector,
+			String gicsIndustryGroup,
+			String gicsIndustry,
+			String gicsSubIndustry,
+			String instrumentTypeHint
 	) {
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing = new ArrayList<>();
 		addMissing(missing, "name", name);
@@ -182,7 +209,21 @@ public class StubExtractorService implements ExtractorService {
 		addMissing(missing, "etf.ongoing_charges_pct", ongoingChargesPct);
 		addMissing(missing, "etf.benchmark_index", benchmarkIndex);
 		addMissing(missing, "risk.summary_risk_indicator.value", summaryRiskIndicator);
+		if (isSingleStockType(instrumentTypeHint)) {
+			addMissing(missing, "gics_sector", gicsSector);
+			addMissing(missing, "gics_industry_group", gicsIndustryGroup);
+			addMissing(missing, "gics_industry", gicsIndustry);
+			addMissing(missing, "gics_sub_industry", gicsSubIndustry);
+		}
 		return missing;
+	}
+
+	private boolean isSingleStockType(String instrumentType) {
+		if (instrumentType == null || instrumentType.isBlank()) {
+			return false;
+		}
+		String normalized = instrumentType.toLowerCase(Locale.ROOT);
+		return normalized.contains("equity") || normalized.contains("stock") || normalized.contains("reit");
 	}
 
 	private void addMissing(List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing, String field, Object value) {

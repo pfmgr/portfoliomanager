@@ -63,23 +63,26 @@ public class AssessorInstrumentAssessmentService {
 	public AssessmentResult assess(List<String> instrumentIsins,
 						 int amountEur,
 						 Map<Integer, BigDecimal> layerTargets,
-						 LayerTargetRiskThresholds riskThresholds) {
+						 LayerTargetRiskThresholds riskThresholds,
+						 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
-		int scoreCutoff = thresholds.getHighMin();
+		Map<Integer, LayerTargetRiskThresholds> normalizedByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
+		double scoreCutoff = thresholds.getHighMin();
 		List<String> normalizedIsins = normalizeIsins(instrumentIsins);
 		if (normalizedIsins.isEmpty() || amountEur <= 0) {
-			return AssessmentResult.empty(scoreCutoff, amountEur);
+			return AssessmentResult.empty(scoreCutoff, amountEur, thresholds, normalizedByLayer);
 		}
 		boolean kbEnabled = properties != null && properties.kb() != null && properties.kb().enabled();
 		if (!kbEnabled) {
-			return AssessmentResult.missing(scoreCutoff, amountEur, normalizedIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, normalizedIsins, thresholds, normalizedByLayer);
 		}
 		Set<String> isinSet = new LinkedHashSet<>(normalizedIsins);
 		Map<String, KbExtraction> kbExtractions = loadLatestExtractions(isinSet);
 		Map<String, ApprovedExtraction> approvedExtractions = loadApprovedExtractions(isinSet);
 		List<String> missingIsins = resolveMissingIsins(normalizedIsins, kbExtractions, approvedExtractions);
 		if (!missingIsins.isEmpty()) {
-			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins, thresholds, normalizedByLayer);
 		}
 		Map<String, InstrumentFallback> fallbacks = loadInstrumentFallbacks(isinSet);
 		List<AssessmentItem> items = new ArrayList<>();
@@ -94,23 +97,28 @@ public class AssessorInstrumentAssessmentService {
 			InstrumentFallback fallback = fallbacks.get(isin);
 			String name = resolveName(payload, fallback, isin);
 			Integer layer = resolveLayer(payload, fallback);
-			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, scoreCutoff);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff);
 			items.add(new AssessmentItem(isin, name, layer, scoreResult.score(), scoreResult.badFinancials(),
 					scoreResult.scoreComponents()));
 		}
 		if (!missingIsins.isEmpty()) {
 			missingIsins.sort(String::compareTo);
-			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins, thresholds, normalizedByLayer);
 		}
-		AllocationResult allocation = allocate(amountEur, items, layerTargets, kbExtractions, criteria, scoreCutoff);
+		AllocationResult allocation = allocate(amountEur, items, layerTargets, kbExtractions, criteria, thresholds, normalizedByLayer);
 		return new AssessmentResult(scoreCutoff, amountEur, allocation.items(), List.of(), criteria.scoreCriteria(),
-				criteria.allocationCriteria(), allocation.layerBudgets());
+				criteria.allocationCriteria(), allocation.layerBudgets(), thresholds, normalizedByLayer);
 	}
 
 	public Map<String, Integer> assessScores(Set<String> instrumentIsins,
-									 LayerTargetRiskThresholds riskThresholds) {
+						 LayerTargetRiskThresholds riskThresholds,
+						 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
-		int scoreCutoff = thresholds.getHighMin();
+		Map<Integer, LayerTargetRiskThresholds> normalizedByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
 		List<String> normalizedIsins = normalizeIsins(instrumentIsins == null
 				? List.of()
 				: new ArrayList<>(instrumentIsins));
@@ -131,7 +139,11 @@ public class AssessorInstrumentAssessmentService {
 			if (payload == null) {
 				continue;
 			}
-			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, scoreCutoff);
+			Integer layer = resolveLayer(payload, null);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff);
 			scores.put(isin, scoreResult.score());
 		}
 		return scores;
@@ -306,10 +318,10 @@ public class AssessorInstrumentAssessmentService {
 		return layer;
 	}
 
-	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria, int scoreCutoff) {
+	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria, double scoreCutoff) {
 		boolean badFinancials = false;
 		if (payload == null) {
-			return new ScoreResult(scoreCutoff, true, List.of());
+			return new ScoreResult((int) Math.ceil(scoreCutoff), true, List.of());
 		}
 		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
 		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
@@ -356,7 +368,9 @@ public class AssessorInstrumentAssessmentService {
 				adjustedComponents = extended;
 				adjustedScore += floorPenalty;
 			}
-			rounded = scoreCutoff;
+			int floorCutoff = (int) Math.ceil(scoreCutoff);
+			floorCutoff = Math.min(100, Math.max(0, floorCutoff));
+			rounded = floorCutoff;
 		}
 		return new ScoreResult(rounded, badFinancials, List.copyOf(adjustedComponents));
 	}
@@ -555,8 +569,8 @@ public class AssessorInstrumentAssessmentService {
 		return SINGLE_STOCK_PENALTY;
 	}
 
-	private double scoreWeightFactor(int score, int scoreCutoff) {
-		if (scoreCutoff <= 0) {
+	private double scoreWeightFactor(int score, double scoreCutoff) {
+		if (scoreCutoff <= 0.0) {
 			return 1.0;
 		}
 		double normalized = ((double) scoreCutoff - (double) score + 1.0) / (double) scoreCutoff;
@@ -614,17 +628,27 @@ public class AssessorInstrumentAssessmentService {
 							 Map<Integer, BigDecimal> layerTargets,
 							 Map<String, KbExtraction> extractions,
 							 CriteriaTracker criteria,
-							 int scoreCutoff) {
+							 LayerTargetRiskThresholds fallback,
+							 Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
 		Map<Integer, List<AssessmentItem>> byLayer = groupByLayer(items);
-		Map<Integer, BigDecimal> layerBudgets = allocateLayerBudgets(amountEur, byLayer, layerTargets, scoreCutoff);
+		Map<Integer, BigDecimal> layerBudgets = allocateLayerBudgets(
+				amountEur,
+				byLayer,
+				layerTargets,
+				fallback,
+				thresholdsByLayer
+		);
 		List<AssessmentItem> allocatedItems = new ArrayList<>();
 		Set<String> allocatedIsins = new LinkedHashSet<>();
 		for (Map.Entry<Integer, List<AssessmentItem>> entry : byLayer.entrySet()) {
 			Integer layer = entry.getKey();
 			List<AssessmentItem> layerItems = entry.getValue();
 			BigDecimal layerBudget = layerBudgets.getOrDefault(layer, BigDecimal.ZERO);
-			Map<String, BigDecimal> weights = computeWeights(layerItems, extractions, criteria, scoreCutoff);
-			Map<String, BigDecimal> amounts = allocateInstrumentAmounts(layerItems, layerBudget, weights, scoreCutoff);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, fallback, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			Map<String, BigDecimal> weights = computeWeights(layerItems, extractions, criteria, layerCutoff, layer);
+			Map<String, BigDecimal> amounts = allocateInstrumentAmounts(layerItems, layerBudget, weights, layerCutoff);
 			for (AssessmentItem item : layerItems) {
 				BigDecimal allocation = amounts.getOrDefault(item.isin(), BigDecimal.ZERO);
 				allocatedItems.add(item.withAllocation(allocation));
@@ -658,9 +682,10 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<Integer, BigDecimal> allocateLayerBudgets(int amountEur,
-								 Map<Integer, List<AssessmentItem>> byLayer,
-								 Map<Integer, BigDecimal> layerTargets,
-								 int scoreCutoff) {
+							 Map<Integer, List<AssessmentItem>> byLayer,
+							 Map<Integer, BigDecimal> layerTargets,
+							 LayerTargetRiskThresholds fallback,
+							 Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
 		Map<Integer, BigDecimal> budgets = new LinkedHashMap<>();
 		if (amountEur <= 0) {
 			return budgets;
@@ -669,7 +694,10 @@ public class AssessorInstrumentAssessmentService {
 		BigDecimal targetSum = BigDecimal.ZERO;
 		for (int layer = 1; layer <= 5; layer++) {
 			List<AssessmentItem> layerItems = byLayer.getOrDefault(layer, List.of());
-			boolean hasEligible = layerItems.stream().anyMatch(item -> item.score() < scoreCutoff);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, fallback, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			boolean hasEligible = layerItems.stream().anyMatch(item -> item.score() < layerCutoff);
 			if (!hasEligible) {
 				continue;
 			}
@@ -736,9 +764,9 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<String, BigDecimal> allocateInstrumentAmounts(List<AssessmentItem> items,
-								  BigDecimal layerBudget,
-								  Map<String, BigDecimal> weights,
-								  int scoreCutoff) {
+							  BigDecimal layerBudget,
+							  Map<String, BigDecimal> weights,
+							  double scoreCutoff) {
 		Map<String, BigDecimal> allocations = new LinkedHashMap<>();
 		if (layerBudget == null || layerBudget.signum() <= 0 || items.isEmpty()) {
 			for (AssessmentItem item : items) {
@@ -802,9 +830,10 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<String, BigDecimal> computeWeights(List<AssessmentItem> items,
-								  Map<String, KbExtraction> extractions,
-								  CriteriaTracker criteria,
-								  int scoreCutoff) {
+							  Map<String, KbExtraction> extractions,
+							  CriteriaTracker criteria,
+							  double scoreCutoff,
+							  Integer layer) {
 		List<AssessmentItem> eligible = items.stream()
 				.filter(item -> item.score() < scoreCutoff)
 				.toList();
@@ -822,13 +851,16 @@ public class AssessorInstrumentAssessmentService {
 		boolean useBenchmark = true;
 		boolean useRegions = true;
 		boolean useHoldings = true;
+		boolean useSectors = true;
 		boolean useValuation = true;
 		Map<String, String> benchmarks = new HashMap<>();
 		Map<String, BigDecimal> ters = new HashMap<>();
 		Map<String, Set<String>> regionNames = new HashMap<>();
 		Map<String, Set<String>> holdingNames = new HashMap<>();
+		Map<String, Set<String>> sectorNames = new HashMap<>();
 		Map<String, Map<String, BigDecimal>> regionWeights = new HashMap<>();
 		Map<String, Map<String, BigDecimal>> holdingWeights = new HashMap<>();
+		Map<String, Map<String, BigDecimal>> sectorWeights = new HashMap<>();
 		Map<String, BigDecimal> valuationScores = new HashMap<>();
 		Map<String, Double> dataPenalties = new HashMap<>();
 
@@ -839,6 +871,7 @@ public class AssessorInstrumentAssessmentService {
 			String benchmark = null;
 			Set<String> regions = null;
 			Set<String> holdings = null;
+			Set<String> sectors = null;
 			BigDecimal valuationScore = null;
 			double dataPenalty = 0.0;
 			if (payload != null) {
@@ -848,6 +881,7 @@ public class AssessorInstrumentAssessmentService {
 				}
 				regions = normalizeRegionNames(payload.regions());
 				holdings = normalizeHoldingNames(payload.topHoldings());
+				sectors = normalizeSectorNames(payload.sectors(), payload.gicsSector());
 				Map<String, BigDecimal> regionWeight = normalizeRegionWeights(payload.regions());
 				if (regionWeight != null && !regionWeight.isEmpty()) {
 					regionWeights.put(item.isin(), regionWeight);
@@ -855,6 +889,10 @@ public class AssessorInstrumentAssessmentService {
 				Map<String, BigDecimal> holdingWeight = normalizeHoldingWeights(payload.topHoldings());
 				if (holdingWeight != null && !holdingWeight.isEmpty()) {
 					holdingWeights.put(item.isin(), holdingWeight);
+				}
+				Map<String, BigDecimal> sectorWeight = normalizeSectorWeights(payload.sectors(), payload.gicsSector());
+				if (sectorWeight != null && !sectorWeight.isEmpty()) {
+					sectorWeights.put(item.isin(), sectorWeight);
 				}
 				valuationScore = computeValuationScore(payload);
 				dataPenalty = computeDataQualityPenalty(payload);
@@ -879,6 +917,11 @@ public class AssessorInstrumentAssessmentService {
 			} else {
 				holdingNames.put(item.isin(), holdings);
 			}
+			if (sectors == null || sectors.isEmpty()) {
+				useSectors = false;
+			} else {
+				sectorNames.put(item.isin(), sectors);
+			}
 			if (valuationScore == null) {
 				useValuation = false;
 			} else {
@@ -889,7 +932,7 @@ public class AssessorInstrumentAssessmentService {
 			}
 		}
 
-		boolean useRedundancy = useBenchmark || useRegions || useHoldings;
+		boolean useRedundancy = useBenchmark || useRegions || useHoldings || useSectors;
 		if (!useCost && !useRedundancy && !useValuation) {
 			return scoreWeightedWeights(eligible, scoreFactors, criteria, useScoreWeighting);
 		}
@@ -914,7 +957,8 @@ public class AssessorInstrumentAssessmentService {
 			}
 			if (useRedundancy) {
 				double redundancy = computeRedundancy(item.isin(), eligible.size(), benchmarks, benchmarkCounts,
-						regionNames, holdingNames, regionWeights, holdingWeights, useBenchmark, useRegions, useHoldings);
+						regionNames, holdingNames, sectorNames, regionWeights, holdingWeights, sectorWeights,
+						useBenchmark, useRegions, useHoldings, useSectors, sectorWeightFactor(layer));
 				BigDecimal uniqueness = BigDecimal.ONE.subtract(BigDecimal.valueOf(redundancy));
 				if (uniqueness.compareTo(BigDecimal.ZERO) < 0) {
 					uniqueness = BigDecimal.ZERO;
@@ -956,7 +1000,7 @@ public class AssessorInstrumentAssessmentService {
 		return weights;
 	}
 
-	private Map<String, Double> buildScoreWeightFactors(List<AssessmentItem> eligible, int scoreCutoff) {
+	private Map<String, Double> buildScoreWeightFactors(List<AssessmentItem> eligible, double scoreCutoff) {
 		Map<String, Double> factors = new HashMap<>();
 		for (AssessmentItem item : eligible) {
 			if (item == null || item.isin() == null) {
@@ -1017,22 +1061,26 @@ public class AssessorInstrumentAssessmentService {
 							 Map<String, Integer> benchmarkCounts,
 							 Map<String, Set<String>> regions,
 							 Map<String, Set<String>> holdings,
+							 Map<String, Set<String>> sectors,
 							 Map<String, Map<String, BigDecimal>> regionWeights,
 							 Map<String, Map<String, BigDecimal>> holdingWeights,
+							 Map<String, Map<String, BigDecimal>> sectorWeights,
 							 boolean useBenchmark,
 							 boolean useRegions,
-							 boolean useHoldings) {
+							 boolean useHoldings,
+							 boolean useSectors,
+							 double sectorWeightFactor) {
 		if (total <= 1) {
 			return 0.0;
 		}
 		double sum = 0.0;
-		int components = 0;
+		double weightSum = 0.0;
 		if (useBenchmark) {
 			String benchmark = benchmarks.get(isin);
 			if (benchmark != null) {
 				int count = benchmarkCounts.getOrDefault(benchmark, 0);
 				sum += Math.max(0.0, (double) (count - 1) / (double) (total - 1));
-				components += 1;
+				weightSum += 1.0;
 			}
 		}
 		if (useRegions) {
@@ -1042,7 +1090,7 @@ public class AssessorInstrumentAssessmentService {
 			}
 			if (overlap >= 0) {
 				sum += overlap;
-				components += 1;
+				weightSum += 1.0;
 			}
 		}
 		if (useHoldings) {
@@ -1052,13 +1100,28 @@ public class AssessorInstrumentAssessmentService {
 			}
 			if (overlap >= 0) {
 				sum += overlap;
-				components += 1;
+				weightSum += 1.0;
 			}
 		}
-		if (components == 0) {
+		if (useSectors) {
+			double weight = Math.max(0.0, Math.min(1.0, sectorWeightFactor));
+			if (weight <= 0.0) {
+				// skip
+			} else {
+				double overlap = averageWeightedOverlap(sectorWeights.get(isin), sectors, sectorWeights);
+				if (overlap < 0) {
+					overlap = averageOverlap(sectors.get(isin), sectors);
+				}
+				if (overlap >= 0) {
+					sum += overlap * weight;
+					weightSum += weight;
+				}
+			}
+		}
+		if (weightSum == 0.0) {
 			return 0.0;
 		}
-		return sum / components;
+		return sum / weightSum;
 	}
 
 	private double averageOverlap(Set<String> current, Map<String, Set<String>> others) {
@@ -1284,6 +1347,44 @@ public class AssessorInstrumentAssessmentService {
 		return normalized;
 	}
 
+	private Set<String> normalizeSectorNames(List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+									 String gicsSector) {
+		Set<String> normalized = new LinkedHashSet<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				if (sector == null || sector.name() == null || sector.name().isBlank()) {
+					continue;
+				}
+				normalized.add(sector.name().trim().toLowerCase(Locale.ROOT));
+			}
+		}
+		if (normalized.isEmpty() && gicsSector != null && !gicsSector.isBlank()) {
+			normalized.add(gicsSector.trim().toLowerCase(Locale.ROOT));
+		}
+		return normalized.isEmpty() ? Set.of() : normalized;
+	}
+
+	private Map<String, BigDecimal> normalizeSectorWeights(
+			List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+			String gicsSector) {
+		Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				if (sector == null || sector.name() == null || sector.name().isBlank()) {
+					continue;
+				}
+				BigDecimal weight = normalizeWeightPct(sector.weightPct());
+				if (weight != null) {
+					normalized.put(sector.name().trim().toLowerCase(Locale.ROOT), weight);
+				}
+			}
+		}
+		if (normalized.isEmpty() && gicsSector != null && !gicsSector.isBlank()) {
+			normalized.put(gicsSector.trim().toLowerCase(Locale.ROOT), BigDecimal.ONE);
+		}
+		return normalized;
+	}
+
 	private BigDecimal normalizeWeightPct(BigDecimal weight) {
 		if (weight == null || weight.signum() <= 0) {
 			return null;
@@ -1291,6 +1392,19 @@ public class AssessorInstrumentAssessmentService {
 		return weight.compareTo(BigDecimal.ONE) > 0
 				? weight.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP)
 				: weight;
+	}
+
+	private double sectorWeightFactor(Integer layer) {
+		if (layer == null) {
+			return 0.0;
+		}
+		if (layer == 1) {
+			return 0.5;
+		}
+		if (layer == 5) {
+			return 0.0;
+		}
+		return 1.0;
 	}
 
 	private BigDecimal extractLongtermEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
@@ -1555,19 +1669,30 @@ public class AssessorInstrumentAssessmentService {
 	private record AllocationResult(List<AssessmentItem> items, Map<Integer, BigDecimal> layerBudgets) {
 	}
 
-	public record AssessmentResult(int scoreCutoff,
-									int amountEur,
-									List<AssessmentItem> items,
-									List<String> missingIsins,
-									List<String> scoreCriteria,
-									List<String> allocationCriteria,
-									Map<Integer, BigDecimal> layerBudgets) {
-		static AssessmentResult empty(int scoreCutoff, int amountEur) {
-			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.of(), List.of(), List.of(), Map.of());
+	public record AssessmentResult(double scoreCutoff,
+								int amountEur,
+								List<AssessmentItem> items,
+								List<String> missingIsins,
+								List<String> scoreCriteria,
+								List<String> allocationCriteria,
+								Map<Integer, BigDecimal> layerBudgets,
+								LayerTargetRiskThresholds riskThresholds,
+								Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+		static AssessmentResult empty(double scoreCutoff,
+											int amountEur,
+											LayerTargetRiskThresholds riskThresholds,
+											Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.of(), List.of(), List.of(), Map.of(),
+					riskThresholds, riskThresholdsByLayer);
 		}
 
-		static AssessmentResult missing(int scoreCutoff, int amountEur, List<String> missingIsins) {
-			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.copyOf(missingIsins), List.of(), List.of(), Map.of());
+		static AssessmentResult missing(double scoreCutoff,
+											int amountEur,
+											List<String> missingIsins,
+											LayerTargetRiskThresholds riskThresholds,
+											Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.copyOf(missingIsins), List.of(), List.of(), Map.of(),
+					riskThresholds, riskThresholdsByLayer);
 		}
 	}
 

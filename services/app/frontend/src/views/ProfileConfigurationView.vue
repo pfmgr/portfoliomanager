@@ -172,11 +172,10 @@
             id="risk-low-max-input"
             class="input"
             type="number"
-            step="1"
+            step="0.1"
             min="0"
             max="100"
-            inputmode="numeric"
-            pattern="[0-9]*"
+            inputmode="decimal"
             v-model.number="riskThresholds.lowMax"
             @input="coerceRiskThresholds"
             @blur="normalizeRiskThresholds"
@@ -188,11 +187,10 @@
             id="risk-high-min-input"
             class="input"
             type="number"
-            step="1"
+            step="0.1"
             min="0"
             max="100"
-            inputmode="numeric"
-            pattern="[0-9]*"
+            inputmode="decimal"
             v-model.number="riskThresholds.highMin"
             @input="coerceRiskThresholds"
             @blur="normalizeRiskThresholds"
@@ -200,6 +198,50 @@
         </div>
       </div>
       <p class="note small">Medium risk is the band between the low and high thresholds.</p>
+      <div class="table-wrap">
+        <table class="table" style="margin-top: 1rem;">
+          <caption class="sr-only">Risk thresholds by layer.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Layer</th>
+              <th scope="col">Low risk max</th>
+              <th scope="col">High risk min</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="layer in layers" :key="`risk-layer-${layer}`">
+              <th scope="row">{{ layerLabel(layer) }}</th>
+              <td>
+                <input
+                  class="input compact"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  inputmode="decimal"
+                  v-model.number="riskThresholdsByLayer[layer].lowMax"
+                  @input="coerceRiskThresholdsByLayer(layer)"
+                  @blur="normalizeRiskThresholdsByLayerEntry(layer)"
+                />
+              </td>
+              <td>
+                <input
+                  class="input compact"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  inputmode="decimal"
+                  v-model.number="riskThresholdsByLayer[layer].highMin"
+                  @input="coerceRiskThresholdsByLayer(layer)"
+                  @blur="normalizeRiskThresholdsByLayerEntry(layer)"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note small">Per-layer thresholds override the profile thresholds when provided.</p>
       <p class="note">Current source for variance + minimums: <b>{{ sourceLabel }}</b></p>
       <p v-if="loading" class="note">Loading layer targets...</p>
 
@@ -362,7 +404,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { apiRequest } from '../api'
 
 const layers = [1, 2, 3, 4, 5]
-const DEFAULT_RISK_THRESHOLDS = { lowMax: 30, highMin: 51 }
+const DEFAULT_RISK_THRESHOLDS = { lowMax: 30.0, highMin: 51.0 }
+const MIN_RISK_GAP = 0.1
 const DEFAULT_PROJECTION_HORIZON_MONTHS = 12
 const MIN_PROJECTION_HORIZON_MONTHS = 1
 const MAX_PROJECTION_HORIZON_MONTHS = 120
@@ -412,6 +455,7 @@ const projectionHorizonMonths = ref(12)
 const projectionBlendMin = ref(DEFAULT_PROJECTION_BLEND_MIN)
 const projectionBlendMax = ref(DEFAULT_PROJECTION_BLEND_MAX)
 const riskThresholds = ref({ ...DEFAULT_RISK_THRESHOLDS })
+const riskThresholdsByLayer = ref(buildRiskThresholdsByLayer(null, DEFAULT_RISK_THRESHOLDS))
 const message = ref('')
 const messageType = ref('success')
 const loading = ref(false)
@@ -480,6 +524,9 @@ const profileProjectionBlendMax = computed(() => {
   return clampProjectionBlend(numeric)
 })
 const profileRiskThresholdDefaults = computed(() => mapRiskThresholds(seedProfile.value?.riskThresholds))
+const profileRiskThresholdByLayerDefaults = computed(() =>
+  buildRiskThresholdsByLayer(seedProfile.value?.riskThresholdsByLayer, profileRiskThresholdDefaults.value)
+)
 const orderedProfiles = computed(() => {
   const entries = []
   PROFILE_ORDER.forEach((key) => {
@@ -704,6 +751,7 @@ async function save() {
     normalizeProjectionHorizonMonths()
     normalizeProjectionBlendRange()
     normalizeRiskThresholds()
+    normalizeRiskThresholdsByLayer()
     await submitConfig(
       {
         activeProfile: selectedProfileKey.value,
@@ -715,6 +763,9 @@ async function save() {
         maxSavingPlansPerLayer: { ...maxSavingPlansPerLayer.value },
         profileRiskThresholds: {
           [selectedProfileKey.value]: { ...riskThresholds.value }
+        },
+        profileRiskThresholdsByLayer: {
+          [selectedProfileKey.value]: { ...riskThresholdsByLayer.value }
         },
         profileProjectionHorizonMonths: {
           [selectedProfileKey.value]: projectionHorizonMonths.value
@@ -778,6 +829,10 @@ async function resetToProfileDefault() {
     targets.value = { ...profileTargets.value }
   }
   riskThresholds.value = mapRiskThresholds(seed?.riskThresholds)
+  riskThresholdsByLayer.value = buildRiskThresholdsByLayer(
+    seed?.riskThresholdsByLayer,
+    riskThresholds.value
+  )
   if (seed?.acceptableVariancePct) {
     variance.value = seed.acceptableVariancePct
   }
@@ -864,17 +919,23 @@ function mapToMaxSavingPlans(source) {
   return payload
 }
 
-function mapRiskThresholds(source) {
-  const lowMax = Number(source?.lowMax)
-  const highMin = Number(source?.highMin)
-  return {
-    lowMax: Number.isFinite(lowMax) ? lowMax : DEFAULT_RISK_THRESHOLDS.lowMax,
-    highMin: Number.isFinite(highMin) ? highMin : DEFAULT_RISK_THRESHOLDS.highMin
-  }
+function mapRiskThresholds(source, fallback = DEFAULT_RISK_THRESHOLDS) {
+  return normalizeRiskThresholdPair(source, fallback)
+}
+
+function buildRiskThresholdsByLayer(source, fallback) {
+  const defaults = mapRiskThresholds(fallback)
+  const payload = {}
+  layers.forEach((layer) => {
+    payload[layer] = mapRiskThresholds(source?.[layer], defaults)
+  })
+  return payload
 }
 
 function applyProfileRiskThresholds(profile) {
-  riskThresholds.value = mapRiskThresholds(profile?.riskThresholds)
+  const base = mapRiskThresholds(profile?.riskThresholds)
+  riskThresholds.value = base
+  riskThresholdsByLayer.value = buildRiskThresholdsByLayer(profile?.riskThresholdsByLayer, base)
 }
 
 function applyProfileProjectionHorizon(profile) {
@@ -1053,35 +1114,66 @@ function formatMinimum(value) {
 }
 
 function coerceRiskThresholds() {
-  const lowMax = Number(riskThresholds.value.lowMax)
-  const highMin = Number(riskThresholds.value.highMin)
-  if (Number.isFinite(lowMax)) {
-    riskThresholds.value.lowMax = Math.trunc(lowMax)
-  }
-  if (Number.isFinite(highMin)) {
-    riskThresholds.value.highMin = Math.trunc(highMin)
-  }
+  riskThresholds.value = coerceRiskThresholdPair(riskThresholds.value)
 }
 
 function normalizeRiskThresholds() {
-  const defaults = profileRiskThresholdDefaults.value
-  let lowMax = Number(riskThresholds.value.lowMax)
-  let highMin = Number(riskThresholds.value.highMin)
+  riskThresholds.value = normalizeRiskThresholdPair(
+    riskThresholds.value,
+    profileRiskThresholdDefaults.value
+  )
+}
+
+function coerceRiskThresholdsByLayer(layer) {
+  const current = riskThresholdsByLayer.value?.[layer] || {}
+  const coerced = coerceRiskThresholdPair(current)
+  riskThresholdsByLayer.value = { ...riskThresholdsByLayer.value, [layer]: coerced }
+}
+
+function normalizeRiskThresholdsByLayerEntry(layer) {
+  const defaults = profileRiskThresholdByLayerDefaults.value?.[layer] || profileRiskThresholdDefaults.value
+  const normalized = normalizeRiskThresholdPair(riskThresholdsByLayer.value?.[layer], defaults)
+  riskThresholdsByLayer.value = { ...riskThresholdsByLayer.value, [layer]: normalized }
+}
+
+function normalizeRiskThresholdsByLayer() {
+  const normalized = {}
+  layers.forEach((layer) => {
+    const defaults = profileRiskThresholdByLayerDefaults.value?.[layer] || profileRiskThresholdDefaults.value
+    normalized[layer] = normalizeRiskThresholdPair(riskThresholdsByLayer.value?.[layer], defaults)
+  })
+  riskThresholdsByLayer.value = normalized
+}
+
+function coerceRiskThresholdPair(source) {
+  const lowMax = Number(source?.lowMax)
+  const highMin = Number(source?.highMin)
+  return {
+    lowMax: Number.isFinite(lowMax) ? lowMax : source?.lowMax,
+    highMin: Number.isFinite(highMin) ? highMin : source?.highMin
+  }
+}
+
+function normalizeRiskThresholdPair(source, fallback) {
+  const fallbackLow = Number(fallback?.lowMax)
+  const fallbackHigh = Number(fallback?.highMin)
+  let lowMax = Number(source?.lowMax)
+  let highMin = Number(source?.highMin)
   if (!Number.isFinite(lowMax)) {
-    lowMax = defaults.lowMax
+    lowMax = Number.isFinite(fallbackLow) ? fallbackLow : DEFAULT_RISK_THRESHOLDS.lowMax
   }
   if (!Number.isFinite(highMin)) {
-    highMin = defaults.highMin
+    highMin = Number.isFinite(fallbackHigh) ? fallbackHigh : DEFAULT_RISK_THRESHOLDS.highMin
   }
-  lowMax = clampRiskValue(Math.trunc(lowMax))
-  highMin = clampRiskValue(Math.trunc(highMin))
-  if (highMin <= lowMax) {
-    highMin = Math.min(100, lowMax + 1)
-    if (highMin <= lowMax) {
-      lowMax = Math.max(0, highMin - 1)
+  lowMax = clampRiskValue(lowMax)
+  highMin = clampRiskValue(highMin)
+  if (highMin - lowMax < MIN_RISK_GAP) {
+    highMin = clampRiskValue(lowMax + MIN_RISK_GAP)
+    if (highMin - lowMax < MIN_RISK_GAP) {
+      lowMax = clampRiskValue(highMin - MIN_RISK_GAP)
     }
   }
-  riskThresholds.value = { lowMax, highMin }
+  return { lowMax, highMin }
 }
 
 function clampRiskValue(value) {
