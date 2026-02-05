@@ -347,6 +347,7 @@
                       v-for="entry in scoreComponentEntries(row.score_components ?? row.scoreComponents)"
                       :key="entry.text"
                       :class="['score-breakdown__item', entry.levelClass]"
+                      :title="entry.tooltip || null"
                     >
                       {{ entry.text }}
                     </span>
@@ -962,10 +963,32 @@ function scoreComponentEntries(components) {
       const sign = numeric > 0 ? '+' : numeric < 0 ? '-' : ''
       return {
         text: `${label} ${sign}${formatted}`.trim(),
-        levelClass: scoreComponentLevelClass(numeric)
+        levelClass: scoreComponentLevelClass(numeric),
+        tooltip: scoreComponentTooltip(label)
       }
     })
     .filter((entry) => entry)
+}
+
+function scoreComponentTooltip(label) {
+  if (!label) {
+    return ''
+  }
+  const tooltips = {
+    'Risk indicator missing': 'Missing SRI in Layers 1-3 adds +5 points.',
+    'Risk indicator': 'SRI above 3 adds +8 points per step.',
+    'TER': 'Ongoing charges penalty at 0.2/0.5/1.0% tiers.',
+    'P/E': 'High P/E adds penalty at 30/40/60+.',
+    'EV/EBITDA': 'High EV/EBITDA adds penalty at 20/30+.',
+    'P/B': 'High P/B adds penalty at 4/8+.',
+    'Earnings yield': 'Low earnings yield adds penalty below 3%/2%.',
+    'Top holdings concentration': 'Top holding and top-3 weights add penalty (Layer 3 reduced by 50%).',
+    'Region concentration': 'High single-region exposure adds penalty.',
+    'Data quality': 'Missing fields and warnings add penalty (Layer 1-2 cap 10).',
+    'Single-stock risk premium': 'Single stocks add +15 points.',
+    'Bad financials floor': 'Negative earnings/EBITDA forces score to cutoff.'
+  }
+  return tooltips[label] || ''
 }
 
 function scoreComponentLevelClass(value) {

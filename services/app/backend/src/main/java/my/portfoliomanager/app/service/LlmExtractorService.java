@@ -176,6 +176,7 @@ public class LlmExtractorService implements ExtractorService {
 					&& ("pe_current_asof".equals(item.field()) || "valuation.pe_current_asof".equals(item.field())));
 			missingFields = updatedMissing;
 		}
+		missingFields = sanitizeMissingFields(missingFields, instrumentType, regions, sectors, topHoldings);
 		List<InstrumentDossierExtractionPayload.WarningPayload> llmWarnings = parseWarnings(data);
 		if (llmWarnings != null && !llmWarnings.isEmpty()) {
 			warnings.addAll(llmWarnings);
@@ -326,6 +327,45 @@ public class LlmExtractorService implements ExtractorService {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
 		}
 		return warnings.isEmpty() ? null : warnings;
+	}
+
+	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> sanitizeMissingFields(
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields,
+			String instrumentType,
+			List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions,
+			List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+			List<InstrumentDossierExtractionPayload.HoldingPayload> topHoldings) {
+		if (missingFields == null || missingFields.isEmpty()) {
+			return missingFields;
+		}
+		boolean hasRegions = regions != null && !regions.isEmpty();
+		boolean hasSectors = sectors != null && !sectors.isEmpty();
+		boolean hasHoldings = topHoldings != null && !topHoldings.isEmpty();
+		boolean isEtf = isEtfType(instrumentType);
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> filtered = new ArrayList<>();
+		for (InstrumentDossierExtractionPayload.MissingFieldPayload item : missingFields) {
+			if (item == null || item.field() == null || item.field().isBlank()) {
+				continue;
+			}
+			String field = item.field().toLowerCase(Locale.ROOT).trim();
+			if (hasHoldings && (field.equals("top_holdings") || field.equals("topholdings"))) {
+				continue;
+			}
+			if (hasRegions && field.equals("regions")) {
+				continue;
+			}
+			if (hasSectors && field.equals("sectors")) {
+				continue;
+			}
+			if (isEtf && field.startsWith("gics_")) {
+				continue;
+			}
+			if (!isEtf && (field.startsWith("etf.") || field.startsWith("etf_") || field.equals("etf"))) {
+				continue;
+			}
+			filtered.add(item);
+		}
+		return filtered.isEmpty() ? null : filtered;
 	}
 
 	private <T> T parsePayload(JsonNode node,

@@ -1321,6 +1321,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Secondary sources (e.g., justETF/ETF.com) are acceptable when primary sources are unavailable for the instrument type.
 				- Do not fail solely because primary sources are unavailable; if the instrument type cannot be confirmed, proceed with secondary sources and mark instrument_type as unknown.
 				- For single stocks/REITs, market-data sources are acceptable and required for valuation metrics (price, P/E, P/B, market cap, EPS history) when issuer pages do not list them. Do not omit valuation metrics just because they are not on issuer pages.
+				- Disambiguation: verify the ISIN matches the instrument name using at least one citation that explicitly lists the ISIN and issuer/instrument name. If you encounter a name mismatch, keep searching; do not mix results between ISINs.
 				- Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
 				- Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
 				- Include the research date (%s) and, if available, the “data as of” date for key metrics (factsheet date, holdings date).
@@ -1351,8 +1352,10 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
 				- For exposures, provide region and sector weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
 				- Use GICS sector names for sector exposures whenever possible. For single stocks/REITs, if no sector weights are available, include a single sector exposure with the GICS sector at 100%%.
+				- For ETFs/funds, include a sector allocation table (GICS sectors with weights) using issuer factsheets or index providers (MSCI, S&P, FTSE Russell, Qontigo). If issuer/index data is missing, use reputable ETF databases (justETF/ETFdb).
 				- In the Exposures section, do not include valuation/template fields (e.g., holdings_weight_method, pe_method, pe_horizon); keep it to regions, sectors, holdings, and benchmark only.
-                - If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
+				- If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
+				- Always include the ## Risk section. For single stocks/REITs, if no SRI exists, set "SRI: unknown" and add a brief risk note; do not omit the section.
                 - Keep contentMd under %d characters.
                 - Single Stocks should always be classified as layer 4= Single Stock. REITs are single stocks unless explicitly a fund/ETF; classify REIT equities as layer 4.
                 - To qualify as Layer 1 = Global-Core, an instrument must be an ETF or fund that diversifies across industries and themes worldwide, but not only across individual countries and continents. World wide diversified Core-Umbrella fonds, Core-Multi Asset-ETFs and/or Bond-ETFs are allowed in this layer, too.

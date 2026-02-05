@@ -31,7 +31,9 @@ public class AssessorInstrumentAssessmentService {
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 3.0;
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 5.0;
 	private static final double MAX_DATA_QUALITY_PENALTY = 20.0;
+	private static final double MAX_DATA_QUALITY_PENALTY_CORE = 10.0;
 	private static final double SINGLE_STOCK_PENALTY = 15.0;
+	private static final double MISSING_SRI_PENALTY = 5.0;
 	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final double ETF_HOLDINGS_YIELD_WEIGHT = 0.65;
 	private static final double ETF_CURRENT_YIELD_WEIGHT = 0.20;
@@ -100,7 +102,7 @@ public class AssessorInstrumentAssessmentService {
 			LayerTargetRiskThresholds layerThresholds =
 					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
 			double layerCutoff = layerThresholds.getHighMin();
-			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff);
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff, layer);
 			items.add(new AssessmentItem(isin, name, layer, scoreResult.score(), scoreResult.badFinancials(),
 					scoreResult.scoreComponents()));
 		}
@@ -143,7 +145,7 @@ public class AssessorInstrumentAssessmentService {
 			LayerTargetRiskThresholds layerThresholds =
 					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
 			double layerCutoff = layerThresholds.getHighMin();
-			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff);
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff, layer);
 			scores.put(isin, scoreResult.score());
 		}
 		return scores;
@@ -318,7 +320,10 @@ public class AssessorInstrumentAssessmentService {
 		return layer;
 	}
 
-	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria, double scoreCutoff) {
+	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload,
+			CriteriaTracker criteria,
+			double scoreCutoff,
+			Integer layer) {
 		boolean badFinancials = false;
 		if (payload == null) {
 			return new ScoreResult((int) Math.ceil(scoreCutoff), true, List.of());
@@ -351,10 +356,10 @@ public class AssessorInstrumentAssessmentService {
 		}
 		List<ScoreComponent> components = new ArrayList<>();
 		double costPenalty = scoreCostPenalty(payload, criteria, components);
-		double riskPenalty = scoreRiskPenalty(payload, criteria, components);
+		double riskPenalty = scoreRiskPenalty(payload, layer, criteria, components);
 		double valuationPenalty = scoreValuationPenalty(payload, criteria, components);
-		double concentrationPenalty = scoreConcentrationPenalty(payload, criteria, components);
-		double dataPenalty = scoreDataQualityPenalty(payload, criteria, components);
+		double concentrationPenalty = scoreConcentrationPenalty(payload, layer, criteria, components);
+		double dataPenalty = scoreDataQualityPenalty(payload, layer, criteria, components);
 		double singleStockPenalty = scoreSingleStockPenalty(payload, criteria, components);
 		double rawScore = costPenalty + riskPenalty + valuationPenalty + concentrationPenalty + dataPenalty + singleStockPenalty;
 		List<ScoreComponent> adjustedComponents = scaleComponentsIfNeeded(components, rawScore, 100.0);
@@ -399,9 +404,16 @@ public class AssessorInstrumentAssessmentService {
 		return 30.0;
 	}
 
-	private double scoreRiskPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-									 List<ScoreComponent> components) {
+	private double scoreRiskPenalty(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
 		if (payload == null || payload.risk() == null || payload.risk().summaryRiskIndicator() == null) {
+			if (isFundLayer(layer)) {
+				criteria.addScoreCriterion("Risk indicator");
+				recordScoreComponent(components, "Risk indicator missing", MISSING_SRI_PENALTY);
+				return MISSING_SRI_PENALTY;
+			}
 			return 0.0;
 		}
 		Integer value = payload.risk().summaryRiskIndicator().value();
@@ -416,6 +428,10 @@ public class AssessorInstrumentAssessmentService {
 		double penalty = (value - 3) * 8.0;
 		recordScoreComponent(components, "Risk indicator", penalty);
 		return penalty;
+	}
+
+	private boolean isFundLayer(Integer layer) {
+		return layer != null && layer >= 1 && layer <= 3;
 	}
 
 	private double scoreValuationPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
@@ -487,8 +503,10 @@ public class AssessorInstrumentAssessmentService {
 		return cappedPenalty;
 	}
 
-	private double scoreConcentrationPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-										 List<ScoreComponent> components) {
+	private double scoreConcentrationPenalty(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
 		if (payload == null) {
 			return 0.0;
 		}
@@ -520,7 +538,9 @@ public class AssessorInstrumentAssessmentService {
 					penalty += 10.0;
 				}
 			}
-			recordScoreComponent(components, "Top holdings concentration", penalty);
+			double adjustedHoldingsPenalty = adjustHoldingsPenaltyForLayer(penalty, layer);
+			recordScoreComponent(components, "Top holdings concentration", adjustedHoldingsPenalty);
+			penalty = adjustedHoldingsPenalty;
 		}
 		List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions = payload.regions();
 		if (regions != null && !regions.isEmpty()) {
@@ -532,18 +552,22 @@ public class AssessorInstrumentAssessmentService {
 					maxRegion = Math.max(maxRegion, weight.doubleValue());
 				}
 			}
+			double regionPenalty = 0.0;
 			if (maxRegion >= 0.75) {
-				penalty += 15.0;
+				regionPenalty = 15.0;
 			} else if (maxRegion >= 0.60) {
-				penalty += 10.0;
+				regionPenalty = 10.0;
 			}
-			recordScoreComponent(components, "Region concentration", maxRegion >= 0.75 ? 15.0 : maxRegion >= 0.60 ? 10.0 : 0.0);
+			penalty += regionPenalty;
+			recordScoreComponent(components, "Region concentration", regionPenalty);
 		}
 		return penalty;
 	}
 
-	private double scoreDataQualityPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-									 List<ScoreComponent> components) {
+	private double scoreDataQualityPenalty(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
 		if (payload == null) {
 			return 0.0;
 		}
@@ -554,9 +578,26 @@ public class AssessorInstrumentAssessmentService {
 		}
 		criteria.addScoreCriterion("Data quality");
 		double penalty = (missing * DATA_QUALITY_MISSING_WEIGHT) + (warnings * DATA_QUALITY_WARNING_WEIGHT);
-		double cappedPenalty = Math.min(MAX_DATA_QUALITY_PENALTY, penalty);
+		double cappedPenalty = Math.min(resolveDataQualityCap(layer), penalty);
 		recordScoreComponent(components, "Data quality", cappedPenalty);
 		return cappedPenalty;
+	}
+
+	private double adjustHoldingsPenaltyForLayer(double penalty, Integer layer) {
+		if (penalty <= 0.0) {
+			return penalty;
+		}
+		if (layer != null && layer == 3) {
+			return penalty * 0.5;
+		}
+		return penalty;
+	}
+
+	private double resolveDataQualityCap(Integer layer) {
+		if (layer != null && (layer == 1 || layer == 2)) {
+			return MAX_DATA_QUALITY_PENALTY_CORE;
+		}
+		return MAX_DATA_QUALITY_PENALTY;
 	}
 
 	private double scoreSingleStockPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
