@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 @Service
 @Primary
@@ -55,6 +56,8 @@ public class LlmExtractorService implements ExtractorService {
 			"commodity",
 			"commodities"
 	);
+	private static final Pattern RISK_SECTION_PATTERN =
+			Pattern.compile("(?m)^##\\s+risk\\b", Pattern.CASE_INSENSITIVE);
 
 	public LlmExtractorService(KnowledgeBaseLlmClient llmClient,
 							   ObjectMapper objectMapper) {
@@ -141,11 +144,15 @@ public class LlmExtractorService implements ExtractorService {
 				(ongoingChargesPct == null && benchmarkIndex == null)
 						? null
 						: new InstrumentDossierExtractionPayload.EtfPayload(ongoingChargesPct, benchmarkIndex);
+		boolean riskSectionPresent = hasRiskSection(dossier);
 		InstrumentDossierExtractionPayload.RiskPayload riskPayload =
-				sriValue == null
+				sriValue == null && !riskSectionPresent
 						? null
 						: new InstrumentDossierExtractionPayload.RiskPayload(
-								new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(sriValue)
+								sriValue == null
+										? null
+										: new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(sriValue),
+								riskSectionPresent
 						);
 		List<InstrumentDossierExtractionPayload.SourcePayload> sources = extractSources(dossier.getCitationsJson());
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields = parseMissingFields(data);
@@ -327,6 +334,17 @@ public class LlmExtractorService implements ExtractorService {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
 		}
 		return warnings.isEmpty() ? null : warnings;
+	}
+
+	private boolean hasRiskSection(InstrumentDossier dossier) {
+		if (dossier == null) {
+			return false;
+		}
+		String content = dossier.getContentMd();
+		if (content == null || content.isBlank()) {
+			return false;
+		}
+		return RISK_SECTION_PATTERN.matcher(content).find();
 	}
 
 	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> sanitizeMissingFields(

@@ -195,9 +195,10 @@ class AssessorInstrumentAssessmentIntegrationTest {
 				1,
 				"core",
 				new InstrumentDossierExtractionPayload.EtfPayload(new BigDecimal("0.18"), "MSCI World"),
-				new InstrumentDossierExtractionPayload.RiskPayload(
-						new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(3)
-				),
+			new InstrumentDossierExtractionPayload.RiskPayload(
+					new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(3),
+					null
+			),
 				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
 				null,
 				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5"))),

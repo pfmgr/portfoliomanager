@@ -67,11 +67,12 @@ public class StubExtractorService implements ExtractorService {
 						? null
 						: new InstrumentDossierExtractionPayload.EtfPayload(ongoingChargesPct, benchmarkIndex);
 		InstrumentDossierExtractionPayload.RiskPayload riskPayload =
-				summaryRiskIndicator == null
-						? null
-						: new InstrumentDossierExtractionPayload.RiskPayload(
-								new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(summaryRiskIndicator)
-						);
+			summaryRiskIndicator == null
+					? null
+					: new InstrumentDossierExtractionPayload.RiskPayload(
+							new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(summaryRiskIndicator),
+							null
+					);
 
 		InstrumentDossierExtractionPayload payload = new InstrumentDossierExtractionPayload(
 				dossier.getIsin(),

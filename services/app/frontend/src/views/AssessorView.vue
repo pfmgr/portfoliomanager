@@ -319,11 +319,11 @@
                 <th scope="col">Layer</th>
                 <th scope="col" class="num">
                   <span class="table-header">Score</span>
-                  <span v-if="instrumentRiskThresholdLabel" class="table-header-note">
-                    Risk bands: {{ instrumentRiskThresholdLabel }}
-                  </span>
                   <span v-if="instrumentRiskThresholdByLayerLabel" class="table-header-note">
-                    Layer bands: {{ instrumentRiskThresholdByLayerLabel }}
+                    Risk bands (per layer): {{ instrumentRiskThresholdByLayerLabel }}. High risk is not acceptable.
+                  </span>
+                  <span v-else-if="instrumentRiskThresholdLabel" class="table-header-note">
+                    Risk bands: {{ instrumentRiskThresholdLabel }}. High risk is not acceptable.
                   </span>
                 </th>
                 <th scope="col">Score breakdown</th>
@@ -918,7 +918,7 @@ function formatRiskThresholdLabel(thresholds, compact = false) {
   if (compact) {
     return `Low <= ${lowLabel}, High >= ${highLabel}`
   }
-  return `Low <= ${lowLabel}, Medium ${lowLabel}–${highLabel}, High >= ${highLabel}`
+  return `Low <= ${lowLabel}, Medium between ${lowLabel}–${highLabel}, High >= ${highLabel}`
 }
 
 function formatRiskThresholdsByLayerLabel(thresholdsByLayer) {
@@ -928,7 +928,7 @@ function formatRiskThresholdsByLayerLabel(thresholdsByLayer) {
   const entries = []
   layers.forEach((layer) => {
     const entry = thresholdsByLayer[layer]
-    const label = formatRiskThresholdLabel(entry, true)
+    const label = formatRiskThresholdLabel(entry)
     if (label) {
       entries.push(`L${layer}: ${label}`)
     }
@@ -975,10 +975,11 @@ function scoreComponentTooltip(label) {
     return ''
   }
   const tooltips = {
-    'Risk indicator missing': 'Missing SRI in Layers 1-3 adds +5 points.',
+    'Risk indicator missing': 'Missing SRI in Layers 1-3 adds +5 points (+2 if Risk section exists).',
     'Risk indicator': 'SRI above 3 adds +8 points per step.',
-    'TER': 'Ongoing charges penalty at 0.2/0.5/1.0% tiers.',
+    'TER': 'Layer-based TER bands; penalties only for above-average costs.',
     'P/E': 'High P/E adds penalty at 30/40/60+.',
+    'P/E (PEG-adjusted)': 'High P/E penalty reduced when EPS CAGR implies low PEG.',
     'EV/EBITDA': 'High EV/EBITDA adds penalty at 20/30+.',
     'P/B': 'High P/B adds penalty at 4/8+.',
     'Earnings yield': 'Low earnings yield adds penalty below 3%/2%.',

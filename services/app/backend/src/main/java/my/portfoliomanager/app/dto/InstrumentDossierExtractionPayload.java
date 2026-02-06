@@ -63,7 +63,8 @@ public record InstrumentDossierExtractionPayload(
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record RiskPayload(
-			@JsonProperty("summary_risk_indicator") SummaryRiskIndicatorPayload summaryRiskIndicator
+			@JsonProperty("summary_risk_indicator") SummaryRiskIndicatorPayload summaryRiskIndicator,
+			@JsonProperty("section_present") Boolean sectionPresent
 	) {
 	}
 

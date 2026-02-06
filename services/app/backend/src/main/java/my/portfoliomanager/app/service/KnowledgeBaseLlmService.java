@@ -154,31 +154,32 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			        }
 			      ]
 			    },
-			    "risk": {
-			      "anyOf": [
-			        { "type": "null" },
-			        {
-			          "type": "object",
-			          "additionalProperties": false,
-			          "required": ["summary_risk_indicator"],
-			          "properties": {
-			            "summary_risk_indicator": {
-			              "anyOf": [
-			                { "type": "null" },
-			                {
-			                  "type": "object",
-			                  "additionalProperties": false,
-			                  "required": ["value"],
-			                  "properties": {
-			                    "value": { "type": ["integer","null"] }
-			                  }
+			  "risk": {
+			    "anyOf": [
+			      { "type": "null" },
+			      {
+			        "type": "object",
+			        "additionalProperties": false,
+			        "required": ["summary_risk_indicator"],
+			        "properties": {
+			          "summary_risk_indicator": {
+			            "anyOf": [
+			              { "type": "null" },
+			              {
+			                "type": "object",
+			                "additionalProperties": false,
+			                "required": ["value"],
+			                "properties": {
+			                  "value": { "type": ["integer","null"] }
 			                }
-			              ]
-			            }
-			          }
+			              }
+			            ]
+			          },
+			          "section_present": { "type": ["boolean","null"] }
 			        }
-			      ]
-			    },
+			      }
+			    ]
+			  },
 		    "regions": {
 		      "type": ["array","null"],
 		      "items": {
