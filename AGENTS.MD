@@ -150,7 +150,7 @@ Important: All unknown instruments should remain `layer=5` until explicitly clas
 
 ---
 
-## 7) Developer workflows for Codex
+## 7) Developer workflows
 
 ### Start stack
 - Build or pull app images: `./build_docker_containers.sh` (local build) or `docker pull fg1212/portfoliomanager-backend:latest` + `docker pull fg1212/portfoliomanager-frontend:latest` from docker.io.
