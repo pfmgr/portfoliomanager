@@ -32,7 +32,7 @@ public class AssessorInstrumentAssessmentService {
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 5.0;
 	private static final double MAX_DATA_QUALITY_PENALTY = 20.0;
 	private static final double MAX_DATA_QUALITY_PENALTY_CORE = 10.0;
-	private static final double SINGLE_STOCK_PENALTY = 15.0;
+	private static final double SINGLE_STOCK_PENALTY = 25.0;
 	private static final double MISSING_SRI_PENALTY = 5.0;
 	private static final double MISSING_SRI_PENALTY_WITH_SECTION = 2.0;
 	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
@@ -362,7 +362,9 @@ public class AssessorInstrumentAssessmentService {
 		double concentrationPenalty = scoreConcentrationPenalty(payload, layer, criteria, components);
 		double dataPenalty = scoreDataQualityPenalty(payload, layer, criteria, components);
 		double singleStockPenalty = scoreSingleStockPenalty(payload, criteria, components);
-		double rawScore = costPenalty + riskPenalty + valuationPenalty + concentrationPenalty + dataPenalty + singleStockPenalty;
+		double qualityBonus = scoreQualityBonuses(payload, layer, criteria, components);
+		double rawScore = costPenalty + riskPenalty + valuationPenalty + concentrationPenalty +
+				dataPenalty + singleStockPenalty + qualityBonus;
 		List<ScoreComponent> adjustedComponents = scaleComponentsIfNeeded(components, rawScore, 100.0);
 		double adjustedScore = sumComponents(adjustedComponents);
 		int rounded = (int) Math.round(Math.min(100.0, Math.max(0.0, adjustedScore)));
@@ -370,7 +372,7 @@ public class AssessorInstrumentAssessmentService {
 			double floorPenalty = scoreCutoff - adjustedScore;
 			if (floorPenalty > 0) {
 				List<ScoreComponent> extended = new ArrayList<>(adjustedComponents);
-				extended.add(new ScoreComponent("Bad financials floor", floorPenalty));
+				extended.add(new ScoreComponent("Bad financials floor", floorPenalty, null));
 				adjustedComponents = extended;
 				adjustedScore += floorPenalty;
 			}
@@ -506,12 +508,13 @@ public class AssessorInstrumentAssessmentService {
 			} else if (pe > 30) {
 				pePenalty = 10.0;
 			}
-			Double epsCagrPercent = computeEpsCagrPercent(valuation);
-			Double pegRatio = computePegRatio(peCurrent, epsCagrPercent);
+			EpsCagrDetail epsCagr = computeEpsCagrDetail(valuation);
+			Double pegRatio = computePegRatio(peCurrent, epsCagr);
 			double adjustedPePenalty = applyPegAdjustment(pePenalty, pegRatio);
 			penalty += adjustedPePenalty;
 			String label = adjustedPePenalty == pePenalty ? "P/E" : "P/E (PEG-adjusted)";
-			valuationComponents.add(new ScoreComponent(label, adjustedPePenalty));
+			String pegNote = adjustedPePenalty == pePenalty ? null : formatPegNote(epsCagr, pegRatio);
+			valuationComponents.add(new ScoreComponent(label, adjustedPePenalty, pegNote));
 		}
 		BigDecimal evToEbitda = valuation.evToEbitda();
 		if (evToEbitda != null) {
@@ -524,7 +527,7 @@ public class AssessorInstrumentAssessmentService {
 				evPenalty = 15.0;
 			}
 			penalty += evPenalty;
-			valuationComponents.add(new ScoreComponent("EV/EBITDA", evPenalty));
+			valuationComponents.add(new ScoreComponent("EV/EBITDA", evPenalty, null));
 		}
 		BigDecimal pbCurrent = valuation.pbCurrent();
 		if (pbCurrent != null) {
@@ -537,7 +540,7 @@ public class AssessorInstrumentAssessmentService {
 				pbPenalty = 10.0;
 			}
 			penalty += pbPenalty;
-			valuationComponents.add(new ScoreComponent("P/B", pbPenalty));
+			valuationComponents.add(new ScoreComponent("P/B", pbPenalty, null));
 		}
 		BigDecimal earningsYield = valuation.earningsYieldLongterm();
 		if (earningsYield != null) {
@@ -550,7 +553,7 @@ public class AssessorInstrumentAssessmentService {
 				yieldPenalty = 10.0;
 			}
 			penalty += yieldPenalty;
-			valuationComponents.add(new ScoreComponent("Earnings yield", yieldPenalty));
+			valuationComponents.add(new ScoreComponent("Earnings yield", yieldPenalty, null));
 		}
 		double cappedPenalty = Math.min(35.0, penalty);
 		if (!valuationComponents.isEmpty()) {
@@ -559,7 +562,7 @@ public class AssessorInstrumentAssessmentService {
 		return cappedPenalty;
 	}
 
-	private Double computeEpsCagrPercent(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+	private EpsCagrDetail computeEpsCagrDetail(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
 		if (valuation == null || valuation.epsHistory() == null || valuation.epsHistory().isEmpty()) {
 			return null;
 		}
@@ -600,25 +603,38 @@ public class AssessorInstrumentAssessmentService {
 		if (!Double.isFinite(cagr) || cagr <= 0.0) {
 			return null;
 		}
-		return cagr * 100.0;
+		return new EpsCagrDetail(cagr * 100.0, firstYear, lastYear);
 	}
 
-	private Double computePegRatio(BigDecimal peCurrent, Double epsCagrPercent) {
-		if (peCurrent == null || epsCagrPercent == null) {
+	private Double computePegRatio(BigDecimal peCurrent, EpsCagrDetail epsCagr) {
+		if (peCurrent == null || epsCagr == null) {
 			return null;
 		}
 		double pe = peCurrent.doubleValue();
 		if (!Double.isFinite(pe) || pe <= 0.0) {
 			return null;
 		}
-		if (epsCagrPercent <= 0.0) {
+		if (epsCagr.cagrPercent() <= 0.0) {
 			return null;
 		}
-		double peg = pe / epsCagrPercent;
+		double peg = pe / epsCagr.cagrPercent();
 		if (!Double.isFinite(peg) || peg <= 0.0) {
 			return null;
 		}
 		return peg;
+	}
+
+	private String formatPegNote(EpsCagrDetail epsCagr, Double pegRatio) {
+		if (epsCagr == null || pegRatio == null || !Double.isFinite(pegRatio)) {
+			return null;
+		}
+		return String.format(Locale.ROOT,
+				"EPS CAGR %.1f%% (%d→%d), PEG %.2f",
+				epsCagr.cagrPercent(),
+				epsCagr.startYear(),
+				epsCagr.endYear(),
+				pegRatio
+		);
 	}
 
 	private double applyPegAdjustment(double pePenalty, Double pegRatio) {
@@ -635,6 +651,9 @@ public class AssessorInstrumentAssessmentService {
 			return pePenalty * 0.75;
 		}
 		return pePenalty;
+	}
+
+	private record EpsCagrDetail(double cagrPercent, int startYear, int endYear) {
 	}
 
 	private double scoreConcentrationPenalty(InstrumentDossierExtractionPayload payload,
@@ -658,26 +677,20 @@ public class AssessorInstrumentAssessmentService {
 			weights.sort(Comparator.reverseOrder());
 			if (!weights.isEmpty()) {
 				double max = weights.get(0).doubleValue();
-				if (max >= 0.15) {
-					penalty += 15.0;
-				} else if (max >= 0.10) {
-					penalty += 10.0;
-				}
+				penalty += resolveTopHoldingPenalty(max, layer);
 			}
 			if (weights.size() >= 3) {
 				double top3 = weights.get(0).add(weights.get(1)).add(weights.get(2)).doubleValue();
-				if (top3 >= 0.35) {
-					penalty += 15.0;
-				} else if (top3 >= 0.25) {
-					penalty += 10.0;
-				}
+				penalty += resolveTopThreeHoldingPenalty(top3, layer);
 			}
 			double adjustedHoldingsPenalty = adjustHoldingsPenaltyForLayer(penalty, layer);
 			recordScoreComponent(components, "Top holdings concentration", adjustedHoldingsPenalty);
 			penalty = adjustedHoldingsPenalty;
 		}
+		boolean skipRegionPenalty = isSingleStock(payload) || isReit(payload);
+		boolean isEtfInstrument = isEtf(payload);
 		List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions = payload.regions();
-		if (regions != null && !regions.isEmpty()) {
+		if (!skipRegionPenalty && regions != null && !regions.isEmpty()) {
 			criteria.addScoreCriterion("Region concentration");
 			double maxRegion = 0.0;
 			for (InstrumentDossierExtractionPayload.RegionExposurePayload region : regions) {
@@ -686,16 +699,77 @@ public class AssessorInstrumentAssessmentService {
 					maxRegion = Math.max(maxRegion, weight.doubleValue());
 				}
 			}
-			double regionPenalty = 0.0;
-			if (maxRegion >= 0.75) {
-				regionPenalty = 15.0;
-			} else if (maxRegion >= 0.60) {
-				regionPenalty = 10.0;
-			}
+			double regionPenalty = resolveRegionPenalty(maxRegion, layer, isEtfInstrument);
 			penalty += regionPenalty;
 			recordScoreComponent(components, "Region concentration", regionPenalty);
 		}
 		return penalty;
+	}
+
+	private double resolveTopHoldingPenalty(double maxWeight, Integer layer) {
+		if (layer != null && layer == 1) {
+			if (maxWeight >= 0.30) {
+				return 15.0;
+			}
+			if (maxWeight >= 0.20) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (maxWeight >= 0.15) {
+			return 15.0;
+		}
+		if (maxWeight >= 0.10) {
+			return 10.0;
+		}
+		return 0.0;
+	}
+
+	private double resolveTopThreeHoldingPenalty(double topThreeWeight, Integer layer) {
+		if (layer != null && layer == 1) {
+			if (topThreeWeight >= 0.55) {
+				return 15.0;
+			}
+			if (topThreeWeight >= 0.40) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (topThreeWeight >= 0.35) {
+			return 15.0;
+		}
+		if (topThreeWeight >= 0.25) {
+			return 10.0;
+		}
+		return 0.0;
+	}
+
+	private double resolveRegionPenalty(double maxRegion, Integer layer, boolean isEtfInstrument) {
+		if (layer != null && layer == 1) {
+			if (maxRegion >= 0.90) {
+				return 15.0;
+			}
+			if (maxRegion >= 0.80) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (isEtfInstrument && layer != null && layer == 2) {
+			if (maxRegion >= 0.90) {
+				return 15.0;
+			}
+			if (maxRegion >= 0.80) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (maxRegion >= 0.75) {
+			return 15.0;
+		}
+		if (maxRegion >= 0.60) {
+			return 10.0;
+		}
+		return 0.0;
 	}
 
 	private double scoreDataQualityPenalty(InstrumentDossierExtractionPayload payload,
@@ -715,6 +789,206 @@ public class AssessorInstrumentAssessmentService {
 		double cappedPenalty = Math.min(resolveDataQualityCap(layer), penalty);
 		recordScoreComponent(components, "Data quality", cappedPenalty);
 		return cappedPenalty;
+	}
+
+	private double scoreQualityBonuses(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
+		if (payload == null || layer == null || layer != 4) {
+			return 0.0;
+		}
+		List<ScoreComponent> bonusComponents = new ArrayList<>();
+		double totalBonus = 0.0;
+
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+
+		if (valuation != null) {
+			List<ScoreComponent> epsComponents = new ArrayList<>();
+			int streak = computeConsecutivePositiveEpsYears(valuation.epsHistory());
+			double stabilityBonus = 0.0;
+			if (streak >= 5) {
+				stabilityBonus = -5.0;
+			} else if (streak >= 3) {
+				stabilityBonus = -3.0;
+			}
+			if (stabilityBonus != 0.0) {
+				epsComponents.add(new ScoreComponent("EPS stability bonus", stabilityBonus, null));
+			}
+			EpsCagrDetail epsCagr = computeEpsCagrDetail(valuation);
+			double growthBonus = 0.0;
+			if (epsCagr != null) {
+				if (epsCagr.cagrPercent() >= 20.0) {
+					growthBonus = -5.0;
+				} else if (epsCagr.cagrPercent() >= 10.0) {
+					growthBonus = -3.0;
+				}
+			}
+			if (growthBonus != 0.0) {
+				epsComponents.add(new ScoreComponent(
+						"EPS growth bonus",
+						growthBonus,
+						formatEpsCagrNote(epsCagr)
+				));
+			}
+			if (!epsComponents.isEmpty()) {
+				epsComponents = scaleBonusComponentsIfNeeded(epsComponents, -8.0);
+				bonusComponents.addAll(epsComponents);
+			}
+
+			BigDecimal netDebt = valuation.netDebt();
+			BigDecimal ebitda = valuation.ebitda();
+			Double netDebtToEbitda = safeRatio(netDebt, ebitda);
+			Double netDebtToMarketCap = safeRatio(netDebt, valuation.marketCap());
+			double leverageBonus = resolveLeverageBonus(netDebtToEbitda, netDebtToMarketCap);
+			if (leverageBonus != 0.0) {
+				bonusComponents.add(new ScoreComponent("Low leverage bonus", leverageBonus, null));
+			}
+
+			BigDecimal peCurrent = valuation.peCurrent();
+			BigDecimal pbCurrent = valuation.pbCurrent();
+			if (peCurrent != null && pbCurrent != null
+					&& peCurrent.signum() > 0 && pbCurrent.signum() > 0
+					&& peCurrent.doubleValue() < 20.0 && pbCurrent.doubleValue() < 3.0) {
+				bonusComponents.add(new ScoreComponent("Fair valuation bonus", -3.0, null));
+			}
+		}
+
+		if (financials != null) {
+			Double margin = safeRatio(financials.netIncome(), financials.revenue());
+			double marginBonus = 0.0;
+			if (margin != null) {
+				if (margin >= 0.20) {
+					marginBonus = -5.0;
+				} else if (margin >= 0.10) {
+					marginBonus = -3.0;
+				}
+			}
+			if (marginBonus != 0.0) {
+				bonusComponents.add(new ScoreComponent("Profitability bonus", marginBonus, null));
+			}
+		}
+
+		totalBonus = sumComponents(bonusComponents);
+		if (totalBonus < -15.0) {
+			bonusComponents = scaleBonusComponentsIfNeeded(bonusComponents, -15.0);
+			totalBonus = sumComponents(bonusComponents);
+		}
+		if (!bonusComponents.isEmpty()) {
+			criteria.addScoreCriterion("Quality bonus");
+			components.addAll(bonusComponents);
+		}
+		return totalBonus;
+	}
+
+	private List<ScoreComponent> scaleBonusComponentsIfNeeded(List<ScoreComponent> components, double cap) {
+		if (components == null || components.isEmpty()) {
+			return List.of();
+		}
+		double total = sumComponents(components);
+		if (total >= cap) {
+			return components;
+		}
+		if (cap == 0.0) {
+			return components;
+		}
+		double ratio = cap / total;
+		List<ScoreComponent> scaled = new ArrayList<>(components.size());
+		for (ScoreComponent component : components) {
+			if (component == null) {
+				continue;
+			}
+			scaled.add(new ScoreComponent(component.criterion(), component.points() * ratio, component.note()));
+		}
+		return scaled;
+	}
+
+	private int computeConsecutivePositiveEpsYears(List<InstrumentDossierExtractionPayload.EpsHistoryPayload> history) {
+		if (history == null || history.isEmpty()) {
+			return 0;
+		}
+		List<Integer> years = new ArrayList<>();
+		for (InstrumentDossierExtractionPayload.EpsHistoryPayload entry : history) {
+			if (entry == null || entry.year() == null || entry.eps() == null) {
+				continue;
+			}
+			if (entry.eps().signum() <= 0) {
+				continue;
+			}
+			if (!years.contains(entry.year())) {
+				years.add(entry.year());
+			}
+		}
+		if (years.isEmpty()) {
+			return 0;
+		}
+		years.sort(Integer::compareTo);
+		int maxStreak = 1;
+		int current = 1;
+		for (int i = 1; i < years.size(); i++) {
+			int prev = years.get(i - 1);
+			int curr = years.get(i);
+			if (curr == prev + 1) {
+				current += 1;
+			} else {
+				current = 1;
+			}
+			if (current > maxStreak) {
+				maxStreak = current;
+			}
+		}
+		return maxStreak;
+	}
+
+	private Double safeRatio(BigDecimal numerator, BigDecimal denominator) {
+		if (numerator == null || denominator == null) {
+			return null;
+		}
+		if (denominator.signum() <= 0) {
+			return null;
+		}
+		double num = numerator.doubleValue();
+		double den = denominator.doubleValue();
+		if (!Double.isFinite(num) || !Double.isFinite(den) || den == 0.0) {
+			return null;
+		}
+		double ratio = num / den;
+		if (!Double.isFinite(ratio)) {
+			return null;
+		}
+		return Math.max(0.0, ratio);
+	}
+
+	private double resolveLeverageBonus(Double netDebtToEbitda, Double netDebtToMarketCap) {
+		double bonusEbitda = 0.0;
+		if (netDebtToEbitda != null) {
+			if (netDebtToEbitda < 0.5) {
+				bonusEbitda = -8.0;
+			} else if (netDebtToEbitda < 1.0) {
+				bonusEbitda = -5.0;
+			}
+		}
+		double bonusMarketCap = 0.0;
+		if (netDebtToMarketCap != null && netDebtToMarketCap < 0.2) {
+			bonusMarketCap = -3.0;
+		}
+		if (bonusEbitda != 0.0 && bonusMarketCap != 0.0) {
+			return Math.max(bonusEbitda, bonusMarketCap);
+		}
+		return bonusEbitda != 0.0 ? bonusEbitda : bonusMarketCap;
+	}
+
+	private String formatEpsCagrNote(EpsCagrDetail epsCagr) {
+		if (epsCagr == null) {
+			return null;
+		}
+		return String.format(Locale.ROOT,
+				"EPS CAGR %.1f%% (%d→%d)",
+				epsCagr.cagrPercent(),
+				epsCagr.startYear(),
+				epsCagr.endYear()
+		);
 	}
 
 	private double adjustHoldingsPenaltyForLayer(double penalty, Integer layer) {
@@ -759,10 +1033,14 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private void recordScoreComponent(List<ScoreComponent> components, String criterion, double points) {
+		recordScoreComponent(components, criterion, points, null);
+	}
+
+	private void recordScoreComponent(List<ScoreComponent> components, String criterion, double points, String note) {
 		if (components == null || criterion == null || criterion.isBlank()) {
 			return;
 		}
-		components.add(new ScoreComponent(criterion, points));
+		components.add(new ScoreComponent(criterion, points, note));
 	}
 
 	private double sumComponents(List<ScoreComponent> components) {
@@ -779,8 +1057,8 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private List<ScoreComponent> scaleComponentsIfNeeded(List<ScoreComponent> components,
-											 double rawTotal,
-											 double cappedTotal) {
+									 double rawTotal,
+									 double cappedTotal) {
 		if (components == null || components.isEmpty()) {
 			return List.of();
 		}
@@ -793,7 +1071,7 @@ public class AssessorInstrumentAssessmentService {
 			if (component == null) {
 				continue;
 			}
-			scaled.add(new ScoreComponent(component.criterion(), component.points() * ratio));
+			scaled.add(new ScoreComponent(component.criterion(), component.points() * ratio, component.note()));
 		}
 		return scaled;
 	}
@@ -1832,7 +2110,7 @@ public class AssessorInstrumentAssessmentService {
 		}
 	}
 
-	public record ScoreComponent(String criterion, double points) {
+	public record ScoreComponent(String criterion, double points, String note) {
 	}
 
 	private record ScoreResult(int score, boolean badFinancials, List<ScoreComponent> scoreComponents) {

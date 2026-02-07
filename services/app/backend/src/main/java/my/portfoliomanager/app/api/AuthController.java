@@ -12,7 +12,6 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,7 +25,6 @@ import java.time.Instant;
 @RestController
 @RequestMapping({"/api/auth", "/auth"})
 public class AuthController {
-	private static final String LOGOUT_REALM = "Portfolio Admin (Logged out)";
 	private final AuthenticationManager authenticationManager;
 	private final JwtEncoder jwtEncoder;
 	private final AppProperties properties;
@@ -62,10 +60,6 @@ public class AuthController {
 
 	@RequestMapping(value = "/logout", method = {RequestMethod.GET, RequestMethod.POST})
 	public ResponseEntity<Void> logout() {
-		HttpHeaders headers = new HttpHeaders();
-		headers.add(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"" + LOGOUT_REALM + "\"");
-		headers.add(HttpHeaders.CACHE_CONTROL, "no-store");
-		headers.add(HttpHeaders.PRAGMA, "no-cache");
-		return new ResponseEntity<>(headers, HttpStatus.UNAUTHORIZED);
+		return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
 	}
 }

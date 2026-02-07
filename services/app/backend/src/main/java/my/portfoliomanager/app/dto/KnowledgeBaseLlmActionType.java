@@ -4,5 +4,6 @@ public enum KnowledgeBaseLlmActionType {
 	RESEARCH,
 	ALTERNATIVES,
 	EXTRACTION,
-	REFRESH
+	REFRESH,
+	MISSING_DATA
 }

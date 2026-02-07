@@ -160,7 +160,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			      {
 			        "type": "object",
 			        "additionalProperties": false,
-			        "required": ["summary_risk_indicator"],
+			        "required": ["summary_risk_indicator", "section_present"],
 			        "properties": {
 			          "summary_risk_indicator": {
 			            "anyOf": [
@@ -445,9 +445,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 
 	@Override
 	public KnowledgeBaseLlmDossierDraft generateDossier(String isin,
-														 String context,
-														 List<String> allowedDomains,
-														 int maxChars) {
+									 String context,
+									 List<String> allowedDomains,
+									 int maxChars) {
 		String normalizedIsin = normalizeIsin(isin);
 		String prompt = buildDossierPrompt(normalizedIsin, context, maxChars);
 		String validatedPrompt = enforcePromptPolicy(prompt, LlmPromptPurpose.KB_DOSSIER_WEBSEARCH);
@@ -490,6 +490,53 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		}
 		JsonNode sanitizedCitations = sanitizeJsonNode(citations);
 		return new KnowledgeBaseLlmDossierDraft(contentMd, displayName, sanitizedCitations, response.model());
+	}
+
+	@Override
+	public KnowledgeBaseLlmDossierDraft patchDossierMissingFields(String isin,
+									 String contentMd,
+									 JsonNode existingCitations,
+									 List<String> missingFields,
+									 String context,
+									 List<String> allowedDomains,
+									 int maxChars) {
+		String normalizedIsin = normalizeIsin(isin);
+		String prompt = buildDossierPatchPrompt(normalizedIsin, contentMd, existingCitations, missingFields, context, maxChars);
+		String validatedPrompt = enforcePromptPolicy(prompt, LlmPromptPurpose.KB_DOSSIER_PATCH);
+		logger.debug("Sending dossier patch websearch prompt (chars={}).", validatedPrompt.length());
+		String reasoningEffort = configService.getSnapshot().websearchReasoningEffort();
+		KnowledgeBaseLlmResponse response = withRetry(() -> llmProvider.runWebSearch(
+				validatedPrompt,
+				allowedDomains,
+				reasoningEffort,
+				"kb_dossier_patch_websearch",
+				dossierResponseSchema
+		));
+		JsonNode root = parseJson(response.output());
+		JsonNode contentNode = root.get("contentMd");
+		if (contentNode == null || contentNode.isNull() || !contentNode.isTextual()) {
+			throw new KnowledgeBaseLlmOutputException("Missing contentMd", INVALID_OUTPUT);
+		}
+		String updatedContent = contentNode.asText().trim();
+		if (updatedContent.isBlank()) {
+			throw new KnowledgeBaseLlmOutputException("Empty contentMd", INVALID_OUTPUT);
+		}
+		updatedContent = stripNullChars(updatedContent);
+		updatedContent = normalizeDossierContent(updatedContent);
+		if (updatedContent.length() > maxChars) {
+			throw new KnowledgeBaseLlmOutputException("Patched dossier exceeds max length", INVALID_OUTPUT);
+		}
+		String displayName = null;
+		JsonNode displayNode = root.get("displayName");
+		if (displayNode != null && displayNode.isTextual()) {
+			displayName = trimToNull(stripNullChars(displayNode.asText()));
+		}
+		JsonNode citations = root.get("citations");
+		if (citations == null || citations.isNull() || !citations.isArray()) {
+			throw new KnowledgeBaseLlmOutputException("Missing citations", INVALID_OUTPUT);
+		}
+		JsonNode sanitizedCitations = sanitizeJsonNode(citations);
+		return new KnowledgeBaseLlmDossierDraft(updatedContent, displayName, sanitizedCitations, response.model());
 	}
 
 	@Override
@@ -1449,6 +1496,67 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			prompt.append("\nAdditional context:\n").append(trimmedContext);
 		}
 		return prompt.toString();
+	}
+
+	private String buildDossierPatchPrompt(String isin,
+									 String contentMd,
+									 JsonNode existingCitations,
+									 List<String> missingFields,
+									 String context,
+									 int maxChars) {
+		String today = LocalDate.now().toString();
+		String trimmedContext = context == null ? "" : context.trim();
+		String missingList = missingFields == null || missingFields.isEmpty()
+				? "(none)"
+				: String.join("\n", missingFields.stream().map(field -> "- " + field).toList());
+		String citationsJson = existingCitations == null ? "[]" : existingCitations.toString();
+		return """
+				You are a research assistant for financial instruments (securities).
+				Your task is to PATCH an existing dossier by filling ONLY the missing fields listed below.
+
+				Requirements:
+				- Use web research (web_search) and reliable sources appropriate for the instrument type.
+				- Only add or update content required to fill the missing fields. Do not rewrite unrelated sections.
+				- Preserve the existing structure, headings, and wording wherever possible.
+				- If a missing field cannot be verified, leave the field as "unknown" in the dossier and do not invent data.
+				- Keep the dossier under %d characters.
+				- Keep the existing citations and append new citations for any added data.
+				- Provide citations for every new data point you add.
+				- Keep the research date (%s).
+
+				Single-stock completion rules (apply when context says "Single stock: true"):
+				- If any of these fields are missing, you must fill them when sources provide values: price, pe_current, pb_current, market_cap, shares_outstanding, eps_history.
+				- Prefer local exchange data and issuer investor-relations pages first, then Yahoo Finance (local listing), StockAnalysis, CompaniesMarketCap, Macrotrends.
+				- EPS history should cover 3-7 years when available and include year, EPS value, currency, and period end.
+				- Always include as-of dates for price, P/E, and P/B when provided by the source.
+
+				ETF completion rules (apply when context says "ETF: true"):
+				- Prefer issuer factsheet, KID/KIID, or prospectus pages for TER and benchmark index.
+				- For holdings-based valuation metrics, use provider/issuer data or holdings data with coverage notes.
+
+				Retry mode (apply when context says "Retry mode: true"):
+				- Expand to alternative sources if primary sources miss required metrics.
+				- Use issuer/company domains already cited in the dossier if available.
+
+				Output format:
+				Return a single JSON object with:
+				- contentMd: string (updated Markdown dossier)
+				- displayName: string (instrument name, unchanged unless clearly incorrect)
+				- citations: JSON array of {id,title,url,publisher,accessed_at} with valid URLs
+
+				Known registry context (for disambiguation):
+				%s
+
+				Missing fields to fill:
+				%s
+
+				Existing citations (keep and append to these):
+				%s
+
+				---BEGIN DOSSIER MARKDOWN---
+				%s
+				---END DOSSIER MARKDOWN---
+				""".formatted(maxChars, today, trimmedContext, missingList, citationsJson, contentMd == null ? "" : contentMd);
 	}
 
 	private String buildAlternativesPrompt(String isin) {

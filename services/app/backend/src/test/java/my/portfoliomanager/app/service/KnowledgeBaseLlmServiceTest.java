@@ -165,11 +165,12 @@ class KnowledgeBaseLlmServiceTest {
 						    "ongoing_charges_pct": 0.2,
 						    "benchmark_index": "MSCI World"
 						  },
-						  "risk": {
-						    "summary_risk_indicator": {
-						      "value": 4
-						    }
-						  },
+					  "risk": {
+					    "summary_risk_indicator": {
+					      "value": 4
+					    },
+					    "section_present": true
+					  },
 					"regions": [],
 					"sectors": [],
 					"top_holdings": [],

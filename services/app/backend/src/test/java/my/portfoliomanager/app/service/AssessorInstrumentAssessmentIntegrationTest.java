@@ -137,7 +137,7 @@ class AssessorInstrumentAssessmentIntegrationTest {
 		assertThat(stockItem.scoreComponents())
 				.anySatisfy(component -> {
 					assertThat(component.criterion()).isEqualTo("Single-stock risk premium");
-					assertThat(component.points()).isEqualTo(15.0);
+					assertThat(component.points()).isEqualTo(25.0);
 				});
 	}
 

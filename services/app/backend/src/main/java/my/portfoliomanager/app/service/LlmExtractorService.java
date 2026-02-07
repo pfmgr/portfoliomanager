@@ -125,6 +125,7 @@ public class LlmExtractorService implements ExtractorService {
 		List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors = parseSectors(data, warnings);
 		sectors = applySingleStockSectorFallback(sectors, gicsSector, instrumentType, warnings);
 		List<InstrumentDossierExtractionPayload.HoldingPayload> topHoldings = parseTopHoldings(data, warnings);
+		topHoldings = sanitizeEtfHoldings(topHoldings, instrumentType, layer, warnings);
 		InstrumentDossierExtractionPayload.FinancialsPayload financials = parsePayload(
 				data == null ? null : data.get("financials"),
 				InstrumentDossierExtractionPayload.FinancialsPayload.class,
@@ -183,6 +184,7 @@ public class LlmExtractorService implements ExtractorService {
 					&& ("pe_current_asof".equals(item.field()) || "valuation.pe_current_asof".equals(item.field())));
 			missingFields = updatedMissing;
 		}
+		missingFields = augmentMissingFields(missingFields, valuation, instrumentType, layer);
 		missingFields = sanitizeMissingFields(missingFields, instrumentType, regions, sectors, topHoldings);
 		List<InstrumentDossierExtractionPayload.WarningPayload> llmWarnings = parseWarnings(data);
 		if (llmWarnings != null && !llmWarnings.isEmpty()) {
@@ -295,6 +297,48 @@ public class LlmExtractorService implements ExtractorService {
 		if (value == null) {
 			missing.add(new InstrumentDossierExtractionPayload.MissingFieldPayload(field, "Not found in dossier content."));
 		}
+	}
+
+	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> augmentMissingFields(
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing,
+			InstrumentDossierExtractionPayload.ValuationPayload valuation,
+			String instrumentType,
+			Integer layer) {
+		if (valuation == null) {
+			return missing;
+		}
+		boolean singleStock = isSingleStockType(instrumentType) || (layer != null && layer == 4);
+		if (!singleStock) {
+			return missing;
+		}
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> updated = missing == null
+				? new ArrayList<>()
+				: new ArrayList<>(missing);
+		updated = addMissingIfAbsent(updated, "valuation.eps_history",
+				valuation.epsHistory() == null || valuation.epsHistory().isEmpty() ? null : valuation.epsHistory());
+		updated = addMissingIfAbsent(updated, "valuation.price", valuation.price());
+		updated = addMissingIfAbsent(updated, "valuation.pe_current", valuation.peCurrent());
+		updated = addMissingIfAbsent(updated, "valuation.pb_current", valuation.pbCurrent());
+		return updated.isEmpty() ? null : updated;
+	}
+
+	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> addMissingIfAbsent(
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing,
+			String field,
+			Object value) {
+		if (value != null || field == null || field.isBlank()) {
+			return missing;
+		}
+		if (missing == null) {
+			missing = new ArrayList<>();
+		}
+		for (InstrumentDossierExtractionPayload.MissingFieldPayload item : missing) {
+			if (item != null && field.equalsIgnoreCase(item.field())) {
+				return missing;
+			}
+		}
+		missing.add(new InstrumentDossierExtractionPayload.MissingFieldPayload(field, "Not found in dossier content."));
+		return missing;
 	}
 
 	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> parseMissingFields(JsonNode data) {
@@ -806,5 +850,77 @@ public class LlmExtractorService implements ExtractorService {
 			result.add(new InstrumentDossierExtractionPayload.HoldingPayload(name, weight));
 		}
 		return result.isEmpty() ? null : result;
+	}
+
+	private List<InstrumentDossierExtractionPayload.HoldingPayload> sanitizeEtfHoldings(
+			List<InstrumentDossierExtractionPayload.HoldingPayload> holdings,
+			String instrumentType,
+			Integer layer,
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
+		if (holdings == null || holdings.isEmpty()) {
+			return holdings;
+		}
+		if (!isEtfType(instrumentType)) {
+			return holdings;
+		}
+		BigDecimal threshold = resolveEtfHoldingThreshold(holdings.size(), layer);
+		boolean hasSmall = false;
+		for (InstrumentDossierExtractionPayload.HoldingPayload holding : holdings) {
+			if (holding == null || holding.weightPct() == null) {
+				continue;
+			}
+			BigDecimal normalized = normalizeWeightValue(holding.weightPct());
+			if (normalized != null && normalized.compareTo(new BigDecimal("0.10")) <= 0) {
+				hasSmall = true;
+				break;
+			}
+		}
+		if (!hasSmall) {
+			return holdings;
+		}
+		List<InstrumentDossierExtractionPayload.HoldingPayload> sanitized = new ArrayList<>();
+		int removed = 0;
+		for (InstrumentDossierExtractionPayload.HoldingPayload holding : holdings) {
+			if (holding == null) {
+				continue;
+			}
+			BigDecimal normalized = normalizeWeightValue(holding.weightPct());
+			if (normalized != null && threshold != null && normalized.compareTo(threshold) > 0) {
+				removed++;
+				continue;
+			}
+			sanitized.add(holding);
+		}
+		if (removed > 0 && sanitized.size() >= Math.min(3, holdings.size())) {
+			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+					"Removed " + removed + " ETF top holding(s) with weight_pct > "
+							+ threshold.multiply(new BigDecimal("100")).stripTrailingZeros().toPlainString()
+							+ "% (likely extraction error)."
+			));
+			return sanitized;
+		}
+		return holdings;
+	}
+
+	private BigDecimal resolveEtfHoldingThreshold(int count, Integer layer) {
+		if (layer != null && layer == 1) {
+			return new BigDecimal("0.30");
+		}
+		if (count >= 10) {
+			return new BigDecimal("0.30");
+		}
+		if (count >= 5) {
+			return new BigDecimal("0.40");
+		}
+		return new BigDecimal("0.60");
+	}
+
+	private BigDecimal normalizeWeightValue(BigDecimal weight) {
+		if (weight == null || weight.signum() <= 0) {
+			return null;
+		}
+		return weight.compareTo(BigDecimal.ONE) > 0
+				? weight.divide(new BigDecimal("100"), 6, java.math.RoundingMode.HALF_UP)
+				: weight;
 	}
 }

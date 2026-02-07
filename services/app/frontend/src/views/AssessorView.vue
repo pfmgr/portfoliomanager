@@ -964,7 +964,7 @@ function scoreComponentEntries(components) {
       return {
         text: `${label} ${sign}${formatted}`.trim(),
         levelClass: scoreComponentLevelClass(numeric),
-        tooltip: scoreComponentTooltip(label)
+        tooltip: component?.note || scoreComponentTooltip(label)
       }
     })
     .filter((entry) => entry)
@@ -987,7 +987,12 @@ function scoreComponentTooltip(label) {
     'Region concentration': 'High single-region exposure adds penalty.',
     'Data quality': 'Missing fields and warnings add penalty (Layer 1-2 cap 10).',
     'Single-stock risk premium': 'Single stocks add +15 points.',
-    'Bad financials floor': 'Negative earnings/EBITDA forces score to cutoff.'
+    'Bad financials floor': 'Negative earnings/EBITDA forces score to cutoff.',
+    'EPS stability bonus': 'Consecutive positive EPS years reduce score.',
+    'EPS growth bonus': 'EPS CAGR reduces score.',
+    'Profitability bonus': 'High net margin reduces score.',
+    'Low leverage bonus': 'Low net-debt leverage reduces score (net debt/EBITDA or net debt/market cap).',
+    'Fair valuation bonus': 'Reasonable P/E and P/B reduce score.'
   }
   return tooltips[label] || ''
 }

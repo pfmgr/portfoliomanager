@@ -4,5 +4,6 @@ public enum KnowledgeBaseRunAction {
 	BULK_CREATE,
 	REFRESH,
 	EXTRACT,
-	ALTERNATIVES
+	ALTERNATIVES,
+	MISSING_DATA
 }

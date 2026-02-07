@@ -20,10 +20,8 @@ import com.jayway.jsonpath.JsonPath;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 
 @SpringBootTest(classes = my.portfoliomanager.app.AppApplication.class)
@@ -108,10 +106,9 @@ class AuthApiIntegrationTest {
 	}
 
 	@Test
-	void logoutEndpointReturnsUnauthorizedChallenge() throws Exception {
+	void logoutEndpointReturnsUnauthorized() throws Exception {
 		mockMvc.perform(get("/auth/logout"))
-				.andExpect(status().isUnauthorized())
-				.andExpect(header().string("WWW-Authenticate", containsString("Basic realm=\"Portfolio Admin (Logged out)\"")));
+				.andExpect(status().isUnauthorized());
 	}
 
 	@Configuration
