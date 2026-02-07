@@ -16,15 +16,17 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -95,6 +97,10 @@ class RebalancerApiIntegrationTest {
 			yaml, LocalDateTime.now(), LocalDateTime.now());
 	}
 
+	private RequestPostProcessor adminJwt() {
+		return jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+	}
+
 	@AfterEach
 	void tearDown() {
 		databaseCleaner.clean();
@@ -103,7 +109,7 @@ class RebalancerApiIntegrationTest {
 	@Test
 	void summaryEndpointReturnsAllocations() throws Exception {
 		MvcResult result = mockMvc.perform(post("/api/rebalancer/run")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.job_id").isString())
 				.andReturn();
@@ -124,13 +130,13 @@ class RebalancerApiIntegrationTest {
 				""", "{\"isin\":\"DE000C\"}", LocalDateTime.now());
 
 		MvcResult result = mockMvc.perform(post("/api/rebalancer/run")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andReturn();
 		String jobId = JsonHelper.read(result, "$.job_id").toString();
 		awaitJob(jobId);
 		mockMvc.perform(get("/api/rebalancer/run/" + jobId)
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.summary.savingPlanProposal.layerBudgets").exists())
 				.andExpect(jsonPath("$.result.summary.savingPlanProposal.gating.kbComplete").value(true))
@@ -143,19 +149,19 @@ class RebalancerApiIntegrationTest {
 		MvcResult result = mockMvc.perform(post("/api/rebalancer/run")
 						.contentType("application/json")
 						.content("{\"saveRun\":true}")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andReturn();
 		String jobId = JsonHelper.read(result, "$.job_id").toString();
 		MvcResult doneResult = awaitJob(jobId);
 		mockMvc.perform(get("/api/rebalancer/run/" + jobId)
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.saved_run.runId").isNumber())
 				.andExpect(jsonPath("$.result.saved_run.summary.savingPlanProposal").exists());
 
 		mockMvc.perform(get("/api/rebalancer/runs")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$[0].runId").isNumber());
 	}
@@ -163,7 +169,7 @@ class RebalancerApiIntegrationTest {
 	@Test
 	void reclassificationsEndpointReturnsResults() throws Exception {
 		mockMvc.perform(get("/api/rebalancer/reclassifications?minConfidence=0.0&onlyDifferent=false")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$[0].isin").value("DE000C"));
 	}
@@ -189,7 +195,7 @@ class RebalancerApiIntegrationTest {
 	private MvcResult awaitJob(String jobId) throws Exception {
 		for (int i = 0; i < 10; i++) {
 			MvcResult result = mockMvc.perform(get("/api/rebalancer/run/" + jobId)
-							.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 					.andExpect(status().isOk())
 					.andReturn();
 			String status = JsonHelper.read(result, "$.status").toString();
@@ -199,7 +205,7 @@ class RebalancerApiIntegrationTest {
 			Thread.sleep(200L);
 		}
 		return mockMvc.perform(get("/api/rebalancer/run/" + jobId)
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andReturn();
 	}

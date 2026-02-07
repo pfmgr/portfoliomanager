@@ -319,8 +319,11 @@
                 <th scope="col">Layer</th>
                 <th scope="col" class="num">
                   <span class="table-header">Score</span>
-                  <span v-if="instrumentRiskThresholdLabel" class="table-header-note">
-                    Risk bands: {{ instrumentRiskThresholdLabel }}
+                  <span v-if="instrumentRiskThresholdByLayerLabel" class="table-header-note">
+                    Risk bands (per layer): {{ instrumentRiskThresholdByLayerLabel }}. High risk is not acceptable.
+                  </span>
+                  <span v-else-if="instrumentRiskThresholdLabel" class="table-header-note">
+                    Risk bands: {{ instrumentRiskThresholdLabel }}. High risk is not acceptable.
                   </span>
                 </th>
                 <th scope="col">Score breakdown</th>
@@ -344,6 +347,7 @@
                       v-for="entry in scoreComponentEntries(row.score_components ?? row.scoreComponents)"
                       :key="entry.text"
                       :class="['score-breakdown__item', entry.levelClass]"
+                      :title="entry.tooltip || null"
                     >
                       {{ entry.text }}
                     </span>
@@ -408,6 +412,7 @@ const loading = ref(false)
 const error = ref('')
 const stale = ref(false)
 const jobState = ref(null)
+const layers = [1, 2, 3, 4, 5]
 let pollTimer = null
 
 const suggestions = computed(() => assessment.value?.saving_plan_suggestions ?? [])
@@ -449,7 +454,13 @@ const formattedInstrumentNarrative = computed(() => formatNarrative(instrumentAs
 const instrumentRiskThresholds = computed(() =>
   instrumentAssessment.value?.risk_thresholds ?? instrumentAssessment.value?.riskThresholds ?? null
 )
+const instrumentRiskThresholdsByLayer = computed(() =>
+  instrumentAssessment.value?.risk_thresholds_by_layer ?? instrumentAssessment.value?.riskThresholdsByLayer ?? null
+)
 const instrumentRiskThresholdLabel = computed(() => formatRiskThresholdLabel(instrumentRiskThresholds.value))
+const instrumentRiskThresholdByLayerLabel = computed(() =>
+  formatRiskThresholdsByLayerLabel(instrumentRiskThresholdsByLayer.value)
+)
 const oneTimeNewInstruments = computed(() => assessment.value?.one_time_allocation?.new_instruments ?? [])
 const oneTimeSuggestionSort = ref({ key: 'action', direction: 'asc' })
 const savingPlanMinimumDelta = computed(() => {
@@ -862,10 +873,28 @@ function scoreBadgeClass(row) {
     return 'ok'
   }
   const score = Number(row?.score)
-  if (!Number.isNaN(score) && score >= instrumentScoreCutoff.value) {
+  const cutoff = resolveInstrumentScoreCutoff(row?.layer)
+  if (!Number.isNaN(score) && score >= cutoff) {
     return 'warn'
   }
   return 'ok'
+}
+
+function resolveInstrumentScoreCutoff(layer) {
+  const thresholdsByLayer = instrumentRiskThresholdsByLayer.value
+  if (thresholdsByLayer && layer != null) {
+    const entry = thresholdsByLayer[layer]
+    const highMin = Number(entry?.highMin ?? entry?.high_min)
+    if (Number.isFinite(highMin)) {
+      return highMin
+    }
+  }
+  const thresholds = instrumentRiskThresholds.value
+  const fallbackHigh = Number(thresholds?.highMin ?? thresholds?.high_min)
+  if (Number.isFinite(fallbackHigh)) {
+    return fallbackHigh
+  }
+  return instrumentScoreCutoff.value
 }
 
 function normalizeRiskCategory(value) {
@@ -875,7 +904,7 @@ function normalizeRiskCategory(value) {
   return String(value).trim().toLowerCase()
 }
 
-function formatRiskThresholdLabel(thresholds) {
+function formatRiskThresholdLabel(thresholds, compact = false) {
   if (!thresholds) {
     return ''
   }
@@ -884,12 +913,38 @@ function formatRiskThresholdLabel(thresholds) {
   if (!Number.isFinite(lowMax) || !Number.isFinite(highMin)) {
     return ''
   }
-  const mediumMin = Math.min(100, lowMax + 1)
-  const mediumMax = Math.max(0, highMin - 1)
-  if (mediumMax < mediumMin) {
-    return `Low <= ${lowMax}, High >= ${highMin}`
+  const lowLabel = formatScoreValue(lowMax)
+  const highLabel = formatScoreValue(highMin)
+  if (compact) {
+    return `Low <= ${lowLabel}, High >= ${highLabel}`
   }
-  return `Low <= ${lowMax}, Medium ${mediumMin}-${mediumMax}, High >= ${highMin}`
+  return `Low <= ${lowLabel}, Medium between ${lowLabel}–${highLabel}, High >= ${highLabel}`
+}
+
+function formatRiskThresholdsByLayerLabel(thresholdsByLayer) {
+  if (!thresholdsByLayer) {
+    return ''
+  }
+  const entries = []
+  layers.forEach((layer) => {
+    const entry = thresholdsByLayer[layer]
+    const label = formatRiskThresholdLabel(entry)
+    if (label) {
+      entries.push(`L${layer}: ${label}`)
+    }
+  })
+  return entries.join(' · ')
+}
+
+function formatScoreValue(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return ''
+  }
+  if (Number.isInteger(numeric)) {
+    return `${numeric}`
+  }
+  return numeric.toFixed(1)
 }
 
 function scoreComponentEntries(components) {
@@ -908,10 +963,38 @@ function scoreComponentEntries(components) {
       const sign = numeric > 0 ? '+' : numeric < 0 ? '-' : ''
       return {
         text: `${label} ${sign}${formatted}`.trim(),
-        levelClass: scoreComponentLevelClass(numeric)
+        levelClass: scoreComponentLevelClass(numeric),
+        tooltip: component?.note || scoreComponentTooltip(label)
       }
     })
     .filter((entry) => entry)
+}
+
+function scoreComponentTooltip(label) {
+  if (!label) {
+    return ''
+  }
+  const tooltips = {
+    'Risk indicator missing': 'Missing SRI in Layers 1-3 adds +5 points (+2 if Risk section exists).',
+    'Risk indicator': 'SRI above 3 adds +8 points per step.',
+    'TER': 'Layer-based TER bands; penalties only for above-average costs.',
+    'P/E': 'High P/E adds penalty at 30/40/60+.',
+    'P/E (PEG-adjusted)': 'High P/E penalty reduced when EPS CAGR implies low PEG.',
+    'EV/EBITDA': 'High EV/EBITDA adds penalty at 20/30+.',
+    'P/B': 'High P/B adds penalty at 4/8+.',
+    'Earnings yield': 'Low earnings yield adds penalty below 3%/2%.',
+    'Top holdings concentration': 'Top holding and top-3 weights add penalty (Layer 3 reduced by 50%).',
+    'Region concentration': 'High single-region exposure adds penalty.',
+    'Data quality': 'Missing fields and warnings add penalty (Layer 1-2 cap 10).',
+    'Single-stock risk premium': 'Single stocks add +15 points.',
+    'Bad financials floor': 'Negative earnings/EBITDA forces score to cutoff.',
+    'EPS stability bonus': 'Consecutive positive EPS years reduce score.',
+    'EPS growth bonus': 'EPS CAGR reduces score.',
+    'Profitability bonus': 'High net margin reduces score.',
+    'Low leverage bonus': 'Low net-debt leverage reduces score (net debt/EBITDA or net debt/market cap).',
+    'Fair valuation bonus': 'Reasonable P/E and P/B reduce score.'
+  }
+  return tooltips[label] || ''
 }
 
 function scoreComponentLevelClass(value) {

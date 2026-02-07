@@ -223,10 +223,21 @@ public class KnowledgeBaseController {
 	@PostMapping("/dossiers/{id:\\d+}/extract")
 	@Operation(summary = "Run extraction for dossier")
 	public KnowledgeBaseLlmActionDto runExtraction(@PathVariable("id") Long dossierId,
-												   Principal principal) {
+								   Principal principal) {
 		availabilityService.assertAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		return actionService.startExtraction(dossierId, actor, KnowledgeBaseLlmActionTrigger.USER);
+	}
+
+	@PostMapping("/dossiers/{isin:[A-Z0-9]{12}}/missing-data")
+	@Operation(summary = "Fill missing dossier data for ISIN")
+	public KnowledgeBaseLlmActionDto fillMissingData(@PathVariable("isin") String isin,
+									@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
+									Principal principal) {
+		availabilityService.assertAvailable();
+		String actor = principal == null ? "system" : principal.getName();
+		Boolean autoApprove = request == null ? null : request.autoApprove();
+		return actionService.startMissingDataFill(isin, actor, autoApprove, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
 	@GetMapping("/dossiers/{id:\\d+}/extractions")

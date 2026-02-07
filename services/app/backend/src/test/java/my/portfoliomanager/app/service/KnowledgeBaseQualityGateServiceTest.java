@@ -310,10 +310,15 @@ class KnowledgeBaseQualityGateServiceTest {
 				instrumentType,
 				null,
 				null,
+				null,
+				null,
+				null,
+				null,
 				layer,
 				null,
 				etf,
 				risk,
+				null,
 				null,
 				null,
 				financials,
@@ -428,7 +433,8 @@ class KnowledgeBaseQualityGateServiceTest {
 
 	private InstrumentDossierExtractionPayload.RiskPayload risk(int sri) {
 		return new InstrumentDossierExtractionPayload.RiskPayload(
-				new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(sri)
+				new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(sri),
+				null
 		);
 	}
 

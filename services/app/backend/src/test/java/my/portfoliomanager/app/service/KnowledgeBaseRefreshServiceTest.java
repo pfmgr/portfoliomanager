@@ -34,6 +34,9 @@ class KnowledgeBaseRefreshServiceTest {
 	private KnowledgeBaseService knowledgeBaseService;
 
 	@Mock
+	private KnowledgeBaseMaintenanceService maintenanceService;
+
+	@Mock
 	private KnowledgeBaseRunService runService;
 
 	@Mock
@@ -45,6 +48,7 @@ class KnowledgeBaseRefreshServiceTest {
 				configService,
 				llmClient,
 				knowledgeBaseService,
+				maintenanceService,
 				runService,
 				dossierRepository
 		);
@@ -69,6 +73,7 @@ class KnowledgeBaseRefreshServiceTest {
 				configService,
 				llmClient,
 				knowledgeBaseService,
+				maintenanceService,
 				runService,
 				dossierRepository
 		);
@@ -93,6 +98,7 @@ class KnowledgeBaseRefreshServiceTest {
 				configService,
 				llmClient,
 				knowledgeBaseService,
+				maintenanceService,
 				runService,
 				dossierRepository
 		);

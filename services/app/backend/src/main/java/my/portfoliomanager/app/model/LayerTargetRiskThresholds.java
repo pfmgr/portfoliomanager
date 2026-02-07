@@ -6,6 +6,6 @@ import lombok.Getter;
 @Getter
 @AllArgsConstructor
 public class LayerTargetRiskThresholds {
-	private final Integer lowMax;
-	private final Integer highMin;
+	private final Double lowMax;
+	private final Double highMin;
 }

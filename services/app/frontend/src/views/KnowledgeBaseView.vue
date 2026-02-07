@@ -341,6 +341,14 @@
                   >
                     Run extraction
                   </button>
+                  <button
+                    class="ghost"
+                    type="button"
+                    :disabled="!dossierDetail.latestDossier.dossierId || isIsinBusy(dossierDetail.isin)"
+                    @click="fillMissingData"
+                  >
+                    Fill missing data
+                  </button>
                   <button class="ghost" type="button" :disabled="!canApproveExtraction" @click="approveExtraction">
                     Approve extraction
                   </button>
@@ -354,7 +362,8 @@
                 <p v-if="extractionError" class="toast error">{{ extractionError }}</p>
                 <p v-if="isIsinBusy(dossierDetail.isin)" class="hint">LLM action already running for this ISIN.</p>
                 <p v-if="extractionAction" class="hint">
-                  Extraction action {{ formatActionStatus(extractionAction.status) }}: {{ extractionAction.message || '-' }}
+                  {{ formatActionType(extractionAction.type) }} action {{ formatActionStatus(extractionAction.status) }}:
+                  {{ extractionAction.message || '-' }}
                 </p>
 
                 <div v-if="latestExtraction">
@@ -2044,6 +2053,24 @@ async function runExtraction() {
   }
 }
 
+async function fillMissingData() {
+  if (!dossierDetail.value) return
+  if (isIsinBusy(dossierDetail.value.isin)) {
+    extractionError.value = 'LLM action already running for this ISIN.'
+    return
+  }
+  extractionError.value = ''
+  try {
+    const result = await apiRequest(`/kb/dossiers/${encodeURIComponent(dossierDetail.value.isin)}/missing-data`, {
+      method: 'POST'
+    })
+    extractionActionId.value = result.actionId
+    await loadLlmActions(true)
+  } catch (err) {
+    extractionError.value = err?.message || 'Missing data fill failed'
+  }
+}
+
 async function approveExtraction() {
   if (!latestExtraction.value) return
   extractionError.value = ''
@@ -2430,10 +2457,11 @@ async function handleRefreshActionResult(detail) {
 }
 
 async function handleExtractionActionResult(detail) {
+  const actionLabel = detail?.type === 'MISSING_DATA' ? 'Missing data fill' : 'Extraction'
   if (detail.status === 'FAILED') {
-    extractionError.value = detail.message || 'Extraction failed'
+    extractionError.value = detail.message || `${actionLabel} failed`
   } else if (detail.status === 'CANCELED') {
-    extractionError.value = 'Extraction canceled'
+    extractionError.value = `${actionLabel} canceled`
   } else {
     extractionError.value = ''
   }
@@ -2653,6 +2681,8 @@ function formatActionType(type) {
       return 'Extraction'
     case 'REFRESH':
       return 'Refresh'
+    case 'MISSING_DATA':
+      return 'Missing data'
     default:
       return type
   }

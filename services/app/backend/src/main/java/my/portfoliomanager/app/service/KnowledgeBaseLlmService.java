@@ -127,13 +127,17 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			  "$schema": "https://json-schema.org/draft/2020-12/schema",
 			  "type": "object",
 			  "additionalProperties": false,
-		  "required": ["isin","name","instrument_type","asset_class","sub_class","layer","layer_notes","etf","risk","regions","top_holdings","financials","valuation","missing_fields","warnings"],
+		  "required": ["isin","name","instrument_type","asset_class","sub_class","gics_sector","gics_industry_group","gics_industry","gics_sub_industry","layer","layer_notes","etf","risk","regions","sectors","top_holdings","financials","valuation","missing_fields","warnings"],
 			  "properties": {
 			    "isin": { "type": ["string","null"] },
 			    "name": { "type": ["string","null"] },
 			    "instrument_type": { "type": ["string","null"] },
 			    "asset_class": { "type": ["string","null"] },
-			    "sub_class": { "type": ["string","null"] },
+		    "sub_class": { "type": ["string","null"] },
+		    "gics_sector": { "type": ["string","null"] },
+		    "gics_industry_group": { "type": ["string","null"] },
+		    "gics_industry": { "type": ["string","null"] },
+		    "gics_sub_industry": { "type": ["string","null"] },
 			    "layer": { "type": ["integer","null"] },
 			    "layer_notes": { "type": ["string","null"] },
 			    "etf": {
@@ -150,43 +154,56 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			        }
 			      ]
 			    },
-			    "risk": {
-			      "anyOf": [
-			        { "type": "null" },
-			        {
-			          "type": "object",
-			          "additionalProperties": false,
-			          "required": ["summary_risk_indicator"],
-			          "properties": {
-			            "summary_risk_indicator": {
-			              "anyOf": [
-			                { "type": "null" },
-			                {
-			                  "type": "object",
-			                  "additionalProperties": false,
-			                  "required": ["value"],
-			                  "properties": {
-			                    "value": { "type": ["integer","null"] }
-			                  }
-			                }
-			              ]
-			            }
-			          }
-			        }
-			      ]
-			    },
-			    "regions": {
-			      "type": ["array","null"],
-			      "items": {
+			  "risk": {
+			    "anyOf": [
+			      { "type": "null" },
+			      {
 			        "type": "object",
 			        "additionalProperties": false,
-			        "required": ["name","weight_pct"],
+			        "required": ["summary_risk_indicator", "section_present"],
 			        "properties": {
-			          "name": { "type": ["string","null"] },
-			          "weight_pct": { "type": ["number","null"] }
+			          "summary_risk_indicator": {
+			            "anyOf": [
+			              { "type": "null" },
+			              {
+			                "type": "object",
+			                "additionalProperties": false,
+			                "required": ["value"],
+			                "properties": {
+			                  "value": { "type": ["integer","null"] }
+			                }
+			              }
+			            ]
+			          },
+			          "section_present": { "type": ["boolean","null"] }
 			        }
 			      }
-			    },
+			    ]
+			  },
+		    "regions": {
+		      "type": ["array","null"],
+		      "items": {
+		        "type": "object",
+		        "additionalProperties": false,
+		        "required": ["name","weight_pct"],
+		        "properties": {
+		          "name": { "type": ["string","null"] },
+		          "weight_pct": { "type": ["number","null"] }
+		        }
+		      }
+		    },
+		    "sectors": {
+		      "type": ["array","null"],
+		      "items": {
+		        "type": "object",
+		        "additionalProperties": false,
+		        "required": ["name","weight_pct"],
+		        "properties": {
+		          "name": { "type": ["string","null"] },
+		          "weight_pct": { "type": ["number","null"] }
+		        }
+		      }
+		    },
 		    "top_holdings": {
 		      "type": ["array","null"],
 		      "items": {
@@ -428,9 +445,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 
 	@Override
 	public KnowledgeBaseLlmDossierDraft generateDossier(String isin,
-														 String context,
-														 List<String> allowedDomains,
-														 int maxChars) {
+									 String context,
+									 List<String> allowedDomains,
+									 int maxChars) {
 		String normalizedIsin = normalizeIsin(isin);
 		String prompt = buildDossierPrompt(normalizedIsin, context, maxChars);
 		String validatedPrompt = enforcePromptPolicy(prompt, LlmPromptPurpose.KB_DOSSIER_WEBSEARCH);
@@ -473,6 +490,53 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		}
 		JsonNode sanitizedCitations = sanitizeJsonNode(citations);
 		return new KnowledgeBaseLlmDossierDraft(contentMd, displayName, sanitizedCitations, response.model());
+	}
+
+	@Override
+	public KnowledgeBaseLlmDossierDraft patchDossierMissingFields(String isin,
+									 String contentMd,
+									 JsonNode existingCitations,
+									 List<String> missingFields,
+									 String context,
+									 List<String> allowedDomains,
+									 int maxChars) {
+		String normalizedIsin = normalizeIsin(isin);
+		String prompt = buildDossierPatchPrompt(normalizedIsin, contentMd, existingCitations, missingFields, context, maxChars);
+		String validatedPrompt = enforcePromptPolicy(prompt, LlmPromptPurpose.KB_DOSSIER_PATCH);
+		logger.debug("Sending dossier patch websearch prompt (chars={}).", validatedPrompt.length());
+		String reasoningEffort = configService.getSnapshot().websearchReasoningEffort();
+		KnowledgeBaseLlmResponse response = withRetry(() -> llmProvider.runWebSearch(
+				validatedPrompt,
+				allowedDomains,
+				reasoningEffort,
+				"kb_dossier_patch_websearch",
+				dossierResponseSchema
+		));
+		JsonNode root = parseJson(response.output());
+		JsonNode contentNode = root.get("contentMd");
+		if (contentNode == null || contentNode.isNull() || !contentNode.isTextual()) {
+			throw new KnowledgeBaseLlmOutputException("Missing contentMd", INVALID_OUTPUT);
+		}
+		String updatedContent = contentNode.asText().trim();
+		if (updatedContent.isBlank()) {
+			throw new KnowledgeBaseLlmOutputException("Empty contentMd", INVALID_OUTPUT);
+		}
+		updatedContent = stripNullChars(updatedContent);
+		updatedContent = normalizeDossierContent(updatedContent);
+		if (updatedContent.length() > maxChars) {
+			throw new KnowledgeBaseLlmOutputException("Patched dossier exceeds max length", INVALID_OUTPUT);
+		}
+		String displayName = null;
+		JsonNode displayNode = root.get("displayName");
+		if (displayNode != null && displayNode.isTextual()) {
+			displayName = trimToNull(stripNullChars(displayNode.asText()));
+		}
+		JsonNode citations = root.get("citations");
+		if (citations == null || citations.isNull() || !citations.isArray()) {
+			throw new KnowledgeBaseLlmOutputException("Missing citations", INVALID_OUTPUT);
+		}
+		JsonNode sanitizedCitations = sanitizeJsonNode(citations);
+		return new KnowledgeBaseLlmDossierDraft(updatedContent, displayName, sanitizedCitations, response.model());
 	}
 
 	@Override
@@ -1305,6 +1369,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Secondary sources (e.g., justETF/ETF.com) are acceptable when primary sources are unavailable for the instrument type.
 				- Do not fail solely because primary sources are unavailable; if the instrument type cannot be confirmed, proceed with secondary sources and mark instrument_type as unknown.
 				- For single stocks/REITs, market-data sources are acceptable and required for valuation metrics (price, P/E, P/B, market cap, EPS history) when issuer pages do not list them. Do not omit valuation metrics just because they are not on issuer pages.
+				- Disambiguation: verify the ISIN matches the instrument name using at least one citation that explicitly lists the ISIN and issuer/instrument name. If you encounter a name mismatch, keep searching; do not mix results between ISINs.
 				- Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
 				- Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
 				- Include the research date (%s) and, if available, the “data as of” date for key metrics (factsheet date, holdings date).
@@ -1321,8 +1386,8 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				
 				The Markdown dossier must follow:
 				# <ISIN> — <Name>
-                ## Quick profile (table)
-                ## Classification (instrument type, asset class, subclass, suggested layer per Core/Satellite)
+				## Quick profile (table)
+				## Classification (instrument type, asset class, subclass, GICS sector/industry group/industry/sub-industry for single stocks/REITs, suggested layer per Core/Satellite)
                 ## Risk (SRI and notes)
                 ## Costs & structure (TER, replication, domicile, distribution, currency if relevant)
                 ## Exposures (regions, sectors, top holdings/top-10, benchmark/index)
@@ -1333,9 +1398,12 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 Additional requirements:
                 - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.
                 - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
-                - For exposures, provide region and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
-                - In the Exposures section, do not include valuation/template fields (e.g., holdings_weight_method, pe_method, pe_horizon); keep it to regions, sectors, holdings, and benchmark only.
-                - If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
+				- For exposures, provide region and sector weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
+				- Use GICS sector names for sector exposures whenever possible. For single stocks/REITs, if no sector weights are available, include a single sector exposure with the GICS sector at 100%%.
+				- For ETFs/funds, include a sector allocation table (GICS sectors with weights) using issuer factsheets or index providers (MSCI, S&P, FTSE Russell, Qontigo). If issuer/index data is missing, use reputable ETF databases (justETF/ETFdb).
+				- In the Exposures section, do not include valuation/template fields (e.g., holdings_weight_method, pe_method, pe_horizon); keep it to regions, sectors, holdings, and benchmark only.
+				- If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
+				- Always include the ## Risk section. For single stocks/REITs, if no SRI exists, set "SRI: unknown" and add a brief risk note; do not omit the section.
                 - Keep contentMd under %d characters.
                 - Single Stocks should always be classified as layer 4= Single Stock. REITs are single stocks unless explicitly a fund/ETF; classify REIT equities as layer 4.
                 - To qualify as Layer 1 = Global-Core, an instrument must be an ETF or fund that diversifies across industries and themes worldwide, but not only across individual countries and continents. World wide diversified Core-Umbrella fonds, Core-Multi Asset-ETFs and/or Bond-ETFs are allowed in this layer, too.
@@ -1430,6 +1498,67 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		return prompt.toString();
 	}
 
+	private String buildDossierPatchPrompt(String isin,
+									 String contentMd,
+									 JsonNode existingCitations,
+									 List<String> missingFields,
+									 String context,
+									 int maxChars) {
+		String today = LocalDate.now().toString();
+		String trimmedContext = context == null ? "" : context.trim();
+		String missingList = missingFields == null || missingFields.isEmpty()
+				? "(none)"
+				: String.join("\n", missingFields.stream().map(field -> "- " + field).toList());
+		String citationsJson = existingCitations == null ? "[]" : existingCitations.toString();
+		return """
+				You are a research assistant for financial instruments (securities).
+				Your task is to PATCH an existing dossier by filling ONLY the missing fields listed below.
+
+				Requirements:
+				- Use web research (web_search) and reliable sources appropriate for the instrument type.
+				- Only add or update content required to fill the missing fields. Do not rewrite unrelated sections.
+				- Preserve the existing structure, headings, and wording wherever possible.
+				- If a missing field cannot be verified, leave the field as "unknown" in the dossier and do not invent data.
+				- Keep the dossier under %d characters.
+				- Keep the existing citations and append new citations for any added data.
+				- Provide citations for every new data point you add.
+				- Keep the research date (%s).
+
+				Single-stock completion rules (apply when context says "Single stock: true"):
+				- If any of these fields are missing, you must fill them when sources provide values: price, pe_current, pb_current, market_cap, shares_outstanding, eps_history.
+				- Prefer local exchange data and issuer investor-relations pages first, then Yahoo Finance (local listing), StockAnalysis, CompaniesMarketCap, Macrotrends.
+				- EPS history should cover 3-7 years when available and include year, EPS value, currency, and period end.
+				- Always include as-of dates for price, P/E, and P/B when provided by the source.
+
+				ETF completion rules (apply when context says "ETF: true"):
+				- Prefer issuer factsheet, KID/KIID, or prospectus pages for TER and benchmark index.
+				- For holdings-based valuation metrics, use provider/issuer data or holdings data with coverage notes.
+
+				Retry mode (apply when context says "Retry mode: true"):
+				- Expand to alternative sources if primary sources miss required metrics.
+				- Use issuer/company domains already cited in the dossier if available.
+
+				Output format:
+				Return a single JSON object with:
+				- contentMd: string (updated Markdown dossier)
+				- displayName: string (instrument name, unchanged unless clearly incorrect)
+				- citations: JSON array of {id,title,url,publisher,accessed_at} with valid URLs
+
+				Known registry context (for disambiguation):
+				%s
+
+				Missing fields to fill:
+				%s
+
+				Existing citations (keep and append to these):
+				%s
+
+				---BEGIN DOSSIER MARKDOWN---
+				%s
+				---END DOSSIER MARKDOWN---
+				""".formatted(maxChars, today, trimmedContext, missingList, citationsJson, contentMd == null ? "" : contentMd);
+	}
+
 	private String buildAlternativesPrompt(String isin) {
 		String today = LocalDate.now().toString();
 		return """
@@ -1481,6 +1610,8 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- etf.ongoing_charges_pct is a number in percent units (e.g., 0.20 for 0.20%%). Strip "%%" if present.
 				- If both ETF fields are null, set "etf" to null. If the risk indicator is null, set "risk" to null.
 				- regions is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
+				- sectors is an array of { name, weight_pct } with weights in percent (0..100), using GICS sector names. Use null if unavailable.
+				- gics_* fields use official GICS labels when present in the dossier.
 				- top_holdings is an array of { name, weight_pct } with weights in percent (0..100). Use null if unavailable.
 				- If a numeric value is given as a range (e.g., 19-20), use the midpoint and add a warning message (e.g., "Used midpoint for range: pe_current 19-20").
 				- If a range spans multiple dates, use the latest as-of date for *_asof and mention that in warnings.
@@ -1515,11 +1646,16 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- instrument_type
 				- asset_class
 				- sub_class
+				- gics_sector
+				- gics_industry_group
+				- gics_industry
+				- gics_sub_industry
 				- layer
 				- layer_notes
 				- etf: { ongoing_charges_pct, benchmark_index } | null
 				- risk: { summary_risk_indicator: { value } } | null
 				- regions
+				- sectors
 				- top_holdings
 				- financials: {
 				    revenue, revenue_currency, revenue_eur, revenue_period_end, revenue_period_type,

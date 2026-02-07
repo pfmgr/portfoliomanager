@@ -21,6 +21,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.util.Map;
 import java.util.List;
 import java.util.UUID;
 
@@ -82,7 +83,8 @@ class AdvisorServiceInstrumentTotalsTest {
 						ArgumentMatchers.<Integer>any(),
 						ArgumentMatchers.<Integer>any(),
 						Mockito.anyBoolean(),
-						ArgumentMatchers.<LayerTargetRiskThresholds>any()))
+						ArgumentMatchers.<LayerTargetRiskThresholds>any(),
+						ArgumentMatchers.<Map<Integer, LayerTargetRiskThresholds>>any()))
 				.thenReturn(result);
 	}
 

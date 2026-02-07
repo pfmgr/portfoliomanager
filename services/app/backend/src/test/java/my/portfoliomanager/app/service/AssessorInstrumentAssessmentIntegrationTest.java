@@ -137,7 +137,7 @@ class AssessorInstrumentAssessmentIntegrationTest {
 		assertThat(stockItem.scoreComponents())
 				.anySatisfy(component -> {
 					assertThat(component.criterion()).isEqualTo("Single-stock risk premium");
-					assertThat(component.points()).isEqualTo(15.0);
+					assertThat(component.points()).isEqualTo(25.0);
 				});
 	}
 
@@ -188,13 +188,19 @@ class AssessorInstrumentAssessmentIntegrationTest {
 				"ETF",
 				"Equity",
 				"global equity",
+				null,
+				null,
+				null,
+				null,
 				1,
 				"core",
 				new InstrumentDossierExtractionPayload.EtfPayload(new BigDecimal("0.18"), "MSCI World"),
-				new InstrumentDossierExtractionPayload.RiskPayload(
-						new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(3)
-				),
+			new InstrumentDossierExtractionPayload.RiskPayload(
+					new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(3),
+					null
+			),
 				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				null,
 				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5"))),
 				null,
 				null,
@@ -213,8 +219,13 @@ class AssessorInstrumentAssessmentIntegrationTest {
 				instrumentType,
 				"Equity",
 				null,
+				null,
+				null,
+				null,
+				null,
 				layer,
 				layerNotes,
+				null,
 				null,
 				null,
 				null,

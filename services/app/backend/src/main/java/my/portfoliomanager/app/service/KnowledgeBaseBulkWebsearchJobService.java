@@ -154,12 +154,31 @@ public class KnowledgeBaseBulkWebsearchJobService {
 
 		for (KnowledgeBaseService.BulkWebsearchDraftItem item : drafts.items()) {
 			if (item.error() != null && !item.error().isBlank()) {
-				completedItems.add(new InstrumentDossierBulkWebsearchItemDto(
-						item.isin(),
-						InstrumentDossierBulkWebsearchItemStatus.FAILED,
-						null,
-						item.error()
-				));
+				try {
+					logger.info("Fallback to single websearch for ISIN {} after bulk error", item.isin());
+					var singleDraft = knowledgeBaseService.createDossierDraftViaWebsearch(item.isin());
+					KnowledgeBaseService.DossierUpsertResult upsert = knowledgeBaseService.upsertDossierFromWebsearchDraft(
+							item.isin(),
+							singleDraft.contentMd(),
+							singleDraft.displayName(),
+							singleDraft.citations(),
+							job.createdBy
+					);
+					completedItems.add(new InstrumentDossierBulkWebsearchItemDto(
+							item.isin(),
+							upsert.created() ? InstrumentDossierBulkWebsearchItemStatus.CREATED : InstrumentDossierBulkWebsearchItemStatus.UPDATED,
+							upsert.dossier().dossierId(),
+							null
+					));
+				} catch (Exception ex) {
+					String message = ex.getMessage();
+					completedItems.add(new InstrumentDossierBulkWebsearchItemDto(
+							item.isin(),
+							InstrumentDossierBulkWebsearchItemStatus.FAILED,
+							null,
+							message == null || message.isBlank() ? ex.getClass().getSimpleName() : message
+					));
+				}
 				continue;
 			}
 			try {

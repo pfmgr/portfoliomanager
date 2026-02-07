@@ -559,9 +559,13 @@ public class AdvisorService {
 		Map<Integer, Double> targetDistributionPct = toPercentageMap(targetWeights);
 
 		List<SavingPlanInstrument> savingPlanInstruments = loadSavingPlanInstruments();
+		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(targetConfig);
+		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer =
+				resolveRiskThresholdsByLayer(targetConfig, riskThresholds);
 		InstrumentRebalanceService.InstrumentProposalResult instrumentResult = instrumentRebalanceService
 				.buildInstrumentProposals(savingPlanInstruments, proposalAmounts, targetConfig.minimumSavingPlanSize(),
-						targetConfig.minimumRebalancingAmount(), effectiveWithinTolerance, resolveRiskThresholds(targetConfig));
+						targetConfig.minimumRebalancingAmount(), effectiveWithinTolerance, riskThresholds,
+						riskThresholdsByLayer);
 		List<InstrumentProposalDto> instrumentProposals = instrumentResult == null
 				? new ArrayList<>()
 				: new ArrayList<>(instrumentResult.proposals());
@@ -1358,6 +1362,8 @@ public class AdvisorService {
 			return List.of();
 		}
 		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(targetConfig);
+		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer =
+				resolveRiskThresholdsByLayer(targetConfig, riskThresholds);
 		int minSaving = targetConfig == null || targetConfig.minimumSavingPlanSize() == null
 				? 1
 				: targetConfig.minimumSavingPlanSize();
@@ -1393,7 +1399,8 @@ public class AdvisorService {
 					maxSavingPlans,
 					Set.of(),
 					AssessorGapDetectionPolicy.SAVING_PLAN_GAPS,
-					riskThresholds
+					riskThresholds,
+					riskThresholdsByLayer
 				)
 		);
 		if (suggestions == null || suggestions.savingPlanSuggestions().isEmpty()) {
@@ -1449,17 +1456,19 @@ public class AdvisorService {
 			return;
 		}
 		LayerTargetRiskThresholds thresholds = resolveRiskThresholds(targetConfig);
+		Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer =
+				resolveRiskThresholdsByLayer(targetConfig, thresholds);
 		Map<String, Integer> scores = instrumentAssessmentService.assessScores(
 				savingPlanInstruments.stream()
 						.filter(instrument -> instrument != null && instrument.isin() != null)
 						.map(instrument -> normalizeIsin(instrument.isin()))
 						.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)),
-				thresholds
+				thresholds,
+				thresholdsByLayer
 		);
 		if (scores.isEmpty()) {
 			return;
 		}
-		int cutoff = thresholds.getHighMin();
 		Set<String> warned = new LinkedHashSet<>();
 		for (SavingPlanInstrument instrument : savingPlanInstruments) {
 			if (instrument == null || instrument.isin() == null) {
@@ -1470,12 +1479,15 @@ public class AdvisorService {
 				continue;
 			}
 			Integer score = scores.get(isin);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, thresholds, instrument.layer());
+			double cutoff = layerThresholds.getHighMin();
 			if (score != null && score >= cutoff) {
 				String name = instrument.name() == null || instrument.name().isBlank() ? isin : instrument.name();
 				warningDetails.add(new InstrumentRebalanceService.InstrumentWarning(
 						WARNING_RISK_NOT_ACCEPTABLE,
 						String.format("Instrument %s (%s) exceeds acceptable risk for the profile (score %d >= %d).",
-								name, isin, score, cutoff),
+								name, isin, score, (int) Math.ceil(cutoff)),
 						instrument.layer()
 				));
 				warned.add(isin);
@@ -1507,6 +1519,16 @@ public class AdvisorService {
 			thresholds = targetConfig.selectedProfile().getRiskThresholds();
 		}
 		return RiskThresholdsUtil.normalize(thresholds);
+	}
+
+	private Map<Integer, LayerTargetRiskThresholds> resolveRiskThresholdsByLayer(
+			LayerTargetEffectiveConfig targetConfig,
+			LayerTargetRiskThresholds fallback) {
+		Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer = null;
+		if (targetConfig != null && targetConfig.selectedProfile() != null) {
+			thresholdsByLayer = targetConfig.selectedProfile().getRiskThresholdsByLayer();
+		}
+		return RiskThresholdsUtil.normalizeByLayer(thresholdsByLayer, fallback);
 	}
 
 	private List<String> buildToleranceNotes(boolean withinTolerance, BigDecimal variancePct) {

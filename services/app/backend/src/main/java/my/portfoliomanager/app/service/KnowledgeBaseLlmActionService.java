@@ -186,8 +186,8 @@ public class KnowledgeBaseLlmActionService {
 	}
 
 	public KnowledgeBaseLlmActionDto startExtraction(Long dossierId,
-													 String actor,
-													 KnowledgeBaseLlmActionTrigger trigger) {
+									 String actor,
+									 KnowledgeBaseLlmActionTrigger trigger) {
 		InstrumentDossier dossier = dossierRepository.findById(dossierId)
 				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Dossier not found"));
 		String isin = dossier.getIsin();
@@ -203,6 +203,26 @@ public class KnowledgeBaseLlmActionService {
 		actions.put(state.actionId, state);
 		state.message = "Queued extraction";
 		state.future = executor.submit(() -> runExtraction(state, dossierId, actor));
+		return toDto(state, false);
+	}
+
+	public KnowledgeBaseLlmActionDto startMissingDataFill(String isin,
+									 String actor,
+									 Boolean autoApprove,
+									 KnowledgeBaseLlmActionTrigger trigger) {
+		String normalized = normalizeIsin(isin);
+		cleanupExpired();
+		ensureNotActive(List.of(normalized));
+		Set<String> activeSet = ConcurrentHashMap.newKeySet();
+		activeSet.add(normalized);
+		LlmActionState state = new LlmActionState(UUID.randomUUID().toString(),
+				KnowledgeBaseLlmActionType.MISSING_DATA,
+				trigger,
+				List.of(normalized),
+				activeSet);
+		actions.put(state.actionId, state);
+		state.message = "Queued missing data fill";
+		state.future = executor.submit(() -> runMissingDataFill(state, normalized, autoApprove, actor));
 		return toDto(state, false);
 	}
 
@@ -391,6 +411,35 @@ public class KnowledgeBaseLlmActionService {
 			} else {
 				state.status = KnowledgeBaseLlmActionStatus.DONE;
 				state.message = "Extraction completed";
+			}
+		} catch (CancellationException ex) {
+			state.status = KnowledgeBaseLlmActionStatus.CANCELED;
+			state.message = "Canceled";
+		} catch (Exception ex) {
+			state.status = KnowledgeBaseLlmActionStatus.FAILED;
+			state.message = failWithReference(state, ex);
+		} finally {
+			state.updatedAt = LocalDateTime.now();
+			concurrency.release();
+		}
+	}
+
+	private void runMissingDataFill(LlmActionState state, String isin, Boolean autoApprove, String actor) {
+		if (!acquireSlot(state)) {
+			return;
+		}
+		try {
+			state.status = KnowledgeBaseLlmActionStatus.RUNNING;
+			state.message = "Filling missing data";
+			state.updatedAt = LocalDateTime.now();
+			InstrumentDossierExtractionResponseDto extraction = maintenanceService.fillMissingData(isin, autoApprove, actor);
+			state.extractionResult = extraction;
+			if (extraction.status() == DossierExtractionStatus.FAILED) {
+				state.status = KnowledgeBaseLlmActionStatus.FAILED;
+				state.message = failWithReference(state, extraction.error());
+			} else {
+				state.status = KnowledgeBaseLlmActionStatus.DONE;
+				state.message = "Missing data fill completed";
 			}
 		} catch (CancellationException ex) {
 			state.status = KnowledgeBaseLlmActionStatus.CANCELED;
