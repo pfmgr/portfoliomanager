@@ -17,13 +17,23 @@ import java.util.regex.Pattern;
 @Service
 public class KnowledgeBaseQualityGateService {
 	private static final List<SectionRequirement> REQUIRED_SECTIONS = List.of(
-			new SectionRequirement("quick_profile", Pattern.compile("(?im)^##\\s*quick profile\\b")),
-			new SectionRequirement("classification", Pattern.compile("(?im)^##\\s*classification\\b")),
-			new SectionRequirement("risk", Pattern.compile("(?im)^##\\s*risk\\b")),
-			new SectionRequirement("costs_structure", Pattern.compile("(?im)^##\\s*costs\\s*&\\s*structure\\b")),
-			new SectionRequirement("exposures", Pattern.compile("(?im)^##\\s*exposures\\b")),
-			new SectionRequirement("valuation_profitability", Pattern.compile("(?im)^##\\s*valuation\\s*&\\s*profitability\\b")),
-			new SectionRequirement("sources", Pattern.compile("(?im)^##\\s*sources\\b"))
+			new SectionRequirement("quick_profile", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*quick\\s*profile\\b")),
+			new SectionRequirement("classification", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(classification|layer\\s*notes?)\\b")),
+			new SectionRequirement("risk", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(risk|risiko|sri|summary\\s*risk)\\b")),
+			new SectionRequirement("costs_structure", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
+							"(costs\\s*&\\s*structure|costs\\s*and\\s*structure|costs\\s*structure|" +
+							"fees\\s*&\\s*structure|fees\\s*and\\s*structure|fees\\s*structure)\\b")),
+			new SectionRequirement("exposures", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(exposures?|holdings|top\\s*holdings|portfolio)\\b")),
+			new SectionRequirement("valuation_profitability", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
+							"(valuation\\s*&\\s*profitability|valuation\\s*and\\s*profitability|valuation|profitability)\\b")),
+			new SectionRequirement("sources", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(sources?|references?|quellen|citations?|bibliography)\\b"))
 	);
 	private static final List<String> SECONDARY_DOMAINS = List.of(
 			"justetf.com",
@@ -100,14 +110,13 @@ public class KnowledgeBaseQualityGateService {
 			reasons.add("empty_content");
 			return new DossierQualityResult(false, reasons);
 		}
-		String trimmed = contentMd.trim();
+		String trimmed = normalizeSectionWhitespace(contentMd).trim();
 		int maxChars = config == null ? 0 : config.dossierMaxChars();
 		if (maxChars > 0 && trimmed.length() > maxChars) {
 			reasons.add("content_exceeds_max_chars");
 		}
 		if (isin != null && !isin.isBlank()) {
-			Pattern header = Pattern.compile("(?im)^#\\s*" + Pattern.quote(isin.trim()) + "\\b");
-			if (!header.matcher(trimmed).find()) {
+			if (!hasIsinHeader(trimmed, isin)) {
 				reasons.add("missing_isin_header");
 			}
 		}
@@ -127,6 +136,28 @@ public class KnowledgeBaseQualityGateService {
 			reasons.add("missing_primary_source");
 		}
 		return new DossierQualityResult(reasons.isEmpty(), reasons);
+	}
+
+	public boolean isRetryableDossierFailure(List<String> reasons) {
+		if (reasons == null || reasons.isEmpty()) {
+			return false;
+		}
+		for (String reason : reasons) {
+			if (reason == null) {
+				continue;
+			}
+			if (reason.startsWith("missing_section:")) {
+				return true;
+			}
+			switch (reason) {
+				case "missing_isin_header", "insufficient_citations", "missing_primary_source", "empty_content" -> {
+					return true;
+				}
+				default -> {
+				}
+			}
+		}
+		return false;
 	}
 
 	public EvidenceResult evaluateExtractionEvidence(String dossierContent,
@@ -834,6 +865,26 @@ public class KnowledgeBaseQualityGateService {
 
 	private String safe(String value) {
 		return value == null ? "" : value;
+	}
+
+	private String normalizeSectionWhitespace(String content) {
+		if (content == null) {
+			return "";
+		}
+		String normalized = content
+				.replace('\u00A0', ' ')
+				.replace('\u2007', ' ')
+				.replace('\u202F', ' ');
+		return normalized.replaceAll("[\\u2000-\\u200B]", " ");
+	}
+
+	private boolean hasIsinHeader(String content, String isin) {
+		if (content == null || content.isBlank() || isin == null || isin.isBlank()) {
+			return false;
+		}
+		String normalizedIsin = isin.trim().toUpperCase(Locale.ROOT);
+		Pattern header = Pattern.compile("(?im)^\\s*#\\s*.*\\b" + Pattern.quote(normalizedIsin) + "\\b.*$");
+		return header.matcher(content).find();
 	}
 
 	private enum InstrumentCategory {

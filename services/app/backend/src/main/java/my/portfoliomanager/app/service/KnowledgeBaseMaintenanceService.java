@@ -184,19 +184,22 @@ public class KnowledgeBaseMaintenanceService {
                     alternativeRepository.save(alternative);
                     runService.markSkipped(dossierRun, "Dossier exists");
                 } else {
-                    try {
-                        KnowledgeBaseLlmDossierDraft dossierDraft = llmClient.generateDossier(
-                                item.isin(),
-                                null,
-                                config.websearchAllowedDomains(),
-                                config.dossierMaxChars()
-                        );
-                        dossier = createDossierFromDraft(item.isin(), dossierDraft, actor, DossierStatus.PENDING_REVIEW);
-                        dossierId = dossier.dossierId();
-                        boolean requestedAutoApprove = autoApproveFlag;
-                        extractionResult = runExtractionFlow(
-                                item.isin(), dossier.status(), dossierId, actor, false, applyOverrides
-                        );
+					try {
+						KnowledgeBaseService.DossierDraftResult draftResult =
+								knowledgeBaseService.generateDossierDraftWithQualityRetries(
+										item.isin(),
+										null,
+										config,
+										autoApproveFlag
+								);
+						KnowledgeBaseLlmDossierDraft dossierDraft = draftResult.draft();
+						dossier = createDossierFromDraft(item.isin(), dossierDraft, actor, DossierStatus.PENDING_REVIEW);
+						dossierId = dossier.dossierId();
+						boolean requestedAutoApprove = autoApproveFlag
+								&& (draftResult.quality() == null || draftResult.quality().passed());
+						extractionResult = runExtractionFlow(
+								item.isin(), dossier.status(), dossierId, actor, false, applyOverrides
+						);
                         KnowledgeBaseBulkResearchItemDto extractionItem = extractionResult.item();
                         extractionId = extractionItem.extractionId();
                         if (extractionItem.status() == KnowledgeBaseBulkResearchItemStatus.FAILED) {
@@ -341,20 +344,17 @@ public class KnowledgeBaseMaintenanceService {
             KnowledgeBaseRun dossierRun = runService.startRun(isin, KnowledgeBaseRunAction.BULK_CREATE, batchId, null);
             runService.incrementAttempt(dossierRun);
             try {
-                KnowledgeBaseLlmDossierDraft draft = llmClient.generateDossier(
-                        isin,
-                        null,
-                        config.websearchAllowedDomains(),
-                        config.dossierMaxChars()
-                );
-                logger.info("Generated draft for ISIN {}",isin);
-                InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
-                logger.info("Created dossier from draft for ISIN {}",isin);
-                boolean localAutoApprove = autoApproveFlag;
-                if (localAutoApprove) {
-                    dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
-                    if (dossier.status() == DossierStatus.APPROVED) {
-                        logger.info("Auto-Approved dossier for ISIN {}",isin);
+			KnowledgeBaseService.DossierDraftResult draftResult =
+					knowledgeBaseService.generateDossierDraftWithQualityRetries(isin, null, config, autoApproveFlag);
+			KnowledgeBaseLlmDossierDraft draft = draftResult.draft();
+			logger.info("Generated draft for ISIN {}",isin);
+			InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
+			logger.info("Created dossier from draft for ISIN {}",isin);
+			boolean localAutoApprove = autoApproveFlag && (draftResult.quality() == null || draftResult.quality().passed());
+			if (localAutoApprove) {
+				dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
+				if (dossier.status() == DossierStatus.APPROVED) {
+					logger.info("Auto-Approved dossier for ISIN {}",isin);
                     } else {
                         logger.info("Auto-approve dossier gate blocked for ISIN {}", isin);
                         localAutoApprove = false;

@@ -8,7 +8,6 @@ import my.portfoliomanager.app.dto.KnowledgeBaseRefreshScopeDto;
 import my.portfoliomanager.app.domain.KnowledgeBaseRun;
 import my.portfoliomanager.app.domain.KnowledgeBaseRunAction;
 import my.portfoliomanager.app.domain.KnowledgeBaseRunStatus;
-import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;
 import my.portfoliomanager.app.repository.InstrumentDossierRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,9 +27,6 @@ class KnowledgeBaseRefreshServiceTest {
 	private KnowledgeBaseConfigService configService;
 
 	@Mock
-	private KnowledgeBaseLlmClient llmClient;
-
-	@Mock
 	private KnowledgeBaseService knowledgeBaseService;
 
 	@Mock
@@ -43,7 +39,6 @@ class KnowledgeBaseRefreshServiceTest {
 	void refreshBatch_respectsMaxBatchesPerRun() {
 		KnowledgeBaseRefreshService service = new KnowledgeBaseRefreshService(
 				configService,
-				llmClient,
 				knowledgeBaseService,
 				runService,
 				dossierRepository
@@ -67,7 +62,6 @@ class KnowledgeBaseRefreshServiceTest {
 	void refreshBatch_respectsMaxInstrumentsPerRun() {
 		KnowledgeBaseRefreshService service = new KnowledgeBaseRefreshService(
 				configService,
-				llmClient,
 				knowledgeBaseService,
 				runService,
 				dossierRepository
@@ -91,7 +85,6 @@ class KnowledgeBaseRefreshServiceTest {
 	void refreshSingle_skipsWhenRecentRunExists() {
 		KnowledgeBaseRefreshService service = new KnowledgeBaseRefreshService(
 				configService,
-				llmClient,
 				knowledgeBaseService,
 				runService,
 				dossierRepository
@@ -133,6 +126,7 @@ class KnowledgeBaseRefreshServiceTest {
 				true,
 				0.6,
 				true,
+				2,
 				null
 		);
 	}

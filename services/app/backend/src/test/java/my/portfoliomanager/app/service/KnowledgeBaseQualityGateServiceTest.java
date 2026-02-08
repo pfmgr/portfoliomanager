@@ -2,6 +2,9 @@
 package my.portfoliomanager.app.service;
 
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -11,6 +14,60 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class KnowledgeBaseQualityGateServiceTest {
 	private final KnowledgeBaseQualityGateService service = new KnowledgeBaseQualityGateService();
+	private final ObjectMapper objectMapper = new ObjectMapper();
+
+	@Test
+	void evaluateDossier_acceptsBoldIsinHeaderAndBulletSections() {
+		String content = "# **DE000DK2CDS0 - Sample**\n"
+				+ "## Quick profile (table)\n"
+				+ "instrument_type: ETF\n"
+				+ "## Classification\n"
+				+ "- Risk\n"
+				+ "## Costs & structure\n"
+				+ "- Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## Sources\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"DE000DK2CDS0",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain(
+				"missing_isin_header",
+				"missing_section:risk",
+				"missing_section:exposures"
+		);
+	}
+
+	@Test
+	void evaluateDossier_acceptsLayerNotesAndReferencesHeading() {
+		String content = "# IE00BC7GZW19 - Sample\n"
+				+ "## Quick profile\n"
+				+ "instrument_type: ETF\n"
+				+ "## Layer notes\n"
+				+ "## Risk\n"
+				+ "## Costs and structure\n"
+				+ "## Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## References\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"IE00BC7GZW19",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain(
+				"missing_section:classification",
+				"missing_section:sources"
+		);
+	}
 
 	@Test
 	void evaluateExtractionEvidence_fundProfile_requiresFundFieldsAndHoldings() {
@@ -293,6 +350,18 @@ class KnowledgeBaseQualityGateServiceTest {
 			InstrumentDossierExtractionPayload.ValuationPayload valuation
 	) {
 		return payloadWithLayer(isin, instrumentType, null, etf, risk, financials, valuation);
+	}
+
+	private ArrayNode buildCitations() {
+		ArrayNode citations = objectMapper.createArrayNode();
+		ObjectNode entry = objectMapper.createObjectNode();
+		entry.put("id", "1");
+		entry.put("title", "Example");
+		entry.put("url", "https://example.com");
+		entry.put("publisher", "Example");
+		entry.put("accessed_at", "2026-02-08");
+		citations.add(entry);
+		return citations;
 	}
 
 	private InstrumentDossierExtractionPayload payloadWithLayer(

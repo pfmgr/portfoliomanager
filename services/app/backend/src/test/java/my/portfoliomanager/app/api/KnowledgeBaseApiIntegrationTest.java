@@ -65,7 +65,7 @@ class KnowledgeBaseApiIntegrationTest {
 		registry.add("app.jwt.secret", () -> JWT_SECRET);
 		registry.add("app.jwt.issuer", () -> "test-issuer");
 		registry.add("app.kb.enabled", () -> "true");
-		registry.add("app.kb.llm-enabled", () -> "false");
+		registry.add("app.kb.llm-enabled", () -> "true");
 	}
 
 	@BeforeEach

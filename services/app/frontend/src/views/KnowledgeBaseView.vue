@@ -274,6 +274,9 @@
                 <button class="ghost" type="button" :disabled="!canRejectDossier" @click="rejectDossier">
                   Reject dossier
                 </button>
+                <button class="ghost" type="button" :disabled="!dossierDetail" @click="copyLlmPrompt">
+                  Copy LLM prompt
+                </button>
                 <button class="ghost" type="button" :disabled="!editMode" @click="saveDossier">
                   Save changes
                 </button>
@@ -283,6 +286,7 @@
               </div>
 
               <p v-if="dossierActionError" class="toast error">{{ dossierActionError }}</p>
+              <p v-if="dossierActionMessage" class="toast success">{{ dossierActionMessage }}</p>
 
               <div v-if="editMode" class="section">
                 <label class="field">
@@ -341,6 +345,14 @@
                   >
                     Run extraction
                   </button>
+                  <button
+                    class="ghost"
+                    type="button"
+                    :disabled="!canCompleteMissingMetrics"
+                    @click="completeMissingMetrics"
+                  >
+                    Complete missing metrics
+                  </button>
                   <button class="ghost" type="button" :disabled="!canApproveExtraction" @click="approveExtraction">
                     Approve extraction
                   </button>
@@ -352,9 +364,14 @@
                   </button>
                 </div>
                 <p v-if="extractionError" class="toast error">{{ extractionError }}</p>
+                <p v-if="missingMetricsError" class="toast error">{{ missingMetricsError }}</p>
                 <p v-if="isIsinBusy(dossierDetail.isin)" class="hint">LLM action already running for this ISIN.</p>
                 <p v-if="extractionAction" class="hint">
                   Extraction action {{ formatActionStatus(extractionAction.status) }}: {{ extractionAction.message || '-' }}
+                </p>
+                <p v-if="missingMetricsAction" class="hint">
+                  Missing metrics action {{ formatActionStatus(missingMetricsAction.status) }}:
+                  {{ missingMetricsAction.message || '-' }}
                 </p>
 
                 <div v-if="latestExtraction">
@@ -1194,6 +1211,10 @@
                 <option :value="false">No</option>
               </select>
             </label>
+            <label class="field">
+              <span>Quality gate retry limit</span>
+              <input type="number" min="0" v-model.number="configForm.qualityGateRetryLimit" />
+            </label>
           </div>
 
           <label class="field">
@@ -1260,6 +1281,7 @@ const configForm = ref({
   bulkRequirePrimarySource: true,
   alternativesMinSimilarityScore: 0.6,
   extractionEvidenceRequired: true,
+  qualityGateRetryLimit: 2,
   qualityGateProfiles: null
 })
 const domainsText = ref('')
@@ -1302,6 +1324,8 @@ const dossierForm = ref({
 })
 
 const extractionError = ref('')
+const missingMetricsError = ref('')
+const dossierActionMessage = ref('')
 
 const bulkIsinsText = ref('')
 const bulkAutoApprove = ref(false)
@@ -1344,6 +1368,7 @@ const bulkActionId = ref('')
 const alternativesActionId = ref('')
 const refreshActionId = ref('')
 const extractionActionId = ref('')
+const missingMetricsActionId = ref('')
 const bulkWarning = ref('')
 const ACTIONS_POLL_INTERVAL_MS = 5000
 let actionsPollHandle = null
@@ -1439,6 +1464,7 @@ const bulkAction = computed(() => findActionById(bulkActionId.value))
 const alternativesAction = computed(() => findActionById(alternativesActionId.value))
 const refreshAction = computed(() => findActionById(refreshActionId.value))
 const extractionAction = computed(() => findActionById(extractionActionId.value))
+const missingMetricsAction = computed(() => findActionById(missingMetricsActionId.value))
 const alternativesRunning = computed(() => alternativesAction.value?.status === 'RUNNING')
 const sortSnapshot = computed(() => ({
   dossier: { key: dossierSort.key, direction: dossierSort.direction },
@@ -1475,6 +1501,11 @@ const extractionMissingFields = computed(() => {
 const extractionWarnings = computed(() => {
   if (!latestExtraction.value) return []
   return (latestExtraction.value.warningsJson || []).map((entry) => entry.message || entry)
+})
+const canCompleteMissingMetrics = computed(() => {
+  if (!dossierDetail.value?.latestDossier?.dossierId) return false
+  if (isIsinBusy(dossierDetail.value.isin)) return false
+  return extractionMissingFields.value.length > 0
 })
 const formatFieldValue = (value) => {
   if (value === null || value === undefined) {
@@ -1911,7 +1942,9 @@ async function loadDossiers() {
 
 async function loadDossierDetail(isin) {
   dossierActionError.value = ''
+  dossierActionMessage.value = ''
   extractionError.value = ''
+  missingMetricsError.value = ''
   editMode.value = false
   try {
     const detail = await apiRequest(`/kb/dossiers/${encodeURIComponent(isin)}`)
@@ -1941,6 +1974,7 @@ function openDossier(item) {
   selectedIsin.value = item.isin
   if (!item.hasDossier) {
     dossierActionError.value = ''
+    dossierActionMessage.value = ''
     extractionError.value = ''
     editMode.value = true
     dossierDetail.value = buildEmptyDossierDetail(item)
@@ -1952,12 +1986,14 @@ function openDossier(item) {
 function closeDossier() {
   selectedIsin.value = ''
   dossierDetail.value = null
+  dossierActionMessage.value = ''
   editMode.value = false
 }
 
 async function saveDossier() {
   if (!dossierDetail.value) return
   dossierActionError.value = ''
+  dossierActionMessage.value = ''
   let citations
   try {
     citations = JSON.parse(dossierForm.value.citationsText || '[]')
@@ -2004,9 +2040,29 @@ function toggleEditMode() {
   editMode.value = !editMode.value
 }
 
+async function copyLlmPrompt() {
+  if (!dossierDetail.value) return
+  dossierActionError.value = ''
+  dossierActionMessage.value = ''
+  const displayName = dossierDetail.value.displayName || dossierDetail.value.latestDossier?.displayName || ''
+  const prompt = buildExternalPrompt(dossierDetail.value.isin, displayName)
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(prompt)
+      dossierActionMessage.value = 'Prompt copied to clipboard.'
+      return
+    }
+    window.prompt('Copy the prompt below:', prompt)
+    dossierActionMessage.value = 'Prompt ready to copy.'
+  } catch (err) {
+    dossierActionError.value = err?.message || 'Failed to copy prompt'
+  }
+}
+
 async function approveDossier() {
   if (!dossierDetail.value) return
   dossierActionError.value = ''
+  dossierActionMessage.value = ''
   try {
     await apiRequest(`/kb/dossiers/${dossierDetail.value.latestDossier.dossierId}/approve`, { method: 'POST' })
     await loadDossierDetail(dossierDetail.value.isin)
@@ -2019,6 +2075,7 @@ async function approveDossier() {
 async function rejectDossier() {
   if (!dossierDetail.value) return
   dossierActionError.value = ''
+  dossierActionMessage.value = ''
   try {
     await apiRequest(`/kb/dossiers/${dossierDetail.value.latestDossier.dossierId}/reject`, { method: 'POST' })
     await loadDossierDetail(dossierDetail.value.isin)
@@ -2041,6 +2098,25 @@ async function runExtraction() {
     await loadLlmActions(true)
   } catch (err) {
     extractionError.value = err?.message || 'Extraction failed'
+  }
+}
+
+async function completeMissingMetrics() {
+  if (!dossierDetail.value) return
+  if (isIsinBusy(dossierDetail.value.isin)) {
+    missingMetricsError.value = 'LLM action already running for this ISIN.'
+    return
+  }
+  missingMetricsError.value = ''
+  try {
+    const result = await apiRequest(
+      `/kb/dossiers/${dossierDetail.value.latestDossier.dossierId}/complete-missing-metrics`,
+      { method: 'POST' }
+    )
+    missingMetricsActionId.value = result.actionId
+    await loadLlmActions(true)
+  } catch (err) {
+    missingMetricsError.value = err?.message || 'Missing metrics completion failed'
   }
 }
 
@@ -2105,12 +2181,114 @@ function updateDossierScrollHint() {
   showDossierScrollHint.value = canScroll && el.scrollLeft < maxScrollLeft - 2
 }
 
+function buildDossierTemplate(isin, displayName) {
+  const safeIsin = isin || 'UNKNOWN'
+  const nameValue = (displayName || '').trim() || 'unknown'
+  return `# ${safeIsin} - ${nameValue}
+
+## Quick profile (table)
+- ISIN: ${safeIsin}
+- Name: ${nameValue}
+- Instrument type: unknown
+- Asset class: unknown
+- Subclass: unknown
+- Domicile: unknown
+- Currency: unknown
+- Inception date: unknown
+
+## Classification (instrument type, asset class, subclass, suggested layer per Core/Satellite)
+- Instrument type: unknown
+- Asset class: unknown
+- Subclass: unknown
+- Layer: unknown
+- Layer notes: unknown
+- ETF: unknown
+
+## Risk (SRI and notes)
+- SRI: unknown
+- Notes: unknown
+
+## Costs & structure (TER, replication, domicile, distribution, currency if relevant)
+- TER / ongoing costs: unknown
+- Replication / management: unknown
+- Domicile: unknown
+- Distribution: unknown
+- Currency: unknown
+
+## Exposures (regions, sectors, top holdings/top-10, benchmark/index)
+- Regions: unknown
+- Sectors: unknown
+- Top holdings: unknown
+- Benchmark/index: unknown
+
+## Valuation & profitability (see requirements below)
+- price: unknown
+- pe_current: unknown
+- pb_current: unknown
+- dividend_per_share: unknown
+- revenue: unknown
+- net_income: unknown
+- ebitda: unknown
+- enterprise_value: unknown
+- net_debt: unknown
+- ev_to_ebitda: unknown
+- market_cap: unknown
+- shares_outstanding: unknown
+- eps_history:
+  - 2024: unknown
+  - 2023: unknown
+- eps_norm: unknown
+- pe_longterm: unknown
+- earnings_yield_longterm: unknown
+- pe_ttm_holdings: unknown
+- earnings_yield_ttm_holdings: unknown
+- holdings_coverage_weight_pct: unknown
+- holdings_coverage_count: unknown
+- holdings_asof: unknown
+- holdings_weight_method: unknown
+- pe_method: unknown
+- pe_horizon: unknown
+- neg_earnings_handling: unknown
+- net_rent: unknown
+- noi: unknown
+- affo: unknown
+- ffo: unknown
+
+## Redundancy hints (qualitative; do not claim precise correlations without data)
+- unknown
+
+## Sources
+1) 
+`
+}
+
+function buildExternalPrompt(isin, displayName) {
+  const safeIsin = isin || 'UNKNOWN'
+  const nameValue = (displayName || '').trim() || 'unknown'
+  const template = buildDossierTemplate(safeIsin, displayName)
+  return `Write a Markdown dossier in English for the instrument below.
+
+ISIN: ${safeIsin}
+Name: ${nameValue}
+
+Requirements:
+- Use the exact section headings and order shown in the template.
+- Write the dossier in English.
+- Use "unknown" for missing values.
+- Provide citations inline and list them under "## Sources" as numbered URLs.
+- Return only the dossier. Do not add extra commentary.
+
+Template:
+${template}`
+}
+
 function buildEmptyDossierDetail(item) {
   const displayName = item?.name || ''
+  const contentTemplate = buildDossierTemplate(item?.isin, displayName)
   const draft = {
     dossierId: null,
     displayName,
-    contentMd: '',
+    contentMd: contentTemplate,
     status: 'DRAFT',
     citations: [],
     version: 0,
@@ -2120,7 +2298,7 @@ function buildEmptyDossierDetail(item) {
   }
   dossierForm.value = {
     displayName,
-    contentMd: '',
+    contentMd: contentTemplate,
     status: 'DRAFT',
     citationsText: '[]'
   }
@@ -2363,6 +2541,7 @@ async function syncActionResults() {
   await syncActionResult(alternativesActionId.value, handleAlternativesActionResult)
   await syncActionResult(refreshActionId.value, handleRefreshActionResult)
   await syncActionResult(extractionActionId.value, handleExtractionActionResult)
+  await syncActionResult(missingMetricsActionId.value, handleMissingMetricsActionResult)
 }
 
 async function syncActionResult(actionId, handler) {
@@ -2436,6 +2615,20 @@ async function handleExtractionActionResult(detail) {
     extractionError.value = 'Extraction canceled'
   } else {
     extractionError.value = ''
+  }
+  if (dossierDetail.value?.isin && detail.isins?.includes(dossierDetail.value.isin)) {
+    await loadDossierDetail(dossierDetail.value.isin)
+  }
+  await loadDossiers()
+}
+
+async function handleMissingMetricsActionResult(detail) {
+  if (detail.status === 'FAILED') {
+    missingMetricsError.value = detail.message || 'Missing metrics completion failed'
+  } else if (detail.status === 'CANCELED') {
+    missingMetricsError.value = 'Missing metrics completion canceled'
+  } else {
+    missingMetricsError.value = ''
   }
   if (dossierDetail.value?.isin && detail.isins?.includes(dossierDetail.value.isin)) {
     await loadDossierDetail(dossierDetail.value.isin)
@@ -2571,6 +2764,7 @@ function normalizeConfig(raw) {
     bulkRequirePrimarySource: raw.bulk_require_primary_source ?? true,
     alternativesMinSimilarityScore: raw.alternatives_min_similarity_score ?? 0.6,
     extractionEvidenceRequired: raw.extraction_evidence_required ?? true,
+    qualityGateRetryLimit: raw.quality_gate_retry_limit ?? 2,
     qualityGateProfiles: raw.quality_gate_profiles || null
   }
 }
@@ -2600,6 +2794,7 @@ function toConfigPayload(form, domainsRaw) {
     bulk_require_primary_source: form.bulkRequirePrimarySource,
     alternatives_min_similarity_score: form.alternativesMinSimilarityScore,
     extraction_evidence_required: form.extractionEvidenceRequired,
+    quality_gate_retry_limit: form.qualityGateRetryLimit,
     quality_gate_profiles: form.qualityGateProfiles
   }
 }
@@ -2653,6 +2848,8 @@ function formatActionType(type) {
       return 'Extraction'
     case 'REFRESH':
       return 'Refresh'
+    case 'MISSING_METRICS':
+      return 'Missing metrics'
     default:
       return type
   }

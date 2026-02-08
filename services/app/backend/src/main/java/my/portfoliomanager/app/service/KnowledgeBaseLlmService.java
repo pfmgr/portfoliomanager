@@ -1331,6 +1331,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 ## Sources (numbered list)
                 
                 Additional requirements:
+                - Use the exact section headings shown above. Do not rename headings (e.g., do not replace "Classification" with "Layer notes").
+                - Headings must start with "## " at the beginning of the line. Do not use bullets as substitutes for headings.
+                - Write the dossier in English.
                 - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.
                 - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
                 - For exposures, provide region and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.

@@ -123,6 +123,7 @@ class KnowledgeBaseMaintenanceServiceTest {
 				current.bulkRequirePrimarySource(),
 				current.alternativesMinSimilarityScore(),
 				current.extractionEvidenceRequired(),
+				current.qualityGateRetryLimit(),
 				current.qualityGateProfiles()
 		);
 		configService.updateConfig(updated);

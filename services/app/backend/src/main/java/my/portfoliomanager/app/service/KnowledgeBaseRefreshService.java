@@ -7,7 +7,6 @@ import my.portfoliomanager.app.domain.KnowledgeBaseRun;
 import my.portfoliomanager.app.domain.KnowledgeBaseRunAction;
 import my.portfoliomanager.app.domain.KnowledgeBaseRunStatus;
 import my.portfoliomanager.app.dto.*;
-import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmDossierDraft;
 import my.portfoliomanager.app.repository.InstrumentDossierRepository;
 import my.portfoliomanager.app.repository.projection.InstrumentDossierSearchProjection;
@@ -27,19 +26,16 @@ import java.util.regex.Pattern;
 public class KnowledgeBaseRefreshService {
 	private static final Pattern ISIN_RE = Pattern.compile("^[A-Z]{2}[A-Z0-9]{9}[0-9]$");
 	private final KnowledgeBaseConfigService configService;
-	private final KnowledgeBaseLlmClient llmClient;
 	private final KnowledgeBaseService knowledgeBaseService;
 	private final KnowledgeBaseRunService runService;
 	private final InstrumentDossierRepository dossierRepository;
 	private final KnowledgeBaseBatchPlanner batchPlanner = new KnowledgeBaseBatchPlanner();
 
 	public KnowledgeBaseRefreshService(KnowledgeBaseConfigService configService,
-									   KnowledgeBaseLlmClient llmClient,
-									   KnowledgeBaseService knowledgeBaseService,
-									   KnowledgeBaseRunService runService,
-									   InstrumentDossierRepository dossierRepository) {
+							   KnowledgeBaseService knowledgeBaseService,
+							   KnowledgeBaseRunService runService,
+							   InstrumentDossierRepository dossierRepository) {
 		this.configService = configService;
-		this.llmClient = llmClient;
 		this.knowledgeBaseService = knowledgeBaseService;
 		this.runService = runService;
 		this.dossierRepository = dossierRepository;
@@ -159,20 +155,18 @@ public class KnowledgeBaseRefreshService {
 		KnowledgeBaseRun run = runService.startRun(isin, KnowledgeBaseRunAction.REFRESH, batchId, null);
 		runService.incrementAttempt(run);
 		try {
-			KnowledgeBaseLlmDossierDraft draft = llmClient.generateDossier(
-					isin,
-					null,
-					config.websearchAllowedDomains(),
-					config.dossierMaxChars()
+			KnowledgeBaseService.DossierDraftResult draftResult =
+					knowledgeBaseService.generateDossierDraftWithQualityRetries(isin, null, config, autoApprove);
+			KnowledgeBaseLlmDossierDraft draft = draftResult.draft();
+			InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
+			boolean localAutoApprove = autoApprove && (draftResult.quality() == null || draftResult.quality().passed());
+			if (localAutoApprove) {
+				dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
+			}
+			runService.markSucceeded(run);
+			KnowledgeBaseBulkResearchItemDto extractionResult = runExtractionFlow(
+					isin, dossier.status(), dossier.dossierId(), actor, localAutoApprove, applyOverrides
 			);
-            InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
-            if (autoApprove) {
-                dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
-            }
-            runService.markSucceeded(run);
-            KnowledgeBaseBulkResearchItemDto extractionResult = runExtractionFlow(
-                    isin, dossier.status(), dossier.dossierId(), actor, autoApprove, applyOverrides
-            );
             return new KnowledgeBaseRefreshItemDto(isin, extractionResult.status(), dossier.dossierId(),
                     extractionResult.extractionId(), extractionResult.error(), extractionResult.manualApproval());
         } catch (CancellationException ex) {
