@@ -363,7 +363,7 @@ public class DossierPreParser {
 			dossier == null ? null : dossier.getCitationsJson()
 		);
 		List<InstrumentDossierExtractionPayload.WarningPayload> warnings = List.of(
-				new InstrumentDossierExtractionPayload.WarningPayload("Parser-based extraction used; verify fields.")
+				new InstrumentDossierExtractionPayload.WarningPayload("Parser prefill applied.")
 		);
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields = buildMissingFields(
 				name,

@@ -94,6 +94,7 @@ public class LlmExtractorService implements ExtractorService {
 				preParsed == null ? null : preParsed.warnings(),
 				llmPayload == null ? null : llmPayload.warnings()
 		);
+		warnings = appendWarning(warnings, "LLM extraction merged with parser prefill.");
 		InstrumentDossierExtractionPayload payload = new InstrumentDossierExtractionPayload(
 				merged.isin(),
 				merged.name(),
@@ -446,6 +447,20 @@ public class LlmExtractorService implements ExtractorService {
 			merged.addAll(llm);
 		}
 		return merged.isEmpty() ? null : merged;
+	}
+
+	private List<InstrumentDossierExtractionPayload.WarningPayload> appendWarning(
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings,
+			String message) {
+		if (message == null || message.isBlank()) {
+			return warnings;
+		}
+		List<InstrumentDossierExtractionPayload.WarningPayload> next = new ArrayList<>();
+		if (warnings != null) {
+			next.addAll(warnings);
+		}
+		next.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
+		return next;
 	}
 
 	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> filterMissingFields(

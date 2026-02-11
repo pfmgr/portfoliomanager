@@ -273,27 +273,56 @@ public class KnowledgeBaseQualityGateService {
 	}
 
 	private void checkNumericEvidence(String content,
-								String field,
-								BigDecimal value,
-								List<String> labels,
-								boolean allowPercent,
-								List<String> missing) {
+							String field,
+							BigDecimal value,
+							List<String> labels,
+							boolean allowPercent,
+							List<String> missing) {
 		if (value == null) {
 			return;
 		}
 		String lower = content.toLowerCase(Locale.ROOT);
 		List<String> tokens = buildNumericTokens(value, allowPercent);
+		boolean labelFound = false;
 		for (String label : labels) {
 			if (!lower.contains(label)) {
 				continue;
 			}
+			labelFound = true;
 			for (String token : tokens) {
 				if (lower.contains(token)) {
 					return;
 				}
 			}
 		}
+		if (labelFound && hasScaledNumberEvidence(content, labels)) {
+			return;
+		}
 		missing.add(field);
+	}
+
+	private boolean hasScaledNumberEvidence(String content, List<String> labels) {
+		if (content == null || content.isBlank() || labels == null || labels.isEmpty()) {
+			return false;
+		}
+		Pattern scaledPattern = Pattern.compile("(?i)([-+]?[0-9]+(?:[.,][0-9]+)?)\\s*(b|bn|billion|m|mn|million|k|thousand)\\b");
+		for (String line : content.split("\\R")) {
+			String lower = line.toLowerCase(Locale.ROOT);
+			boolean labelFound = false;
+			for (String label : labels) {
+				if (lower.contains(label)) {
+					labelFound = true;
+					break;
+				}
+			}
+			if (!labelFound) {
+				continue;
+			}
+			if (scaledPattern.matcher(line).find()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void checkDateEvidence(String content,
@@ -535,24 +564,69 @@ public class KnowledgeBaseQualityGateService {
 		if (value == null) {
 			return List.of();
 		}
-		String raw = value.toPlainString();
-		String plain = value.stripTrailingZeros().toPlainString();
-		List<String> tokens = new ArrayList<>();
-		tokens.add(raw.toLowerCase(Locale.ROOT));
-		tokens.add(plain.toLowerCase(Locale.ROOT));
-		if (raw.contains(".")) {
-			tokens.add(raw.replace('.', ',').toLowerCase(Locale.ROOT));
-		}
-		if (plain.contains(".")) {
-			tokens.add(plain.replace('.', ',').toLowerCase(Locale.ROOT));
-		}
+		java.util.LinkedHashSet<String> tokens = new java.util.LinkedHashSet<>();
+		addNumericTokens(tokens, value);
+		addScaledTokens(tokens, value, new BigDecimal("1000000000"), List.of("b", "bn", "billion"));
+		addScaledTokens(tokens, value, new BigDecimal("1000000"), List.of("m", "mn", "million"));
+		addScaledTokens(tokens, value, new BigDecimal("1000"), List.of("k", "thousand"));
 		if (allowPercent) {
-			for (String token : List.copyOf(tokens)) {
+			List<String> base = new ArrayList<>(tokens);
+			for (String token : base) {
 				tokens.add(token + "%");
 				tokens.add(token + " %");
 			}
 		}
-		return tokens;
+		return new ArrayList<>(tokens);
+	}
+
+	private void addNumericTokens(java.util.LinkedHashSet<String> tokens, BigDecimal value) {
+		String raw = value.toPlainString();
+		String plain = value.stripTrailingZeros().toPlainString();
+		addToken(tokens, raw);
+		addToken(tokens, plain);
+		if (raw.contains(".")) {
+			addToken(tokens, raw.replace('.', ','));
+		}
+		if (plain.contains(".")) {
+			addToken(tokens, plain.replace('.', ','));
+		}
+	}
+
+	private void addScaledTokens(java.util.LinkedHashSet<String> tokens,
+								BigDecimal value,
+								BigDecimal divisor,
+								List<String> suffixes) {
+		if (value.compareTo(divisor) < 0) {
+			return;
+		}
+		BigDecimal scaled = value.divide(divisor, 4, java.math.RoundingMode.HALF_UP);
+		List<String> numbers = new ArrayList<>();
+		numbers.add(scaled.stripTrailingZeros().toPlainString());
+		numbers.add(scaled.setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString());
+		numbers.add(scaled.setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString());
+		for (String number : numbers) {
+			if (number == null || number.isBlank()) {
+				continue;
+			}
+			List<String> variants = new ArrayList<>();
+			variants.add(number);
+			if (number.contains(".")) {
+				variants.add(number.replace('.', ','));
+			}
+			for (String variant : variants) {
+				for (String suffix : suffixes) {
+					addToken(tokens, variant + suffix);
+					addToken(tokens, variant + " " + suffix);
+				}
+			}
+		}
+	}
+
+	private void addToken(java.util.LinkedHashSet<String> tokens, String value) {
+		if (value == null || value.isBlank()) {
+			return;
+		}
+		tokens.add(value.toLowerCase(Locale.ROOT));
 	}
 
 	private boolean canDerivePeCurrent(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
