@@ -1,5 +1,6 @@
 package my.portfoliomanager.app.service;
 
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
 import my.portfoliomanager.app.domain.DossierExtractionStatus;
@@ -189,6 +190,20 @@ class KnowledgeBaseMaintenanceServiceTest {
 							"## Valuation & profitability\n" +
 							"## Sources\n";
 					return new KnowledgeBaseLlmDossierDraft(content, "Test Instrument", citations, "test-model");
+				}
+
+				@Override
+				public KnowledgeBaseLlmDossierDraft patchDossierMissingFields(String isin,
+														 String contentMd,
+														 JsonNode existingCitations,
+														 List<String> missingFields,
+														 String context,
+														 List<String> allowedDomains,
+														 int maxChars) {
+					JsonNode citations = existingCitations == null
+							? objectMapper.createArrayNode()
+							: existingCitations;
+					return new KnowledgeBaseLlmDossierDraft(contentMd, "Test Instrument", citations, "test-model");
 				}
 
 				@Override

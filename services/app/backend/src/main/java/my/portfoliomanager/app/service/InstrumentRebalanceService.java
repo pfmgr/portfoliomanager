@@ -78,11 +78,12 @@ public class InstrumentRebalanceService {
 	}
 
 	public InstrumentProposalResult buildInstrumentProposals(List<SavingPlanInstrument> instruments,
-									 Map<Integer, BigDecimal> layerBudgets,
-									 Integer minimumSavingPlanSize,
-									 Integer minimumRebalancingAmount,
-									 boolean withinTolerance,
-									 LayerTargetRiskThresholds riskThresholds) {
+										 Map<Integer, BigDecimal> layerBudgets,
+										 Integer minimumSavingPlanSize,
+										 Integer minimumRebalancingAmount,
+										 boolean withinTolerance,
+										 LayerTargetRiskThresholds riskThresholds,
+										 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		List<SavingPlanInstrument> normalized = normalizeInstruments(instruments);
 		Set<String> isins = normalized.stream()
 				.map(SavingPlanInstrument::isin)
@@ -117,10 +118,11 @@ public class InstrumentRebalanceService {
 		}
 
 		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		Map<Integer, LayerTargetRiskThresholds> normalizedByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
 		Map<String, Integer> assessmentScores = assessmentService == null
 				? Map.of()
-				: assessmentService.assessScores(isins, thresholds);
-		int scoreCutoff = thresholds.getHighMin();
+				: assessmentService.assessScores(isins, thresholds, normalizedByLayer);
 
 		Map<Integer, List<SavingPlanInstrument>> byLayer = groupByLayer(normalized);
 		List<InstrumentProposalDto> proposals = new ArrayList<>();
@@ -158,6 +160,9 @@ public class InstrumentRebalanceService {
 				continue;
 			}
 
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
+			double scoreCutoff = layerThresholds.getHighMin();
 			LayerAllocation allocation = allocateLayerBudget(layer, budget, layerInstruments, minimumSavingPlanSize,
 					minimumRebalancingAmount, extractions, assessmentScores, scoreCutoff);
 			if (allocation.weightingSummary() != null) {
@@ -225,13 +230,13 @@ public class InstrumentRebalanceService {
 								Integer minimumRebalancingAmount,
 								Map<String, KbExtraction> extractions,
 								Map<String, Integer> assessmentScores,
-								int scoreCutoff) {
+								double scoreCutoff) {
 		Map<String, List<String>> reasonCodes = new HashMap<>();
 		List<InstrumentWarning> warnings = new ArrayList<>();
 		BigDecimal minSavingPlan = minimumSavingPlanSize == null ? null : new BigDecimal(minimumSavingPlanSize);
 		BigDecimal minRebalance = minimumRebalancingAmount == null ? null : new BigDecimal(minimumRebalancingAmount);
 
-		WeightingResult weighting = computeWeights(instruments, extractions, assessmentScores, scoreCutoff);
+		WeightingResult weighting = computeWeights(layer, instruments, extractions, assessmentScores, scoreCutoff);
 		List<SavingPlanDeltaAllocator.PlanInput> inputs = new ArrayList<>();
 		Map<AssessorEngine.PlanKey, String> keyToIsin = new HashMap<>();
 		Map<String, BigDecimal> currentByIsin = new HashMap<>();
@@ -297,6 +302,7 @@ public class InstrumentRebalanceService {
 				weighting.costUsed(),
 				weighting.benchmarkUsed(),
 				weighting.regionsUsed(),
+				weighting.sectorsUsed(),
 				weighting.holdingsUsed(),
 				weighting.valuationUsed(),
 				Map.copyOf(weighting.weights())
@@ -432,10 +438,11 @@ public class InstrumentRebalanceService {
 		return raw;
 	}
 
-	private WeightingResult computeWeights(List<SavingPlanInstrument> instruments,
-								   Map<String, KbExtraction> extractions,
-								   Map<String, Integer> assessmentScores,
-								   int scoreCutoff) {
+	private WeightingResult computeWeights(int layer,
+							   List<SavingPlanInstrument> instruments,
+							   Map<String, KbExtraction> extractions,
+							   Map<String, Integer> assessmentScores,
+							   double scoreCutoff) {
 		if (instruments == null || instruments.isEmpty()) {
 			return WeightingResult.equal(instruments);
 		}
@@ -453,13 +460,16 @@ public class InstrumentRebalanceService {
 		boolean useBenchmark = true;
 		boolean useRegions = true;
 		boolean useHoldings = true;
+		boolean useSectors = layer != 5;
 		boolean useValuation = true;
 		Map<String, String> benchmarks = new HashMap<>();
 		Map<String, BigDecimal> ters = new HashMap<>();
 		Map<String, Set<String>> regionNames = new HashMap<>();
 		Map<String, Set<String>> holdingNames = new HashMap<>();
+		Map<String, Set<String>> sectorNames = new HashMap<>();
 		Map<String, Map<String, BigDecimal>> regionWeights = new HashMap<>();
 		Map<String, Map<String, BigDecimal>> holdingWeights = new HashMap<>();
+		Map<String, Map<String, BigDecimal>> sectorWeights = new HashMap<>();
 		Map<String, BigDecimal> valuationScores = new HashMap<>();
 		Map<String, Double> dataPenalties = new HashMap<>();
 
@@ -470,6 +480,7 @@ public class InstrumentRebalanceService {
 			String benchmark = null;
 			Set<String> regions = null;
 			Set<String> holdings = null;
+			Set<String> sectors = null;
 			BigDecimal valuationScore = null;
 			double dataPenalty = 0.0;
 			if (payload != null) {
@@ -479,6 +490,7 @@ public class InstrumentRebalanceService {
 				}
 				regions = normalizeRegionNames(payload.regions());
 				holdings = normalizeHoldingNames(payload.topHoldings());
+				sectors = normalizeSectorNames(payload.sectors(), payload.gicsSector());
 				Map<String, BigDecimal> regionWeight = normalizeRegionWeights(payload.regions());
 				if (regionWeight != null && !regionWeight.isEmpty()) {
 					regionWeights.put(instrument.isin(), regionWeight);
@@ -486,6 +498,10 @@ public class InstrumentRebalanceService {
 				Map<String, BigDecimal> holdingWeight = normalizeHoldingWeights(payload.topHoldings());
 				if (holdingWeight != null && !holdingWeight.isEmpty()) {
 					holdingWeights.put(instrument.isin(), holdingWeight);
+				}
+				Map<String, BigDecimal> sectorWeight = normalizeSectorWeights(payload.sectors(), payload.gicsSector());
+				if (sectorWeight != null && !sectorWeight.isEmpty()) {
+					sectorWeights.put(instrument.isin(), sectorWeight);
 				}
 				valuationScore = computeValuationScore(payload);
 				dataPenalty = computeDataQualityPenalty(payload);
@@ -510,6 +526,11 @@ public class InstrumentRebalanceService {
 			} else {
 				holdingNames.put(instrument.isin(), holdings);
 			}
+			if (sectors == null || sectors.isEmpty()) {
+				useSectors = false;
+			} else {
+				sectorNames.put(instrument.isin(), sectors);
+			}
 			if (valuationScore == null) {
 				useValuation = false;
 			} else {
@@ -520,7 +541,7 @@ public class InstrumentRebalanceService {
 			}
 		}
 
-		boolean useRedundancy = useBenchmark || useRegions || useHoldings;
+		boolean useRedundancy = useBenchmark || useRegions || useHoldings || useSectors;
 		if (!useCost && !useRedundancy && !useValuation) {
 			return hasScoreWeights
 					? scoreWeightedResult(instruments, scoreFactors)
@@ -547,8 +568,9 @@ public class InstrumentRebalanceService {
 			}
 			if (useRedundancy) {
 				double redundancy = computeRedundancy(instrument.isin(), instruments.size(),
-						benchmarks, benchmarkCounts, regionNames, holdingNames, regionWeights, holdingWeights,
-						useBenchmark, useRegions, useHoldings);
+						benchmarks, benchmarkCounts, regionNames, holdingNames, sectorNames,
+						regionWeights, holdingWeights, sectorWeights,
+						useBenchmark, useRegions, useHoldings, useSectors, sectorWeightFactor(layer));
 				BigDecimal uniqueness = BigDecimal.ONE.subtract(BigDecimal.valueOf(redundancy));
 				if (uniqueness.compareTo(BigDecimal.ZERO) < 0) {
 					uniqueness = BigDecimal.ZERO;
@@ -588,12 +610,12 @@ public class InstrumentRebalanceService {
 			weights.put(instrument.isin(), score.divide(total, 8, RoundingMode.HALF_UP));
 		}
 		return new WeightingResult(weights, useCost || useRedundancy || useValuation, hasScoreWeights, useCost,
-				useBenchmark, useRegions, useHoldings, useValuation);
+				useBenchmark, useRegions, useHoldings, useSectors, useValuation);
 	}
 
 	private Map<String, Double> buildScoreWeightFactors(List<SavingPlanInstrument> instruments,
-											 Map<String, Integer> assessmentScores,
-											 int scoreCutoff) {
+												Map<String, Integer> assessmentScores,
+												double scoreCutoff) {
 		if (instruments == null || instruments.isEmpty() || assessmentScores == null || assessmentScores.isEmpty()) {
 			return Map.of();
 		}
@@ -613,7 +635,7 @@ public class InstrumentRebalanceService {
 										 Map<String, Double> scoreFactors) {
 		Map<String, BigDecimal> weights = scoreWeightedWeights(instruments, scoreFactors);
 		boolean scoreWeighted = instruments != null && instruments.size() > 1 && scoreFactors != null && !scoreFactors.isEmpty();
-		return new WeightingResult(weights, false, scoreWeighted, false, false, false, false, false);
+		return new WeightingResult(weights, false, scoreWeighted, false, false, false, false, false, false);
 	}
 
 	private Map<String, BigDecimal> scoreWeightedWeights(List<SavingPlanInstrument> instruments,
@@ -646,11 +668,11 @@ public class InstrumentRebalanceService {
 		return normalized;
 	}
 
-	private double scoreWeightFactor(int score, int scoreCutoff) {
+	private double scoreWeightFactor(int score, double scoreCutoff) {
 		if (scoreCutoff <= 0) {
 			return 1.0;
 		}
-		double normalized = ((double) scoreCutoff - (double) score + 1.0) / (double) scoreCutoff;
+		double normalized = (scoreCutoff - (double) score + 1.0) / scoreCutoff;
 		if (normalized > 1.0) {
 			return 1.0;
 		}
@@ -1377,6 +1399,51 @@ public class InstrumentRebalanceService {
 		return normalized.isEmpty() ? null : normalized;
 	}
 
+	private Set<String> normalizeSectorNames(List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+								 String gicsSector) {
+		Set<String> normalized = new LinkedHashSet<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				String cleaned = normalizeLabel(sector == null ? null : sector.name());
+				if (cleaned != null) {
+					normalized.add(cleaned);
+				}
+			}
+		}
+		if (normalized.isEmpty()) {
+			String fallback = normalizeLabel(gicsSector);
+			if (fallback != null) {
+				normalized.add(fallback);
+			}
+		}
+		return normalized.isEmpty() ? null : normalized;
+	}
+
+	private Map<String, BigDecimal> normalizeSectorWeights(
+			List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+			String gicsSector) {
+		Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				String name = normalizeLabel(sector == null ? null : sector.name());
+				if (name == null) {
+					continue;
+				}
+				BigDecimal weight = normalizeWeightPct(sector.weightPct());
+				if (weight != null) {
+					normalized.put(name, weight);
+				}
+			}
+		}
+		if (normalized.isEmpty()) {
+			String fallback = normalizeLabel(gicsSector);
+			if (fallback != null) {
+				normalized.put(fallback, BigDecimal.ONE);
+			}
+		}
+		return normalized.isEmpty() ? null : normalized;
+	}
+
 	private BigDecimal normalizeWeightPct(BigDecimal weight) {
 		if (weight == null || weight.signum() <= 0) {
 			return null;
@@ -1384,6 +1451,16 @@ public class InstrumentRebalanceService {
 		return weight.compareTo(BigDecimal.ONE) > 0
 				? weight.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP)
 				: weight;
+	}
+
+	private double sectorWeightFactor(int layer) {
+		if (layer == 1) {
+			return 0.5;
+		}
+		if (layer == 5) {
+			return 0.0;
+		}
+		return 1.0;
 	}
 
 	private String normalizeLabel(String raw) {
@@ -1464,48 +1541,63 @@ public class InstrumentRebalanceService {
 	}
 
 	private double computeRedundancy(String isin,
-									 int instrumentCount,
-									 Map<String, String> benchmarks,
-									 Map<String, Integer> benchmarkCounts,
-									 Map<String, Set<String>> regionNames,
-									 Map<String, Set<String>> holdingNames,
-									 Map<String, Map<String, BigDecimal>> regionWeights,
-									 Map<String, Map<String, BigDecimal>> holdingWeights,
-									 boolean useBenchmark,
-									 boolean useRegions,
-									 boolean useHoldings) {
+								 int instrumentCount,
+								 Map<String, String> benchmarks,
+								 Map<String, Integer> benchmarkCounts,
+								 Map<String, Set<String>> regionNames,
+								 Map<String, Set<String>> holdingNames,
+								 Map<String, Set<String>> sectorNames,
+								 Map<String, Map<String, BigDecimal>> regionWeights,
+								 Map<String, Map<String, BigDecimal>> holdingWeights,
+								 Map<String, Map<String, BigDecimal>> sectorWeights,
+								 boolean useBenchmark,
+								 boolean useRegions,
+								 boolean useHoldings,
+								 boolean useSectors,
+								 double sectorWeightFactor) {
 		if (instrumentCount <= 1) {
 			return 0.0d;
 		}
 		double sum = 0.0d;
-		int components = 0;
+		double weightSum = 0.0d;
 		if (useBenchmark) {
-			components += 1;
 			String benchmark = benchmarks.get(isin);
 			int count = benchmark == null ? 1 : benchmarkCounts.getOrDefault(benchmark, 1);
 			double overlap = (double) (count - 1) / (double) (instrumentCount - 1);
 			sum += overlap;
+			weightSum += 1.0d;
 		}
 		if (useRegions) {
-			components += 1;
 			double overlap = averageWeightedOverlap(isin, regionWeights);
 			if (overlap < 0) {
 				overlap = averageOverlap(isin, regionNames, instrumentCount);
 			}
 			sum += overlap;
+			weightSum += 1.0d;
 		}
 		if (useHoldings) {
-			components += 1;
 			double overlap = averageWeightedOverlap(isin, holdingWeights);
 			if (overlap < 0) {
 				overlap = averageOverlap(isin, holdingNames, instrumentCount);
 			}
 			sum += overlap;
+			weightSum += 1.0d;
 		}
-		if (components == 0) {
+		if (useSectors) {
+			double weight = Math.max(0.0d, Math.min(1.0d, sectorWeightFactor));
+			if (weight > 0.0d) {
+				double overlap = averageWeightedOverlap(isin, sectorWeights);
+				if (overlap < 0) {
+					overlap = averageOverlap(isin, sectorNames, instrumentCount);
+				}
+				sum += overlap * weight;
+				weightSum += weight;
+			}
+		}
+		if (weightSum == 0.0d) {
 			return 0.0d;
 		}
-		return sum / components;
+		return sum / weightSum;
 	}
 
 	private double averageOverlap(String isin, Map<String, Set<String>> entries, int instrumentCount) {
@@ -1670,15 +1762,16 @@ public class InstrumentRebalanceService {
 	}
 
 	public record LayerWeightingSummary(int layer,
-										int instrumentCount,
-										boolean weighted,
-										boolean scoreWeighted,
-										boolean costUsed,
-										boolean benchmarkUsed,
-										boolean regionsUsed,
-										boolean holdingsUsed,
-										boolean valuationUsed,
-										Map<String, BigDecimal> weights) {
+									int instrumentCount,
+									boolean weighted,
+									boolean scoreWeighted,
+									boolean costUsed,
+									boolean benchmarkUsed,
+									boolean regionsUsed,
+									boolean sectorsUsed,
+									boolean holdingsUsed,
+									boolean valuationUsed,
+									Map<String, BigDecimal> weights) {
 	}
 
 	private record KbExtraction(String isin, String status, InstrumentDossierExtractionPayload payload) {
@@ -1703,6 +1796,7 @@ public class InstrumentRebalanceService {
 								   boolean costUsed,
 								   boolean benchmarkUsed,
 								   boolean regionsUsed,
+								   boolean sectorsUsed,
 								   boolean holdingsUsed,
 								   boolean valuationUsed) {
 		private static WeightingResult equal(List<SavingPlanInstrument> instruments) {
@@ -1713,13 +1807,13 @@ public class InstrumentRebalanceService {
 					weights.put(instrument.isin(), share);
 				}
 			}
-			return new WeightingResult(weights, false, false, false, false, false, false, false);
+			return new WeightingResult(weights, false, false, false, false, false, false, false, false);
 		}
 
 		private static WeightingResult single(String isin) {
 			Map<String, BigDecimal> weights = new HashMap<>();
 			weights.put(isin, BigDecimal.ONE);
-			return new WeightingResult(weights, false, false, false, false, false, false, false);
+			return new WeightingResult(weights, false, false, false, false, false, false, false, false);
 		}
 	}
 }

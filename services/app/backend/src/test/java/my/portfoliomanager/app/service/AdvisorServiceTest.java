@@ -135,6 +135,7 @@ class AdvisorServiceTest {
 				null,
 				null,
 				null,
+				null,
 				Map.of(profileKey, 120),
 				null,
 				null
@@ -220,6 +221,7 @@ class AdvisorServiceTest {
 				null,
 				null,
 				null,
+				null,
 				Map.of(profileKey, 12),
 				null,
 				null
@@ -232,6 +234,7 @@ class AdvisorServiceTest {
 		LayerTargetConfigRequestDto request120 = new LayerTargetConfigRequestDto(
 				profileKey,
 				false,
+				null,
 				null,
 				null,
 				null,

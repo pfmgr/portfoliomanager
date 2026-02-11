@@ -127,19 +127,33 @@ public class KnowledgeBaseService {
         );
     }
 
-    public InstrumentDossierWebsearchResponseDto createDossierDraftViaWebsearch(String isin) {
-        logger.info("createDossierDraftViaWebsearch for ISIN {}", isin);
-        String normalizedIsin = normalizeIsin(isin);
-        KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
-        KnowledgeBaseLlmDossierDraft parsed;
-        try {
-            parsed = knowledgeBaseLlmClient.generateDossier(
-                    normalizedIsin,
-                    null,
-                    config.websearchAllowedDomains(),
-                    config.dossierMaxChars()
-            );
-        } catch (Exception ex) {
+	public InstrumentDossierWebsearchResponseDto createDossierDraftViaWebsearch(String isin) {
+		logger.info("createDossierDraftViaWebsearch for ISIN {}", isin);
+		String normalizedIsin = normalizeIsin(isin);
+		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
+		String nameHint = resolveNameHint(normalizedIsin);
+		KnowledgeBaseLlmDossierDraft parsed;
+		try {
+			String context = buildNameHintContext(nameHint, false);
+			parsed = knowledgeBaseLlmClient.generateDossier(
+					normalizedIsin,
+					context,
+					config.websearchAllowedDomains(),
+					config.dossierMaxChars()
+			);
+			if (nameHint != null && !matchesNameHint(parsed, nameHint)) {
+				String retryContext = buildNameHintContext(nameHint, true);
+				parsed = knowledgeBaseLlmClient.generateDossier(
+						normalizedIsin,
+						retryContext,
+						config.websearchAllowedDomains(),
+						config.dossierMaxChars()
+				);
+				if (!matchesNameHint(parsed, nameHint)) {
+					throw new IllegalStateException("LLM websearch result name mismatch for ISIN " + normalizedIsin);
+				}
+			}
+		} catch (Exception ex) {
             logger.error("Received error from LLM", ex);
             String message = ex.getMessage();
             if (message != null) {
@@ -192,17 +206,18 @@ public class KnowledgeBaseService {
         return new DossierUpsertResult(toResponse(dossierRepository.save(dossier)), previous == null);
     }
 
-    public BulkWebsearchDraftResult createDossierDraftsViaWebsearchBulk(List<String> isins) {
-        List<String> normalized = normalizeIsins(isins);
-        if (normalized.isEmpty()) {
-            throw new IllegalArgumentException("At least one ISIN is required");
-        }
-        logger.info("Performing Buld Draft Creating for {} isins", normalized.size());
-        KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
-        String prompt = buildBulkWebsearchPrompt(normalized, config.dossierMaxChars());
-        prompt = llmPromptPolicy == null
-                ? prompt
-                : llmPromptPolicy.validatePrompt(prompt, LlmPromptPurpose.KB_BULK_WEBSEARCH);
+	public BulkWebsearchDraftResult createDossierDraftsViaWebsearchBulk(List<String> isins) {
+		List<String> normalized = normalizeIsins(isins);
+		if (normalized.isEmpty()) {
+			throw new IllegalArgumentException("At least one ISIN is required");
+		}
+		logger.info("Performing Buld Draft Creating for {} isins", normalized.size());
+		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
+		Map<String, String> nameHints = resolveNameHints(normalized);
+		String prompt = buildBulkWebsearchPrompt(normalized, config.dossierMaxChars(), nameHints);
+		prompt = llmPromptPolicy == null
+				? prompt
+				: llmPromptPolicy.validatePrompt(prompt, LlmPromptPurpose.KB_BULK_WEBSEARCH);
         if (prompt == null) {
             throw new IllegalStateException("Bulk websearch prompt rejected by policy");
         }
@@ -239,9 +254,10 @@ public class KnowledgeBaseService {
             throw new IllegalStateException("LLM returned empty dossier drafts");
         }
         logger.info("LLM returned bulk result");
-        List<BulkWebsearchDraftItem> items = parseBulkWebsearchDrafts(suggestion.suggestion(), normalized);
-        return new BulkWebsearchDraftResult(items, suggestion.rationale());
-    }
+		List<BulkWebsearchDraftItem> items = parseBulkWebsearchDrafts(suggestion.suggestion(), normalized);
+		items = applyNameHintChecks(items, nameHints);
+		return new BulkWebsearchDraftResult(items, suggestion.rationale());
+	}
 
     @Transactional
     public InstrumentDossierResponseDto createDossier(InstrumentDossierCreateRequest request, String createdBy) {
@@ -1045,16 +1061,133 @@ public class KnowledgeBaseService {
         return citations;
     }
 
-    private String normalizeContent(String contentMd) {
-        if (contentMd == null || contentMd.isBlank()) {
-            throw new IllegalArgumentException("Content must be provided");
-        }
-        String sanitized = contentMd.replace("\u0000", "");
-        if (sanitized.isBlank()) {
-            throw new IllegalArgumentException("Content must be provided");
-        }
-        return sanitized.trim();
-    }
+	private String normalizeContent(String contentMd) {
+		if (contentMd == null || contentMd.isBlank()) {
+			throw new IllegalArgumentException("Content must be provided");
+		}
+		String sanitized = contentMd.replace("\u0000", "");
+		if (sanitized.isBlank()) {
+			throw new IllegalArgumentException("Content must be provided");
+		}
+		return sanitized.trim();
+	}
+
+	private Map<String, String> resolveNameHints(List<String> isins) {
+		if (isins == null || isins.isEmpty()) {
+			return Map.of();
+		}
+		List<Instrument> instruments = instrumentRepository.findByIsinIn(isins);
+		if (instruments == null || instruments.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, String> hints = new HashMap<>();
+		for (Instrument instrument : instruments) {
+			if (instrument != null && instrument.getIsin() != null && instrument.getName() != null) {
+				hints.put(instrument.getIsin(), instrument.getName());
+			}
+		}
+		return hints;
+	}
+
+	private String resolveNameHint(String isin) {
+		if (isin == null || isin.isBlank()) {
+			return null;
+		}
+		return instrumentRepository.findById(isin)
+				.map(Instrument::getName)
+				.orElse(null);
+	}
+
+	private String buildNameHintContext(String nameHint, boolean strict) {
+		if (nameHint == null || nameHint.isBlank()) {
+			return null;
+		}
+		String prefix = strict
+				? "Known registry name (must match ISIN sources): "
+				: "Known registry name (use for disambiguation): ";
+		return prefix + nameHint + ". If sources show a different issuer/name for this ISIN, keep searching.";
+	}
+
+	private boolean matchesNameHint(KnowledgeBaseLlmDossierDraft draft, String expectedName) {
+		if (draft == null || expectedName == null || expectedName.isBlank()) {
+			return true;
+		}
+		return matchesNameHint(draft.contentMd(), draft.displayName(), expectedName);
+	}
+
+	private boolean matchesNameHint(String content, String displayName, String expectedName) {
+		if (expectedName == null || expectedName.isBlank()) {
+			return true;
+		}
+		String haystack = normalizeNameForMatch(
+				(displayName == null ? "" : displayName) + " " + (content == null ? "" : content)
+		);
+		String expected = normalizeNameForMatch(expectedName);
+		if (expected.isBlank() || haystack.isBlank()) {
+			return false;
+		}
+		if (haystack.contains(expected)) {
+			return true;
+		}
+		String[] tokens = expected.split("\\s+");
+		for (String token : tokens) {
+			if (token.length() >= 4 && haystack.contains(token)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private List<BulkWebsearchDraftItem> applyNameHintChecks(List<BulkWebsearchDraftItem> items,
+			Map<String, String> nameHints) {
+		if (items == null || items.isEmpty() || nameHints == null || nameHints.isEmpty()) {
+			return items;
+		}
+		List<BulkWebsearchDraftItem> updated = new ArrayList<>();
+		for (BulkWebsearchDraftItem item : items) {
+			if (item == null) {
+				continue;
+			}
+			String expected = nameHints.get(item.isin());
+			if (expected != null && (item.error() == null || item.error().isBlank())) {
+				if (!matchesNameHint(item.contentMd(), item.displayName(), expected)) {
+					updated.add(new BulkWebsearchDraftItem(
+							item.isin(),
+							item.contentMd(),
+							item.displayName(),
+							item.citations(),
+							"Name mismatch with registry hint"
+					));
+					continue;
+				}
+			}
+			updated.add(item);
+		}
+		return updated;
+	}
+
+	private String normalizeNameForMatch(String value) {
+		if (value == null) {
+			return "";
+		}
+		String lowered = value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ");
+		String[] parts = lowered.trim().split("\\s+");
+		Set<String> stop = Set.of(
+				"ag", "se", "sa", "nv", "plc", "ltd", "limited", "inc", "corp", "corporation", "company",
+				"co", "group", "holdings", "holding", "kgaa", "kg", "spa", "srl", "oyj", "ab", "asa"
+		);
+		StringBuilder builder = new StringBuilder();
+		for (String part : parts) {
+			if (part.isBlank() || stop.contains(part)) {
+				continue;
+			}
+			if (!builder.isEmpty()) {
+				builder.append(' ');
+			}
+			builder.append(part);
+		}
+		return builder.toString().trim();
+	}
 
     DossierDraftResult generateDossierDraftWithQualityRetries(String isin,
                                                               String context,
@@ -1186,25 +1319,37 @@ public class KnowledgeBaseService {
     }
 
 
-    private String buildBulkWebsearchPrompt(List<String> isins, int maxChars) {
-        String today = LocalDate.now().toString();
-        StringBuilder isinList = new StringBuilder();
-        for (String isin : isins) {
-            isinList.append("- ").append(isin).append('\n');
-        }
-        return """
-                You are a research assistant for financial instruments (securities). For each provided ISIN, create a dossier in English.
-                
-                Requirements:
-                - Use web research (web_search) and prefer reliable primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages).
-                - For ETFs/funds, primary sources are required when available. For single stocks/REITs, reputable market-data sources (exchange, regulator, finance portals) are acceptable if primary sources are not available.
-                - Secondary sources (e.g., justETF/ETF.com) are acceptable when primary sources are unavailable for the instrument type.
-                - Do not fail solely because primary sources are unavailable; if the instrument type cannot be confirmed, proceed with secondary sources and mark instrument_type as unknown.
-                - Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
-                - Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
-                - Include the research date (%s) and, if available, the “data as of” date for key metrics.
-                - Only add verified information to the dossiers.
-                - No financial advice; informational only.
+	private String buildBulkWebsearchPrompt(List<String> isins, int maxChars, Map<String, String> nameHints) {
+		String today = LocalDate.now().toString();
+		StringBuilder isinList = new StringBuilder();
+		for (String isin : isins) {
+			isinList.append("- ").append(isin).append('\n');
+		}
+		StringBuilder hintBlock = new StringBuilder();
+		if (nameHints != null && !nameHints.isEmpty()) {
+			hintBlock.append("Known registry name hints (use only for disambiguation; verify with sources):\n");
+			for (String isin : isins) {
+				String hint = nameHints.get(isin);
+				if (hint != null && !hint.isBlank()) {
+					hintBlock.append("- ").append(isin).append(": ").append(hint).append('\n');
+				}
+			}
+		}
+		String hintSection = hintBlock.length() == 0 ? "" : "\n" + hintBlock;
+		return """
+				You are a research assistant for financial instruments (securities). For each provided ISIN, create a dossier in English.
+				
+				Requirements:
+				- Use web research (web_search) and prefer reliable primary sources (issuer/provider site, PRIIPs KID/KIID, factsheet, index provider, exchange/regulator pages).
+				- For ETFs/funds, primary sources are required when available. For single stocks/REITs, reputable market-data sources (exchange, regulator, finance portals) are acceptable if primary sources are not available.
+				- Secondary sources (e.g., justETF/ETF.com) are acceptable when primary sources are unavailable for the instrument type.
+				- Do not fail solely because primary sources are unavailable; if the instrument type cannot be confirmed, proceed with secondary sources and mark instrument_type as unknown.
+				- Disambiguation: verify the ISIN matches the instrument name using at least one citation that explicitly lists the ISIN and issuer/instrument name. If you encounter a name mismatch, keep searching; do not mix results between ISINs.
+				- Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
+				- Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
+				- Include the research date (%s) and, if available, the “data as of” date for key metrics.
+				- Only add verified information to the dossiers.
+				- No financial advice; informational only.
                 
                 Output format:
                 Return a single JSON object with exactly one entry per requested ISIN:
@@ -1233,8 +1378,11 @@ public class KnowledgeBaseService {
                 	Additional requirements:
                     - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.   
                     - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
-                    - For exposures, provide region and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
-                    - If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
+				- For exposures, provide region and sector weights (percent) and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
+				- Use GICS sector names for sector exposures whenever possible. For ETFs/funds, include a sector allocation table (GICS sectors with weights) using issuer factsheets or index providers (MSCI, S&P, FTSE Russell, Qontigo). If issuer/index data is missing, use reputable ETF databases (justETF/ETFdb).
+				- For single stocks/REITs, if no sector weights are available, include a single sector exposure with the GICS sector at 100%%.
+				- If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
+				- Always include the ## Risk section. For single stocks/REITs, if no SRI exists, set "SRI: unknown" and add a brief risk note; do not omit the section.
                     - Output JSON only. Do not wrap in Markdown code fences.
                     - Provide exactly one items[] entry for each ISIN, in the same order as given.
                 - Only set error when the ISIN is invalid or no reliable sources can be found at all; otherwise produce a dossier and use "unknown" for missing values.
@@ -1323,10 +1471,11 @@ public class KnowledgeBaseService {
                     - For both, include method flags: pe_method {ttm, forward, provider_weighted_avg, provider_aggregate}, pe_horizon {ttm, normalized}, neg_earnings_handling {exclude, set_null, aggregate_allows_negative}.
                 
                 
-                ISINs:
-                %s
-                """.formatted(today, maxChars, isinList.toString().trim());
-    }
+				ISINs:
+				%s
+				%s
+				""".formatted(today, maxChars, isinList.toString().trim(), hintSection);
+	}
 
     private Map<String, Object> buildBulkWebsearchSchema(ObjectMapper mapper) {
         String schema = """

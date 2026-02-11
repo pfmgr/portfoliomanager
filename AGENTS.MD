@@ -150,7 +150,7 @@ Important: All unknown instruments should remain `layer=5` until explicitly clas
 
 ---
 
-## 7) Developer workflows for Codex
+## 7) Developer workflows
 
 ### Start stack
 - Build or pull app images: `./build_docker_containers.sh` (local build) or `docker pull fg1212/portfoliomanager-backend:latest` + `docker pull fg1212/portfoliomanager-frontend:latest` from docker.io.
@@ -272,6 +272,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
   - `services/app/frontend/src/views/AssessorView.vue`
   - Assessor responses include new instrument suggestions for saving plans and one-time allocations when KB coverage shows missing themes/regions/sub-classes and budgets allow it; narratives must explain the gap and why each instrument fits.
   - Saving plan assessment gate algorithm: compute target layer budgets from the active rebalancer profile, derive layer deltas, then walk layers 5→1 and enforce a gate size of `max(minimum saving plan size, minimum rebalancing amount)` by zeroing small positive deltas and snapping small negative deltas to `-gate`, shifting the delta difference to the next higher layer. For each layer with delta ≠ 0: if delta > 0, propose new saving plan candidates via gap detection and KB weighting while respecting min size and max plans; if none are eligible, allocate the full delta to existing plans by KB weights with per-plan deltas ≥ minimum rebalancing. If delta < 0, allocate weighted reductions while keeping post-change amounts ≥ minimum saving plan size; if that is not possible, discard the minimal number of plans (full disable) until the negative delta can be distributed.
+  - Instrument assessment scoring is penalty-based (lower is better). Core components: TER, SRI risk indicator, valuation (P/E, P/B, EV/EBITDA), concentration (top holdings + region), single-stock premium (25), data quality, and layer-4 quality bonuses (EPS stability/growth, profitability, leverage, fair valuation). Layer-1/2 ETF region penalties use 80%/90% thresholds; non-ETF layers use 60%/75%; layer-3 holdings penalties are halved.
 - **Layer targets config UI**:
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/LayerTargetConfigController.java`
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/LayerTargetConfigService.java`
@@ -404,6 +405,7 @@ Findings (3-10):
 - Knowledge Base UI can generate a dossier draft via async websearch jobs:
   - `POST /api/kb/dossiers/websearch` returns `{jobId,status}` quickly
   - `GET /api/kb/dossiers/websearch/{jobId}` returns `{status,result,error}` where `result` is `{contentMd,displayName,citations,model}`
+- Missing-data patch runs after extractions (refresh/bulk/alternatives) and can be triggered via `POST /api/kb/dossiers/{isin}/missing-data`. It patches only missing fields, preserves structure, appends citations, and retries websearch with primary sources plus issuer/ETF domains found in first-pass citations.
 - `KB_LLM_ENABLED=true` enables `LlmExtractorService` for dossier extraction runs (currently stubbed; adds a warning and uses the stub extractor payload).
 - `instrument_dossiers.display_name` is optional and used to display/search dossiers for unknown ISINs.
 - Async KB LLM job failures surface `Error ref KB-XXXXXXXX` in UI; logs include the same ref for troubleshooting.

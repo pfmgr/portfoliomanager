@@ -31,7 +31,10 @@ public class AssessorInstrumentAssessmentService {
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 3.0;
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 5.0;
 	private static final double MAX_DATA_QUALITY_PENALTY = 20.0;
-	private static final double SINGLE_STOCK_PENALTY = 15.0;
+	private static final double MAX_DATA_QUALITY_PENALTY_CORE = 10.0;
+	private static final double SINGLE_STOCK_PENALTY = 25.0;
+	private static final double MISSING_SRI_PENALTY = 5.0;
+	private static final double MISSING_SRI_PENALTY_WITH_SECTION = 2.0;
 	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final double ETF_HOLDINGS_YIELD_WEIGHT = 0.65;
 	private static final double ETF_CURRENT_YIELD_WEIGHT = 0.20;
@@ -63,23 +66,26 @@ public class AssessorInstrumentAssessmentService {
 	public AssessmentResult assess(List<String> instrumentIsins,
 						 int amountEur,
 						 Map<Integer, BigDecimal> layerTargets,
-						 LayerTargetRiskThresholds riskThresholds) {
+						 LayerTargetRiskThresholds riskThresholds,
+						 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
-		int scoreCutoff = thresholds.getHighMin();
+		Map<Integer, LayerTargetRiskThresholds> normalizedByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
+		double scoreCutoff = thresholds.getHighMin();
 		List<String> normalizedIsins = normalizeIsins(instrumentIsins);
 		if (normalizedIsins.isEmpty() || amountEur <= 0) {
-			return AssessmentResult.empty(scoreCutoff, amountEur);
+			return AssessmentResult.empty(scoreCutoff, amountEur, thresholds, normalizedByLayer);
 		}
 		boolean kbEnabled = properties != null && properties.kb() != null && properties.kb().enabled();
 		if (!kbEnabled) {
-			return AssessmentResult.missing(scoreCutoff, amountEur, normalizedIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, normalizedIsins, thresholds, normalizedByLayer);
 		}
 		Set<String> isinSet = new LinkedHashSet<>(normalizedIsins);
 		Map<String, KbExtraction> kbExtractions = loadLatestExtractions(isinSet);
 		Map<String, ApprovedExtraction> approvedExtractions = loadApprovedExtractions(isinSet);
 		List<String> missingIsins = resolveMissingIsins(normalizedIsins, kbExtractions, approvedExtractions);
 		if (!missingIsins.isEmpty()) {
-			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins, thresholds, normalizedByLayer);
 		}
 		Map<String, InstrumentFallback> fallbacks = loadInstrumentFallbacks(isinSet);
 		List<AssessmentItem> items = new ArrayList<>();
@@ -94,23 +100,28 @@ public class AssessorInstrumentAssessmentService {
 			InstrumentFallback fallback = fallbacks.get(isin);
 			String name = resolveName(payload, fallback, isin);
 			Integer layer = resolveLayer(payload, fallback);
-			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, scoreCutoff);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff, layer);
 			items.add(new AssessmentItem(isin, name, layer, scoreResult.score(), scoreResult.badFinancials(),
 					scoreResult.scoreComponents()));
 		}
 		if (!missingIsins.isEmpty()) {
 			missingIsins.sort(String::compareTo);
-			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins);
+			return AssessmentResult.missing(scoreCutoff, amountEur, missingIsins, thresholds, normalizedByLayer);
 		}
-		AllocationResult allocation = allocate(amountEur, items, layerTargets, kbExtractions, criteria, scoreCutoff);
+		AllocationResult allocation = allocate(amountEur, items, layerTargets, kbExtractions, criteria, thresholds, normalizedByLayer);
 		return new AssessmentResult(scoreCutoff, amountEur, allocation.items(), List.of(), criteria.scoreCriteria(),
-				criteria.allocationCriteria(), allocation.layerBudgets());
+				criteria.allocationCriteria(), allocation.layerBudgets(), thresholds, normalizedByLayer);
 	}
 
 	public Map<String, Integer> assessScores(Set<String> instrumentIsins,
-									 LayerTargetRiskThresholds riskThresholds) {
+						 LayerTargetRiskThresholds riskThresholds,
+						 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
-		int scoreCutoff = thresholds.getHighMin();
+		Map<Integer, LayerTargetRiskThresholds> normalizedByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
 		List<String> normalizedIsins = normalizeIsins(instrumentIsins == null
 				? List.of()
 				: new ArrayList<>(instrumentIsins));
@@ -131,7 +142,11 @@ public class AssessorInstrumentAssessmentService {
 			if (payload == null) {
 				continue;
 			}
-			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, scoreCutoff);
+			Integer layer = resolveLayer(payload, null);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			ScoreResult scoreResult = computeAssessmentScore(payload, criteria, layerCutoff, layer);
 			scores.put(isin, scoreResult.score());
 		}
 		return scores;
@@ -306,10 +321,13 @@ public class AssessorInstrumentAssessmentService {
 		return layer;
 	}
 
-	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria, int scoreCutoff) {
+	private ScoreResult computeAssessmentScore(InstrumentDossierExtractionPayload payload,
+			CriteriaTracker criteria,
+			double scoreCutoff,
+			Integer layer) {
 		boolean badFinancials = false;
 		if (payload == null) {
-			return new ScoreResult(scoreCutoff, true, List.of());
+			return new ScoreResult((int) Math.ceil(scoreCutoff), true, List.of());
 		}
 		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
 		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
@@ -338,13 +356,15 @@ public class AssessorInstrumentAssessmentService {
 			}
 		}
 		List<ScoreComponent> components = new ArrayList<>();
-		double costPenalty = scoreCostPenalty(payload, criteria, components);
-		double riskPenalty = scoreRiskPenalty(payload, criteria, components);
+		double costPenalty = scoreCostPenalty(payload, layer, criteria, components);
+		double riskPenalty = scoreRiskPenalty(payload, layer, criteria, components);
 		double valuationPenalty = scoreValuationPenalty(payload, criteria, components);
-		double concentrationPenalty = scoreConcentrationPenalty(payload, criteria, components);
-		double dataPenalty = scoreDataQualityPenalty(payload, criteria, components);
+		double concentrationPenalty = scoreConcentrationPenalty(payload, layer, criteria, components);
+		double dataPenalty = scoreDataQualityPenalty(payload, layer, criteria, components);
 		double singleStockPenalty = scoreSingleStockPenalty(payload, criteria, components);
-		double rawScore = costPenalty + riskPenalty + valuationPenalty + concentrationPenalty + dataPenalty + singleStockPenalty;
+		double qualityBonus = scoreQualityBonuses(payload, layer, criteria, components);
+		double rawScore = costPenalty + riskPenalty + valuationPenalty + concentrationPenalty +
+				dataPenalty + singleStockPenalty + qualityBonus;
 		List<ScoreComponent> adjustedComponents = scaleComponentsIfNeeded(components, rawScore, 100.0);
 		double adjustedScore = sumComponents(adjustedComponents);
 		int rounded = (int) Math.round(Math.min(100.0, Math.max(0.0, adjustedScore)));
@@ -352,42 +372,102 @@ public class AssessorInstrumentAssessmentService {
 			double floorPenalty = scoreCutoff - adjustedScore;
 			if (floorPenalty > 0) {
 				List<ScoreComponent> extended = new ArrayList<>(adjustedComponents);
-				extended.add(new ScoreComponent("Bad financials floor", floorPenalty));
+				extended.add(new ScoreComponent("Bad financials floor", floorPenalty, null));
 				adjustedComponents = extended;
 				adjustedScore += floorPenalty;
 			}
-			rounded = scoreCutoff;
+			int floorCutoff = (int) Math.ceil(scoreCutoff);
+			floorCutoff = Math.min(100, Math.max(0, floorCutoff));
+			rounded = floorCutoff;
 		}
 		return new ScoreResult(rounded, badFinancials, List.copyOf(adjustedComponents));
 	}
 
-	private double scoreCostPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-									 List<ScoreComponent> components) {
+	private double scoreCostPenalty(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
 		if (payload == null || payload.etf() == null || payload.etf().ongoingChargesPct() == null) {
 			return 0.0;
 		}
 		criteria.addScoreCriterion("TER");
 		BigDecimal ter = payload.etf().ongoingChargesPct();
 		double value = ter.doubleValue();
-		if (value <= 0.2) {
-			recordScoreComponent(components, "TER", 0.0);
-			return 0.0;
+		double penalty = resolveTerPenalty(value, layer);
+		recordScoreComponent(components, "TER", penalty);
+		return penalty;
+	}
+
+	private double resolveTerPenalty(double terPct, Integer layer) {
+		if (layer == null) {
+			return resolveLegacyTerPenalty(terPct);
 		}
-		if (value <= 0.5) {
-			recordScoreComponent(components, "TER", 10.0);
-			return 10.0;
-		}
-		if (value <= 1.0) {
-			recordScoreComponent(components, "TER", 20.0);
+		if (layer == 1) {
+			if (terPct <= 0.25) {
+				return 0.0;
+			}
+			if (terPct <= 0.40) {
+				return 5.0;
+			}
+			if (terPct <= 0.70) {
+				return 10.0;
+			}
 			return 20.0;
 		}
-		recordScoreComponent(components, "TER", 30.0);
+		if (layer == 2) {
+			if (terPct <= 0.30) {
+				return 0.0;
+			}
+			if (terPct <= 0.50) {
+				return 5.0;
+			}
+			if (terPct <= 0.80) {
+				return 10.0;
+			}
+			return 20.0;
+		}
+		if (layer == 3) {
+			if (terPct <= 0.50) {
+				return 0.0;
+			}
+			if (terPct <= 0.80) {
+				return 5.0;
+			}
+			if (terPct <= 1.20) {
+				return 10.0;
+			}
+			return 20.0;
+		}
+		return resolveLegacyTerPenalty(terPct);
+	}
+
+	private double resolveLegacyTerPenalty(double terPct) {
+		if (terPct <= 0.2) {
+			return 0.0;
+		}
+		if (terPct <= 0.5) {
+			return 10.0;
+		}
+		if (terPct <= 1.0) {
+			return 20.0;
+		}
 		return 30.0;
 	}
 
-	private double scoreRiskPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-									 List<ScoreComponent> components) {
+	private double scoreRiskPenalty(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
 		if (payload == null || payload.risk() == null || payload.risk().summaryRiskIndicator() == null) {
+			if (isFundLayer(layer)) {
+				double penalty = MISSING_SRI_PENALTY;
+				if (payload != null && payload.risk() != null && Boolean.TRUE.equals(payload.risk().sectionPresent())) {
+					penalty = MISSING_SRI_PENALTY_WITH_SECTION;
+				}
+				criteria.addScoreCriterion("Risk indicator");
+				recordScoreComponent(components, "Risk indicator missing", penalty);
+				return penalty;
+			}
 			return 0.0;
 		}
 		Integer value = payload.risk().summaryRiskIndicator().value();
@@ -404,8 +484,12 @@ public class AssessorInstrumentAssessmentService {
 		return penalty;
 	}
 
+	private boolean isFundLayer(Integer layer) {
+		return layer != null && layer >= 1 && layer <= 3;
+	}
+
 	private double scoreValuationPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-										 List<ScoreComponent> components) {
+					 List<ScoreComponent> components) {
 		if (payload == null || payload.valuation() == null) {
 			return 0.0;
 		}
@@ -424,8 +508,13 @@ public class AssessorInstrumentAssessmentService {
 			} else if (pe > 30) {
 				pePenalty = 10.0;
 			}
-			penalty += pePenalty;
-			valuationComponents.add(new ScoreComponent("P/E", pePenalty));
+			EpsCagrDetail epsCagr = computeEpsCagrDetail(valuation);
+			Double pegRatio = computePegRatio(peCurrent, epsCagr);
+			double adjustedPePenalty = applyPegAdjustment(pePenalty, pegRatio);
+			penalty += adjustedPePenalty;
+			String label = adjustedPePenalty == pePenalty ? "P/E" : "P/E (PEG-adjusted)";
+			String pegNote = adjustedPePenalty == pePenalty ? null : formatPegNote(epsCagr, pegRatio);
+			valuationComponents.add(new ScoreComponent(label, adjustedPePenalty, pegNote));
 		}
 		BigDecimal evToEbitda = valuation.evToEbitda();
 		if (evToEbitda != null) {
@@ -438,7 +527,7 @@ public class AssessorInstrumentAssessmentService {
 				evPenalty = 15.0;
 			}
 			penalty += evPenalty;
-			valuationComponents.add(new ScoreComponent("EV/EBITDA", evPenalty));
+			valuationComponents.add(new ScoreComponent("EV/EBITDA", evPenalty, null));
 		}
 		BigDecimal pbCurrent = valuation.pbCurrent();
 		if (pbCurrent != null) {
@@ -451,7 +540,7 @@ public class AssessorInstrumentAssessmentService {
 				pbPenalty = 10.0;
 			}
 			penalty += pbPenalty;
-			valuationComponents.add(new ScoreComponent("P/B", pbPenalty));
+			valuationComponents.add(new ScoreComponent("P/B", pbPenalty, null));
 		}
 		BigDecimal earningsYield = valuation.earningsYieldLongterm();
 		if (earningsYield != null) {
@@ -464,7 +553,7 @@ public class AssessorInstrumentAssessmentService {
 				yieldPenalty = 10.0;
 			}
 			penalty += yieldPenalty;
-			valuationComponents.add(new ScoreComponent("Earnings yield", yieldPenalty));
+			valuationComponents.add(new ScoreComponent("Earnings yield", yieldPenalty, null));
 		}
 		double cappedPenalty = Math.min(35.0, penalty);
 		if (!valuationComponents.isEmpty()) {
@@ -473,8 +562,104 @@ public class AssessorInstrumentAssessmentService {
 		return cappedPenalty;
 	}
 
-	private double scoreConcentrationPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-										 List<ScoreComponent> components) {
+	private EpsCagrDetail computeEpsCagrDetail(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
+		if (valuation == null || valuation.epsHistory() == null || valuation.epsHistory().isEmpty()) {
+			return null;
+		}
+		Map<Integer, BigDecimal> epsByYear = new HashMap<>();
+		for (InstrumentDossierExtractionPayload.EpsHistoryPayload entry : valuation.epsHistory()) {
+			if (entry == null || entry.year() == null || entry.eps() == null) {
+				continue;
+			}
+			if (entry.eps().signum() <= 0) {
+				continue;
+			}
+			epsByYear.put(entry.year(), entry.eps());
+		}
+		if (epsByYear.size() < 2) {
+			return null;
+		}
+		List<Integer> years = new ArrayList<>(epsByYear.keySet());
+		years.sort(Integer::compareTo);
+		Integer firstYear = years.get(0);
+		Integer lastYear = years.get(years.size() - 1);
+		if (firstYear == null || lastYear == null) {
+			return null;
+		}
+		int span = lastYear - firstYear;
+		if (span < 2) {
+			return null;
+		}
+		BigDecimal first = epsByYear.get(firstYear);
+		BigDecimal last = epsByYear.get(lastYear);
+		if (first == null || last == null || first.signum() <= 0 || last.signum() <= 0) {
+			return null;
+		}
+		double ratio = last.doubleValue() / first.doubleValue();
+		if (!Double.isFinite(ratio) || ratio <= 0.0) {
+			return null;
+		}
+		double cagr = Math.pow(ratio, 1.0 / span) - 1.0;
+		if (!Double.isFinite(cagr) || cagr <= 0.0) {
+			return null;
+		}
+		return new EpsCagrDetail(cagr * 100.0, firstYear, lastYear);
+	}
+
+	private Double computePegRatio(BigDecimal peCurrent, EpsCagrDetail epsCagr) {
+		if (peCurrent == null || epsCagr == null) {
+			return null;
+		}
+		double pe = peCurrent.doubleValue();
+		if (!Double.isFinite(pe) || pe <= 0.0) {
+			return null;
+		}
+		if (epsCagr.cagrPercent() <= 0.0) {
+			return null;
+		}
+		double peg = pe / epsCagr.cagrPercent();
+		if (!Double.isFinite(peg) || peg <= 0.0) {
+			return null;
+		}
+		return peg;
+	}
+
+	private String formatPegNote(EpsCagrDetail epsCagr, Double pegRatio) {
+		if (epsCagr == null || pegRatio == null || !Double.isFinite(pegRatio)) {
+			return null;
+		}
+		return String.format(Locale.ROOT,
+				"EPS CAGR %.1f%% (%d→%d), PEG %.2f",
+				epsCagr.cagrPercent(),
+				epsCagr.startYear(),
+				epsCagr.endYear(),
+				pegRatio
+		);
+	}
+
+	private double applyPegAdjustment(double pePenalty, Double pegRatio) {
+		if (pePenalty <= 0.0 || pegRatio == null) {
+			return pePenalty;
+		}
+		if (pegRatio <= 1.0) {
+			return pePenalty * 0.25;
+		}
+		if (pegRatio <= 1.5) {
+			return pePenalty * 0.5;
+		}
+		if (pegRatio <= 2.0) {
+			return pePenalty * 0.75;
+		}
+		return pePenalty;
+	}
+
+	private record EpsCagrDetail(double cagrPercent, int startYear, int endYear) {
+	}
+
+	private double scoreConcentrationPenalty(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
 		if (payload == null) {
 			return 0.0;
 		}
@@ -492,24 +677,20 @@ public class AssessorInstrumentAssessmentService {
 			weights.sort(Comparator.reverseOrder());
 			if (!weights.isEmpty()) {
 				double max = weights.get(0).doubleValue();
-				if (max >= 0.15) {
-					penalty += 15.0;
-				} else if (max >= 0.10) {
-					penalty += 10.0;
-				}
+				penalty += resolveTopHoldingPenalty(max, layer);
 			}
 			if (weights.size() >= 3) {
 				double top3 = weights.get(0).add(weights.get(1)).add(weights.get(2)).doubleValue();
-				if (top3 >= 0.35) {
-					penalty += 15.0;
-				} else if (top3 >= 0.25) {
-					penalty += 10.0;
-				}
+				penalty += resolveTopThreeHoldingPenalty(top3, layer);
 			}
-			recordScoreComponent(components, "Top holdings concentration", penalty);
+			double adjustedHoldingsPenalty = adjustHoldingsPenaltyForLayer(penalty, layer);
+			recordScoreComponent(components, "Top holdings concentration", adjustedHoldingsPenalty);
+			penalty = adjustedHoldingsPenalty;
 		}
+		boolean skipRegionPenalty = isSingleStock(payload) || isReit(payload);
+		boolean isEtfInstrument = isEtf(payload);
 		List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions = payload.regions();
-		if (regions != null && !regions.isEmpty()) {
+		if (!skipRegionPenalty && regions != null && !regions.isEmpty()) {
 			criteria.addScoreCriterion("Region concentration");
 			double maxRegion = 0.0;
 			for (InstrumentDossierExtractionPayload.RegionExposurePayload region : regions) {
@@ -518,18 +699,83 @@ public class AssessorInstrumentAssessmentService {
 					maxRegion = Math.max(maxRegion, weight.doubleValue());
 				}
 			}
-			if (maxRegion >= 0.75) {
-				penalty += 15.0;
-			} else if (maxRegion >= 0.60) {
-				penalty += 10.0;
-			}
-			recordScoreComponent(components, "Region concentration", maxRegion >= 0.75 ? 15.0 : maxRegion >= 0.60 ? 10.0 : 0.0);
+			double regionPenalty = resolveRegionPenalty(maxRegion, layer, isEtfInstrument);
+			penalty += regionPenalty;
+			recordScoreComponent(components, "Region concentration", regionPenalty);
 		}
 		return penalty;
 	}
 
-	private double scoreDataQualityPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
-									 List<ScoreComponent> components) {
+	private double resolveTopHoldingPenalty(double maxWeight, Integer layer) {
+		if (layer != null && layer == 1) {
+			if (maxWeight >= 0.30) {
+				return 15.0;
+			}
+			if (maxWeight >= 0.20) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (maxWeight >= 0.15) {
+			return 15.0;
+		}
+		if (maxWeight >= 0.10) {
+			return 10.0;
+		}
+		return 0.0;
+	}
+
+	private double resolveTopThreeHoldingPenalty(double topThreeWeight, Integer layer) {
+		if (layer != null && layer == 1) {
+			if (topThreeWeight >= 0.55) {
+				return 15.0;
+			}
+			if (topThreeWeight >= 0.40) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (topThreeWeight >= 0.35) {
+			return 15.0;
+		}
+		if (topThreeWeight >= 0.25) {
+			return 10.0;
+		}
+		return 0.0;
+	}
+
+	private double resolveRegionPenalty(double maxRegion, Integer layer, boolean isEtfInstrument) {
+		if (layer != null && layer == 1) {
+			if (maxRegion >= 0.90) {
+				return 15.0;
+			}
+			if (maxRegion >= 0.80) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (isEtfInstrument && layer != null && layer == 2) {
+			if (maxRegion >= 0.90) {
+				return 15.0;
+			}
+			if (maxRegion >= 0.80) {
+				return 10.0;
+			}
+			return 0.0;
+		}
+		if (maxRegion >= 0.75) {
+			return 15.0;
+		}
+		if (maxRegion >= 0.60) {
+			return 10.0;
+		}
+		return 0.0;
+	}
+
+	private double scoreDataQualityPenalty(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
 		if (payload == null) {
 			return 0.0;
 		}
@@ -540,9 +786,226 @@ public class AssessorInstrumentAssessmentService {
 		}
 		criteria.addScoreCriterion("Data quality");
 		double penalty = (missing * DATA_QUALITY_MISSING_WEIGHT) + (warnings * DATA_QUALITY_WARNING_WEIGHT);
-		double cappedPenalty = Math.min(MAX_DATA_QUALITY_PENALTY, penalty);
+		double cappedPenalty = Math.min(resolveDataQualityCap(layer), penalty);
 		recordScoreComponent(components, "Data quality", cappedPenalty);
 		return cappedPenalty;
+	}
+
+	private double scoreQualityBonuses(InstrumentDossierExtractionPayload payload,
+			Integer layer,
+			CriteriaTracker criteria,
+			List<ScoreComponent> components) {
+		if (payload == null || layer == null || layer != 4) {
+			return 0.0;
+		}
+		List<ScoreComponent> bonusComponents = new ArrayList<>();
+		double totalBonus = 0.0;
+
+		InstrumentDossierExtractionPayload.ValuationPayload valuation = payload.valuation();
+		InstrumentDossierExtractionPayload.FinancialsPayload financials = payload.financials();
+
+		if (valuation != null) {
+			List<ScoreComponent> epsComponents = new ArrayList<>();
+			int streak = computeConsecutivePositiveEpsYears(valuation.epsHistory());
+			double stabilityBonus = 0.0;
+			if (streak >= 5) {
+				stabilityBonus = -5.0;
+			} else if (streak >= 3) {
+				stabilityBonus = -3.0;
+			}
+			if (stabilityBonus != 0.0) {
+				epsComponents.add(new ScoreComponent("EPS stability bonus", stabilityBonus, null));
+			}
+			EpsCagrDetail epsCagr = computeEpsCagrDetail(valuation);
+			double growthBonus = 0.0;
+			if (epsCagr != null) {
+				if (epsCagr.cagrPercent() >= 20.0) {
+					growthBonus = -5.0;
+				} else if (epsCagr.cagrPercent() >= 10.0) {
+					growthBonus = -3.0;
+				}
+			}
+			if (growthBonus != 0.0) {
+				epsComponents.add(new ScoreComponent(
+						"EPS growth bonus",
+						growthBonus,
+						formatEpsCagrNote(epsCagr)
+				));
+			}
+			if (!epsComponents.isEmpty()) {
+				epsComponents = scaleBonusComponentsIfNeeded(epsComponents, -8.0);
+				bonusComponents.addAll(epsComponents);
+			}
+
+			BigDecimal netDebt = valuation.netDebt();
+			BigDecimal ebitda = valuation.ebitda();
+			Double netDebtToEbitda = safeRatio(netDebt, ebitda);
+			Double netDebtToMarketCap = safeRatio(netDebt, valuation.marketCap());
+			double leverageBonus = resolveLeverageBonus(netDebtToEbitda, netDebtToMarketCap);
+			if (leverageBonus != 0.0) {
+				bonusComponents.add(new ScoreComponent("Low leverage bonus", leverageBonus, null));
+			}
+
+			BigDecimal peCurrent = valuation.peCurrent();
+			BigDecimal pbCurrent = valuation.pbCurrent();
+			if (peCurrent != null && pbCurrent != null
+					&& peCurrent.signum() > 0 && pbCurrent.signum() > 0
+					&& peCurrent.doubleValue() < 20.0 && pbCurrent.doubleValue() < 3.0) {
+				bonusComponents.add(new ScoreComponent("Fair valuation bonus", -3.0, null));
+			}
+		}
+
+		if (financials != null) {
+			Double margin = safeRatio(financials.netIncome(), financials.revenue());
+			double marginBonus = 0.0;
+			if (margin != null) {
+				if (margin >= 0.20) {
+					marginBonus = -5.0;
+				} else if (margin >= 0.10) {
+					marginBonus = -3.0;
+				}
+			}
+			if (marginBonus != 0.0) {
+				bonusComponents.add(new ScoreComponent("Profitability bonus", marginBonus, null));
+			}
+		}
+
+		totalBonus = sumComponents(bonusComponents);
+		if (totalBonus < -15.0) {
+			bonusComponents = scaleBonusComponentsIfNeeded(bonusComponents, -15.0);
+			totalBonus = sumComponents(bonusComponents);
+		}
+		if (!bonusComponents.isEmpty()) {
+			criteria.addScoreCriterion("Quality bonus");
+			components.addAll(bonusComponents);
+		}
+		return totalBonus;
+	}
+
+	private List<ScoreComponent> scaleBonusComponentsIfNeeded(List<ScoreComponent> components, double cap) {
+		if (components == null || components.isEmpty()) {
+			return List.of();
+		}
+		double total = sumComponents(components);
+		if (total >= cap) {
+			return components;
+		}
+		if (cap == 0.0) {
+			return components;
+		}
+		double ratio = cap / total;
+		List<ScoreComponent> scaled = new ArrayList<>(components.size());
+		for (ScoreComponent component : components) {
+			if (component == null) {
+				continue;
+			}
+			scaled.add(new ScoreComponent(component.criterion(), component.points() * ratio, component.note()));
+		}
+		return scaled;
+	}
+
+	private int computeConsecutivePositiveEpsYears(List<InstrumentDossierExtractionPayload.EpsHistoryPayload> history) {
+		if (history == null || history.isEmpty()) {
+			return 0;
+		}
+		List<Integer> years = new ArrayList<>();
+		for (InstrumentDossierExtractionPayload.EpsHistoryPayload entry : history) {
+			if (entry == null || entry.year() == null || entry.eps() == null) {
+				continue;
+			}
+			if (entry.eps().signum() <= 0) {
+				continue;
+			}
+			if (!years.contains(entry.year())) {
+				years.add(entry.year());
+			}
+		}
+		if (years.isEmpty()) {
+			return 0;
+		}
+		years.sort(Integer::compareTo);
+		int maxStreak = 1;
+		int current = 1;
+		for (int i = 1; i < years.size(); i++) {
+			int prev = years.get(i - 1);
+			int curr = years.get(i);
+			if (curr == prev + 1) {
+				current += 1;
+			} else {
+				current = 1;
+			}
+			if (current > maxStreak) {
+				maxStreak = current;
+			}
+		}
+		return maxStreak;
+	}
+
+	private Double safeRatio(BigDecimal numerator, BigDecimal denominator) {
+		if (numerator == null || denominator == null) {
+			return null;
+		}
+		if (denominator.signum() <= 0) {
+			return null;
+		}
+		double num = numerator.doubleValue();
+		double den = denominator.doubleValue();
+		if (!Double.isFinite(num) || !Double.isFinite(den) || den == 0.0) {
+			return null;
+		}
+		double ratio = num / den;
+		if (!Double.isFinite(ratio)) {
+			return null;
+		}
+		return Math.max(0.0, ratio);
+	}
+
+	private double resolveLeverageBonus(Double netDebtToEbitda, Double netDebtToMarketCap) {
+		double bonusEbitda = 0.0;
+		if (netDebtToEbitda != null) {
+			if (netDebtToEbitda < 0.5) {
+				bonusEbitda = -8.0;
+			} else if (netDebtToEbitda < 1.0) {
+				bonusEbitda = -5.0;
+			}
+		}
+		double bonusMarketCap = 0.0;
+		if (netDebtToMarketCap != null && netDebtToMarketCap < 0.2) {
+			bonusMarketCap = -3.0;
+		}
+		if (bonusEbitda != 0.0 && bonusMarketCap != 0.0) {
+			return Math.max(bonusEbitda, bonusMarketCap);
+		}
+		return bonusEbitda != 0.0 ? bonusEbitda : bonusMarketCap;
+	}
+
+	private String formatEpsCagrNote(EpsCagrDetail epsCagr) {
+		if (epsCagr == null) {
+			return null;
+		}
+		return String.format(Locale.ROOT,
+				"EPS CAGR %.1f%% (%d→%d)",
+				epsCagr.cagrPercent(),
+				epsCagr.startYear(),
+				epsCagr.endYear()
+		);
+	}
+
+	private double adjustHoldingsPenaltyForLayer(double penalty, Integer layer) {
+		if (penalty <= 0.0) {
+			return penalty;
+		}
+		if (layer != null && layer == 3) {
+			return penalty * 0.5;
+		}
+		return penalty;
+	}
+
+	private double resolveDataQualityCap(Integer layer) {
+		if (layer != null && (layer == 1 || layer == 2)) {
+			return MAX_DATA_QUALITY_PENALTY_CORE;
+		}
+		return MAX_DATA_QUALITY_PENALTY;
 	}
 
 	private double scoreSingleStockPenalty(InstrumentDossierExtractionPayload payload, CriteriaTracker criteria,
@@ -555,8 +1018,8 @@ public class AssessorInstrumentAssessmentService {
 		return SINGLE_STOCK_PENALTY;
 	}
 
-	private double scoreWeightFactor(int score, int scoreCutoff) {
-		if (scoreCutoff <= 0) {
+	private double scoreWeightFactor(int score, double scoreCutoff) {
+		if (scoreCutoff <= 0.0) {
 			return 1.0;
 		}
 		double normalized = ((double) scoreCutoff - (double) score + 1.0) / (double) scoreCutoff;
@@ -570,10 +1033,14 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private void recordScoreComponent(List<ScoreComponent> components, String criterion, double points) {
+		recordScoreComponent(components, criterion, points, null);
+	}
+
+	private void recordScoreComponent(List<ScoreComponent> components, String criterion, double points, String note) {
 		if (components == null || criterion == null || criterion.isBlank()) {
 			return;
 		}
-		components.add(new ScoreComponent(criterion, points));
+		components.add(new ScoreComponent(criterion, points, note));
 	}
 
 	private double sumComponents(List<ScoreComponent> components) {
@@ -590,8 +1057,8 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private List<ScoreComponent> scaleComponentsIfNeeded(List<ScoreComponent> components,
-											 double rawTotal,
-											 double cappedTotal) {
+									 double rawTotal,
+									 double cappedTotal) {
 		if (components == null || components.isEmpty()) {
 			return List.of();
 		}
@@ -604,7 +1071,7 @@ public class AssessorInstrumentAssessmentService {
 			if (component == null) {
 				continue;
 			}
-			scaled.add(new ScoreComponent(component.criterion(), component.points() * ratio));
+			scaled.add(new ScoreComponent(component.criterion(), component.points() * ratio, component.note()));
 		}
 		return scaled;
 	}
@@ -614,17 +1081,27 @@ public class AssessorInstrumentAssessmentService {
 							 Map<Integer, BigDecimal> layerTargets,
 							 Map<String, KbExtraction> extractions,
 							 CriteriaTracker criteria,
-							 int scoreCutoff) {
+							 LayerTargetRiskThresholds fallback,
+							 Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
 		Map<Integer, List<AssessmentItem>> byLayer = groupByLayer(items);
-		Map<Integer, BigDecimal> layerBudgets = allocateLayerBudgets(amountEur, byLayer, layerTargets, scoreCutoff);
+		Map<Integer, BigDecimal> layerBudgets = allocateLayerBudgets(
+				amountEur,
+				byLayer,
+				layerTargets,
+				fallback,
+				thresholdsByLayer
+		);
 		List<AssessmentItem> allocatedItems = new ArrayList<>();
 		Set<String> allocatedIsins = new LinkedHashSet<>();
 		for (Map.Entry<Integer, List<AssessmentItem>> entry : byLayer.entrySet()) {
 			Integer layer = entry.getKey();
 			List<AssessmentItem> layerItems = entry.getValue();
 			BigDecimal layerBudget = layerBudgets.getOrDefault(layer, BigDecimal.ZERO);
-			Map<String, BigDecimal> weights = computeWeights(layerItems, extractions, criteria, scoreCutoff);
-			Map<String, BigDecimal> amounts = allocateInstrumentAmounts(layerItems, layerBudget, weights, scoreCutoff);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, fallback, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			Map<String, BigDecimal> weights = computeWeights(layerItems, extractions, criteria, layerCutoff, layer);
+			Map<String, BigDecimal> amounts = allocateInstrumentAmounts(layerItems, layerBudget, weights, layerCutoff);
 			for (AssessmentItem item : layerItems) {
 				BigDecimal allocation = amounts.getOrDefault(item.isin(), BigDecimal.ZERO);
 				allocatedItems.add(item.withAllocation(allocation));
@@ -658,9 +1135,10 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<Integer, BigDecimal> allocateLayerBudgets(int amountEur,
-								 Map<Integer, List<AssessmentItem>> byLayer,
-								 Map<Integer, BigDecimal> layerTargets,
-								 int scoreCutoff) {
+							 Map<Integer, List<AssessmentItem>> byLayer,
+							 Map<Integer, BigDecimal> layerTargets,
+							 LayerTargetRiskThresholds fallback,
+							 Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
 		Map<Integer, BigDecimal> budgets = new LinkedHashMap<>();
 		if (amountEur <= 0) {
 			return budgets;
@@ -669,7 +1147,10 @@ public class AssessorInstrumentAssessmentService {
 		BigDecimal targetSum = BigDecimal.ZERO;
 		for (int layer = 1; layer <= 5; layer++) {
 			List<AssessmentItem> layerItems = byLayer.getOrDefault(layer, List.of());
-			boolean hasEligible = layerItems.stream().anyMatch(item -> item.score() < scoreCutoff);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, fallback, layer);
+			double layerCutoff = layerThresholds.getHighMin();
+			boolean hasEligible = layerItems.stream().anyMatch(item -> item.score() < layerCutoff);
 			if (!hasEligible) {
 				continue;
 			}
@@ -736,9 +1217,9 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<String, BigDecimal> allocateInstrumentAmounts(List<AssessmentItem> items,
-								  BigDecimal layerBudget,
-								  Map<String, BigDecimal> weights,
-								  int scoreCutoff) {
+							  BigDecimal layerBudget,
+							  Map<String, BigDecimal> weights,
+							  double scoreCutoff) {
 		Map<String, BigDecimal> allocations = new LinkedHashMap<>();
 		if (layerBudget == null || layerBudget.signum() <= 0 || items.isEmpty()) {
 			for (AssessmentItem item : items) {
@@ -802,9 +1283,10 @@ public class AssessorInstrumentAssessmentService {
 	}
 
 	private Map<String, BigDecimal> computeWeights(List<AssessmentItem> items,
-								  Map<String, KbExtraction> extractions,
-								  CriteriaTracker criteria,
-								  int scoreCutoff) {
+							  Map<String, KbExtraction> extractions,
+							  CriteriaTracker criteria,
+							  double scoreCutoff,
+							  Integer layer) {
 		List<AssessmentItem> eligible = items.stream()
 				.filter(item -> item.score() < scoreCutoff)
 				.toList();
@@ -822,13 +1304,16 @@ public class AssessorInstrumentAssessmentService {
 		boolean useBenchmark = true;
 		boolean useRegions = true;
 		boolean useHoldings = true;
+		boolean useSectors = true;
 		boolean useValuation = true;
 		Map<String, String> benchmarks = new HashMap<>();
 		Map<String, BigDecimal> ters = new HashMap<>();
 		Map<String, Set<String>> regionNames = new HashMap<>();
 		Map<String, Set<String>> holdingNames = new HashMap<>();
+		Map<String, Set<String>> sectorNames = new HashMap<>();
 		Map<String, Map<String, BigDecimal>> regionWeights = new HashMap<>();
 		Map<String, Map<String, BigDecimal>> holdingWeights = new HashMap<>();
+		Map<String, Map<String, BigDecimal>> sectorWeights = new HashMap<>();
 		Map<String, BigDecimal> valuationScores = new HashMap<>();
 		Map<String, Double> dataPenalties = new HashMap<>();
 
@@ -839,6 +1324,7 @@ public class AssessorInstrumentAssessmentService {
 			String benchmark = null;
 			Set<String> regions = null;
 			Set<String> holdings = null;
+			Set<String> sectors = null;
 			BigDecimal valuationScore = null;
 			double dataPenalty = 0.0;
 			if (payload != null) {
@@ -848,6 +1334,7 @@ public class AssessorInstrumentAssessmentService {
 				}
 				regions = normalizeRegionNames(payload.regions());
 				holdings = normalizeHoldingNames(payload.topHoldings());
+				sectors = normalizeSectorNames(payload.sectors(), payload.gicsSector());
 				Map<String, BigDecimal> regionWeight = normalizeRegionWeights(payload.regions());
 				if (regionWeight != null && !regionWeight.isEmpty()) {
 					regionWeights.put(item.isin(), regionWeight);
@@ -855,6 +1342,10 @@ public class AssessorInstrumentAssessmentService {
 				Map<String, BigDecimal> holdingWeight = normalizeHoldingWeights(payload.topHoldings());
 				if (holdingWeight != null && !holdingWeight.isEmpty()) {
 					holdingWeights.put(item.isin(), holdingWeight);
+				}
+				Map<String, BigDecimal> sectorWeight = normalizeSectorWeights(payload.sectors(), payload.gicsSector());
+				if (sectorWeight != null && !sectorWeight.isEmpty()) {
+					sectorWeights.put(item.isin(), sectorWeight);
 				}
 				valuationScore = computeValuationScore(payload);
 				dataPenalty = computeDataQualityPenalty(payload);
@@ -879,6 +1370,11 @@ public class AssessorInstrumentAssessmentService {
 			} else {
 				holdingNames.put(item.isin(), holdings);
 			}
+			if (sectors == null || sectors.isEmpty()) {
+				useSectors = false;
+			} else {
+				sectorNames.put(item.isin(), sectors);
+			}
 			if (valuationScore == null) {
 				useValuation = false;
 			} else {
@@ -889,7 +1385,7 @@ public class AssessorInstrumentAssessmentService {
 			}
 		}
 
-		boolean useRedundancy = useBenchmark || useRegions || useHoldings;
+		boolean useRedundancy = useBenchmark || useRegions || useHoldings || useSectors;
 		if (!useCost && !useRedundancy && !useValuation) {
 			return scoreWeightedWeights(eligible, scoreFactors, criteria, useScoreWeighting);
 		}
@@ -914,7 +1410,8 @@ public class AssessorInstrumentAssessmentService {
 			}
 			if (useRedundancy) {
 				double redundancy = computeRedundancy(item.isin(), eligible.size(), benchmarks, benchmarkCounts,
-						regionNames, holdingNames, regionWeights, holdingWeights, useBenchmark, useRegions, useHoldings);
+						regionNames, holdingNames, sectorNames, regionWeights, holdingWeights, sectorWeights,
+						useBenchmark, useRegions, useHoldings, useSectors, sectorWeightFactor(layer));
 				BigDecimal uniqueness = BigDecimal.ONE.subtract(BigDecimal.valueOf(redundancy));
 				if (uniqueness.compareTo(BigDecimal.ZERO) < 0) {
 					uniqueness = BigDecimal.ZERO;
@@ -956,7 +1453,7 @@ public class AssessorInstrumentAssessmentService {
 		return weights;
 	}
 
-	private Map<String, Double> buildScoreWeightFactors(List<AssessmentItem> eligible, int scoreCutoff) {
+	private Map<String, Double> buildScoreWeightFactors(List<AssessmentItem> eligible, double scoreCutoff) {
 		Map<String, Double> factors = new HashMap<>();
 		for (AssessmentItem item : eligible) {
 			if (item == null || item.isin() == null) {
@@ -1017,22 +1514,26 @@ public class AssessorInstrumentAssessmentService {
 							 Map<String, Integer> benchmarkCounts,
 							 Map<String, Set<String>> regions,
 							 Map<String, Set<String>> holdings,
+							 Map<String, Set<String>> sectors,
 							 Map<String, Map<String, BigDecimal>> regionWeights,
 							 Map<String, Map<String, BigDecimal>> holdingWeights,
+							 Map<String, Map<String, BigDecimal>> sectorWeights,
 							 boolean useBenchmark,
 							 boolean useRegions,
-							 boolean useHoldings) {
+							 boolean useHoldings,
+							 boolean useSectors,
+							 double sectorWeightFactor) {
 		if (total <= 1) {
 			return 0.0;
 		}
 		double sum = 0.0;
-		int components = 0;
+		double weightSum = 0.0;
 		if (useBenchmark) {
 			String benchmark = benchmarks.get(isin);
 			if (benchmark != null) {
 				int count = benchmarkCounts.getOrDefault(benchmark, 0);
 				sum += Math.max(0.0, (double) (count - 1) / (double) (total - 1));
-				components += 1;
+				weightSum += 1.0;
 			}
 		}
 		if (useRegions) {
@@ -1042,7 +1543,7 @@ public class AssessorInstrumentAssessmentService {
 			}
 			if (overlap >= 0) {
 				sum += overlap;
-				components += 1;
+				weightSum += 1.0;
 			}
 		}
 		if (useHoldings) {
@@ -1052,13 +1553,28 @@ public class AssessorInstrumentAssessmentService {
 			}
 			if (overlap >= 0) {
 				sum += overlap;
-				components += 1;
+				weightSum += 1.0;
 			}
 		}
-		if (components == 0) {
+		if (useSectors) {
+			double weight = Math.max(0.0, Math.min(1.0, sectorWeightFactor));
+			if (weight <= 0.0) {
+				// skip
+			} else {
+				double overlap = averageWeightedOverlap(sectorWeights.get(isin), sectors, sectorWeights);
+				if (overlap < 0) {
+					overlap = averageOverlap(sectors.get(isin), sectors);
+				}
+				if (overlap >= 0) {
+					sum += overlap * weight;
+					weightSum += weight;
+				}
+			}
+		}
+		if (weightSum == 0.0) {
 			return 0.0;
 		}
-		return sum / components;
+		return sum / weightSum;
 	}
 
 	private double averageOverlap(Set<String> current, Map<String, Set<String>> others) {
@@ -1284,6 +1800,44 @@ public class AssessorInstrumentAssessmentService {
 		return normalized;
 	}
 
+	private Set<String> normalizeSectorNames(List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+									 String gicsSector) {
+		Set<String> normalized = new LinkedHashSet<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				if (sector == null || sector.name() == null || sector.name().isBlank()) {
+					continue;
+				}
+				normalized.add(sector.name().trim().toLowerCase(Locale.ROOT));
+			}
+		}
+		if (normalized.isEmpty() && gicsSector != null && !gicsSector.isBlank()) {
+			normalized.add(gicsSector.trim().toLowerCase(Locale.ROOT));
+		}
+		return normalized.isEmpty() ? Set.of() : normalized;
+	}
+
+	private Map<String, BigDecimal> normalizeSectorWeights(
+			List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+			String gicsSector) {
+		Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				if (sector == null || sector.name() == null || sector.name().isBlank()) {
+					continue;
+				}
+				BigDecimal weight = normalizeWeightPct(sector.weightPct());
+				if (weight != null) {
+					normalized.put(sector.name().trim().toLowerCase(Locale.ROOT), weight);
+				}
+			}
+		}
+		if (normalized.isEmpty() && gicsSector != null && !gicsSector.isBlank()) {
+			normalized.put(gicsSector.trim().toLowerCase(Locale.ROOT), BigDecimal.ONE);
+		}
+		return normalized;
+	}
+
 	private BigDecimal normalizeWeightPct(BigDecimal weight) {
 		if (weight == null || weight.signum() <= 0) {
 			return null;
@@ -1291,6 +1845,19 @@ public class AssessorInstrumentAssessmentService {
 		return weight.compareTo(BigDecimal.ONE) > 0
 				? weight.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP)
 				: weight;
+	}
+
+	private double sectorWeightFactor(Integer layer) {
+		if (layer == null) {
+			return 0.0;
+		}
+		if (layer == 1) {
+			return 0.5;
+		}
+		if (layer == 5) {
+			return 0.0;
+		}
+		return 1.0;
 	}
 
 	private BigDecimal extractLongtermEarningsYield(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
@@ -1543,7 +2110,7 @@ public class AssessorInstrumentAssessmentService {
 		}
 	}
 
-	public record ScoreComponent(String criterion, double points) {
+	public record ScoreComponent(String criterion, double points, String note) {
 	}
 
 	private record ScoreResult(int score, boolean badFinancials, List<ScoreComponent> scoreComponents) {
@@ -1555,19 +2122,30 @@ public class AssessorInstrumentAssessmentService {
 	private record AllocationResult(List<AssessmentItem> items, Map<Integer, BigDecimal> layerBudgets) {
 	}
 
-	public record AssessmentResult(int scoreCutoff,
-									int amountEur,
-									List<AssessmentItem> items,
-									List<String> missingIsins,
-									List<String> scoreCriteria,
-									List<String> allocationCriteria,
-									Map<Integer, BigDecimal> layerBudgets) {
-		static AssessmentResult empty(int scoreCutoff, int amountEur) {
-			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.of(), List.of(), List.of(), Map.of());
+	public record AssessmentResult(double scoreCutoff,
+								int amountEur,
+								List<AssessmentItem> items,
+								List<String> missingIsins,
+								List<String> scoreCriteria,
+								List<String> allocationCriteria,
+								Map<Integer, BigDecimal> layerBudgets,
+								LayerTargetRiskThresholds riskThresholds,
+								Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+		static AssessmentResult empty(double scoreCutoff,
+											int amountEur,
+											LayerTargetRiskThresholds riskThresholds,
+											Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.of(), List.of(), List.of(), Map.of(),
+					riskThresholds, riskThresholdsByLayer);
 		}
 
-		static AssessmentResult missing(int scoreCutoff, int amountEur, List<String> missingIsins) {
-			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.copyOf(missingIsins), List.of(), List.of(), Map.of());
+		static AssessmentResult missing(double scoreCutoff,
+											int amountEur,
+											List<String> missingIsins,
+											LayerTargetRiskThresholds riskThresholds,
+											Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+			return new AssessmentResult(scoreCutoff, amountEur, List.of(), List.copyOf(missingIsins), List.of(), List.of(), Map.of(),
+					riskThresholds, riskThresholdsByLayer);
 		}
 	}
 

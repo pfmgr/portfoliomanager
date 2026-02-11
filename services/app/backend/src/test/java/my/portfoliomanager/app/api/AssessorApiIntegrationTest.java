@@ -16,12 +16,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.http.MediaType;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import java.time.LocalDate;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -81,6 +83,10 @@ class AssessorApiIntegrationTest {
 		jdbcTemplate.update("insert into snapshot_positions (snapshot_id, isin, name, value_eur, currency) values (21, 'BBB222', 'Bond ETF', 2000.00, 'EUR')");
 	}
 
+	private RequestPostProcessor adminJwt() {
+		return jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+	}
+
 	@AfterEach
 	void tearDown() {
 		databaseCleaner.clean();
@@ -89,7 +95,7 @@ class AssessorApiIntegrationTest {
 	@Test
 	void runEndpointReturnsAssessment() throws Exception {
 		String startPayload = mockMvc.perform(post("/api/assessor/run")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
 								{
@@ -108,10 +114,10 @@ class AssessorApiIntegrationTest {
 
 		for (int attempt = 0; attempt < 30; attempt++) {
 			String jobPayload = mockMvc.perform(get("/api/assessor/run/{jobId}", jobId)
-							.with(httpBasic("admin", "admin")))
-					.andExpect(status().isOk())
-					.andReturn()
-					.getResponse()
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
 					.getContentAsString();
 
 			JsonNode jobNode = objectMapper.readTree(jobPayload);

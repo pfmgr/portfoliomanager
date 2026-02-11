@@ -450,6 +450,35 @@ public class KnowledgeBaseLlmActionService {
 		}
 	}
 
+	private void runMissingDataFill(LlmActionState state, String isin, Boolean autoApprove, String actor) {
+		if (!acquireSlot(state)) {
+			return;
+		}
+		try {
+			state.status = KnowledgeBaseLlmActionStatus.RUNNING;
+			state.message = "Filling missing data";
+			state.updatedAt = LocalDateTime.now();
+			InstrumentDossierExtractionResponseDto extraction = maintenanceService.fillMissingData(isin, autoApprove, actor);
+			state.extractionResult = extraction;
+			if (extraction.status() == DossierExtractionStatus.FAILED) {
+				state.status = KnowledgeBaseLlmActionStatus.FAILED;
+				state.message = failWithReference(state, extraction.error());
+			} else {
+				state.status = KnowledgeBaseLlmActionStatus.DONE;
+				state.message = "Missing data fill completed";
+			}
+		} catch (CancellationException ex) {
+			state.status = KnowledgeBaseLlmActionStatus.CANCELED;
+			state.message = "Canceled";
+		} catch (Exception ex) {
+			state.status = KnowledgeBaseLlmActionStatus.FAILED;
+			state.message = failWithReference(state, ex);
+		} finally {
+			state.updatedAt = LocalDateTime.now();
+			concurrency.release();
+		}
+	}
+
 	private boolean acquireSlot(LlmActionState state) {
 		try {
 			concurrency.acquire();

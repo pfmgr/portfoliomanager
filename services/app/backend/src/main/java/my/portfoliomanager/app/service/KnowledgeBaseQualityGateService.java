@@ -5,6 +5,7 @@ import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -120,7 +121,9 @@ public class KnowledgeBaseQualityGateService {
 				reasons.add("missing_isin_header");
 			}
 		}
-		for (SectionRequirement section : REQUIRED_SECTIONS) {
+		InstrumentCategory category = resolveInstrumentCategoryFromContent(trimmed);
+		List<SectionRequirement> requiredSections = requiredSectionsForCategory(category);
+		for (SectionRequirement section : requiredSections) {
 			if (!section.pattern().matcher(trimmed).find()) {
 				reasons.add("missing_section:" + section.code());
 			}
@@ -629,6 +632,124 @@ public class KnowledgeBaseQualityGateService {
 		tokens.add(value.toLowerCase(Locale.ROOT));
 	}
 
+	private void addNumericToken(List<String> tokens, String token) {
+		if (token == null || token.isBlank()) {
+			return;
+		}
+		String normalized = token.toLowerCase(Locale.ROOT);
+		if (!tokens.contains(normalized)) {
+			tokens.add(normalized);
+		}
+	}
+
+	private void addDecimalVariants(List<String> tokens, String value) {
+		if (value == null || value.isBlank()) {
+			return;
+		}
+		if (value.contains(".")) {
+			addNumericToken(tokens, value.replace('.', ','));
+		}
+	}
+
+	private void addGroupedVariants(List<String> tokens, String value) {
+		if (value == null || value.isBlank()) {
+			return;
+		}
+		String normalized = value.trim();
+		String sign = "";
+		if (normalized.startsWith("-")) {
+			sign = "-";
+			normalized = normalized.substring(1);
+		}
+		String[] parts = normalized.split("\\.", 2);
+		String integerPart = parts[0];
+		String fractionalPart = parts.length > 1 ? parts[1] : "";
+		String groupedComma = groupDigits(integerPart, ',');
+		String groupedDot = groupDigits(integerPart, '.');
+		addGroupedToken(tokens, sign, groupedComma, fractionalPart, '.');
+		addGroupedToken(tokens, sign, groupedComma, fractionalPart, ',');
+		addGroupedToken(tokens, sign, groupedDot, fractionalPart, '.');
+		addGroupedToken(tokens, sign, groupedDot, fractionalPart, ',');
+	}
+
+	private void addGroupedToken(List<String> tokens,
+			String sign,
+			String integerPart,
+			String fractionalPart,
+			char decimalSeparator) {
+		if (integerPart == null || integerPart.isBlank()) {
+			return;
+		}
+		StringBuilder builder = new StringBuilder();
+		builder.append(sign).append(integerPart);
+		if (fractionalPart != null && !fractionalPart.isBlank()) {
+			builder.append(decimalSeparator).append(fractionalPart);
+		}
+		addNumericToken(tokens, builder.toString());
+	}
+
+	private String groupDigits(String digits, char separator) {
+		if (digits == null || digits.length() <= 3) {
+			return digits;
+		}
+		StringBuilder builder = new StringBuilder();
+		int length = digits.length();
+		int firstGroup = length % 3;
+		if (firstGroup == 0) {
+			firstGroup = 3;
+		}
+		builder.append(digits, 0, firstGroup);
+		for (int i = firstGroup; i < length; i += 3) {
+			builder.append(separator).append(digits, i, i + 3);
+		}
+		return builder.toString();
+	}
+
+	private void addScaledVariants(List<String> tokens, BigDecimal value) {
+		if (value == null) {
+			return;
+		}
+		BigDecimal abs = value.abs();
+		String sign = value.signum() < 0 ? "-" : "";
+		addScaledTokens(tokens, abs, sign, BigDecimal.valueOf(1_000_000_000L), List.of("b", "bn", "billion"));
+		addScaledTokens(tokens, abs, sign, BigDecimal.valueOf(1_000_000L), List.of("m", "mn", "million"));
+		addScaledTokens(tokens, abs, sign, BigDecimal.valueOf(1_000L), List.of("k", "thousand"));
+	}
+
+	private void addScaledTokens(List<String> tokens,
+			BigDecimal value,
+			String sign,
+			BigDecimal divisor,
+			List<String> suffixes) {
+		if (value.compareTo(divisor) < 0) {
+			return;
+		}
+		List<BigDecimal> variants = List.of(
+				value.divide(divisor, 1, RoundingMode.HALF_UP),
+				value.divide(divisor, 2, RoundingMode.HALF_UP)
+		);
+		for (BigDecimal variant : variants) {
+			if (variant == null) {
+				continue;
+			}
+			String base = variant.stripTrailingZeros().toPlainString();
+			String signedBase = sign + base;
+			addScaledTokenVariants(tokens, signedBase, suffixes);
+			if (base.contains(".")) {
+				String commaBase = sign + base.replace('.', ',');
+				addScaledTokenVariants(tokens, commaBase, suffixes);
+			}
+		}
+	}
+
+	private void addScaledTokenVariants(List<String> tokens, String base, List<String> suffixes) {
+		addNumericToken(tokens, base);
+		for (String suffix : suffixes) {
+			addNumericToken(tokens, base + suffix);
+			addNumericToken(tokens, base + " " + suffix);
+		}
+	}
+
 	private boolean canDerivePeCurrent(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
 		if (valuation == null) {
 			return false;
@@ -700,6 +821,19 @@ public class KnowledgeBaseQualityGateService {
 			return InstrumentCategory.EQUITY;
 		}
 		return InstrumentCategory.UNKNOWN;
+	}
+
+	private List<SectionRequirement> requiredSectionsForCategory(InstrumentCategory category) {
+		if (category == InstrumentCategory.EQUITY || category == InstrumentCategory.REIT) {
+			List<SectionRequirement> filtered = new ArrayList<>();
+			for (SectionRequirement section : REQUIRED_SECTIONS) {
+				if (!"risk".equals(section.code())) {
+					filtered.add(section);
+				}
+			}
+			return filtered;
+		}
+		return REQUIRED_SECTIONS;
 	}
 
 	private InstrumentCategory categorizeInstrumentType(String value) {

@@ -1,5 +1,6 @@
 package my.portfoliomanager.app.api;
 
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
 import my.portfoliomanager.app.dto.KnowledgeBaseBulkResearchRequestDto;
@@ -21,11 +22,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
@@ -34,7 +37,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -75,26 +78,30 @@ class KnowledgeBaseApiIntegrationTest {
 				.build();
 	}
 
+	private RequestPostProcessor adminJwt() {
+		return jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+	}
+
 	@Test
-	void endpointsRequireBasicAuth() throws Exception {
+	void endpointsRequireJwt() throws Exception {
 		mockMvc.perform(get("/api/kb/dossiers"))
 				.andExpect(status().isUnauthorized());
 
 		mockMvc.perform(get("/api/kb/dossiers")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk());
 	}
 
 	@Test
 	void configEndpoints_readAndUpdate() throws Exception {
 		mockMvc.perform(get("/api/kb/config")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.refresh_interval_days").isNumber());
 
 		String updatePayload = "{\"enabled\":true,\"auto_approve\":true}";
 		mockMvc.perform(put("/api/kb/config")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(updatePayload))
 				.andExpect(status().isOk())
@@ -110,7 +117,7 @@ class KnowledgeBaseApiIntegrationTest {
 				false
 		);
 		MvcResult result = mockMvc.perform(post("/api/kb/dossiers/bulk-research")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(objectMapper.writeValueAsString(request)))
 				.andExpect(status().isOk())
@@ -129,7 +136,7 @@ class KnowledgeBaseApiIntegrationTest {
 	@Test
 	void alternatives_returnsItems() throws Exception {
 		MvcResult result = mockMvc.perform(post("/api/kb/alternatives/DE0000000001")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"autoApprove\":false}"))
 				.andExpect(status().isOk())
@@ -148,7 +155,7 @@ class KnowledgeBaseApiIntegrationTest {
 	void refreshBatch_dryRunProcessesScope() throws Exception {
 		String payload = "{\"limit\":2,\"batchSize\":1,\"dryRun\":true,\"scope\":{\"isins\":[\"DE0000000001\",\"DE0000000002\"]}}";
 		MvcResult result = mockMvc.perform(post("/api/kb/refresh/batch")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(payload))
 				.andExpect(status().isOk())
@@ -166,7 +173,7 @@ class KnowledgeBaseApiIntegrationTest {
 	@Test
 	void runsEndpoint_returnsItems() throws Exception {
 		MvcResult result = mockMvc.perform(post("/api/kb/dossiers/bulk-research")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"isins\":[\"DE0000000001\"],\"autoApprove\":false}"))
 				.andExpect(status().isOk())
@@ -178,7 +185,7 @@ class KnowledgeBaseApiIntegrationTest {
 		awaitAction(action.actionId());
 
 		String response = mockMvc.perform(get("/api/kb/runs")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andReturn()
 				.getResponse()
@@ -189,7 +196,7 @@ class KnowledgeBaseApiIntegrationTest {
 	private KnowledgeBaseLlmActionDto awaitAction(String actionId) throws Exception {
 		for (int attempt = 0; attempt < 200; attempt++) {
 			MvcResult result = mockMvc.perform(get("/api/kb/llm-actions/" + actionId)
-							.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 					.andExpect(status().isOk())
 					.andReturn();
 			KnowledgeBaseLlmActionDto action = objectMapper.readValue(
@@ -217,9 +224,9 @@ class KnowledgeBaseApiIntegrationTest {
 			return new KnowledgeBaseLlmClient() {
 				@Override
 				public KnowledgeBaseLlmDossierDraft generateDossier(String isin,
-													 String context,
-													 List<String> allowedDomains,
-													 int maxChars) {
+										 String context,
+										 List<String> allowedDomains,
+										 int maxChars) {
 					ArrayNode citations = objectMapper.createArrayNode();
 					citations.add(objectMapper.createObjectNode()
 							.put("id", "1")
@@ -232,6 +239,20 @@ class KnowledgeBaseApiIntegrationTest {
 							"asset_class: Equity\n" +
 							"layer: 2";
 					return new KnowledgeBaseLlmDossierDraft(content, "Test Instrument", citations, "test-model");
+				}
+
+				@Override
+				public KnowledgeBaseLlmDossierDraft patchDossierMissingFields(String isin,
+														 String contentMd,
+														 JsonNode existingCitations,
+														 List<String> missingFields,
+														 String context,
+														 List<String> allowedDomains,
+														 int maxChars) {
+					JsonNode citations = existingCitations == null
+							? objectMapper.createArrayNode()
+							: existingCitations;
+					return new KnowledgeBaseLlmDossierDraft(contentMd, "Test Instrument", citations, "test-model");
 				}
 
 				@Override

@@ -367,7 +367,8 @@
                 <p v-if="missingMetricsError" class="toast error">{{ missingMetricsError }}</p>
                 <p v-if="isIsinBusy(dossierDetail.isin)" class="hint">LLM action already running for this ISIN.</p>
                 <p v-if="extractionAction" class="hint">
-                  Extraction action {{ formatActionStatus(extractionAction.status) }}: {{ extractionAction.message || '-' }}
+                  {{ formatActionType(extractionAction.type) }} action {{ formatActionStatus(extractionAction.status) }}:
+                  {{ extractionAction.message || '-' }}
                 </p>
                 <p v-if="missingMetricsAction" class="hint">
                   Missing metrics action {{ formatActionStatus(missingMetricsAction.status) }}:
@@ -2609,10 +2610,11 @@ async function handleRefreshActionResult(detail) {
 }
 
 async function handleExtractionActionResult(detail) {
+  const actionLabel = detail?.type === 'MISSING_DATA' ? 'Missing data fill' : 'Extraction'
   if (detail.status === 'FAILED') {
-    extractionError.value = detail.message || 'Extraction failed'
+    extractionError.value = detail.message || `${actionLabel} failed`
   } else if (detail.status === 'CANCELED') {
-    extractionError.value = 'Extraction canceled'
+    extractionError.value = `${actionLabel} canceled`
   } else {
     extractionError.value = ''
   }

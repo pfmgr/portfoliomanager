@@ -345,23 +345,24 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         return effort == null ? "unknown" : effort.toString();
     }
 
-    private String responseBodyPreview(byte[] body, String contentType) {
-        if (body == null || body.length == 0) {
-            return "<empty>";
-        }
-        String normalizedType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-        if (normalizedType.contains("octet-stream")) {
-            return "<binary length=" + body.length + ">";
-        }
-        String text = new String(body, StandardCharsets.UTF_8).trim();
-        if (text.isBlank()) {
-            return "<blank length=" + body.length + ">";
-        }
-        if (text.length() > 500) {
-            return text.substring(0, 500) + "...";
-        }
-        return text;
-    }
+	private String responseBodyPreview(byte[] body, String contentType) {
+		if (body == null || body.length == 0) {
+			return "<empty>";
+		}
+		String normalizedType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+		if (normalizedType.contains("octet-stream")) {
+			return "<binary length=" + body.length + ">";
+		}
+		String text = new String(body, StandardCharsets.UTF_8).trim();
+		if (text.isBlank()) {
+			return "<blank length=" + body.length + ">";
+		}
+		int maxChars = 4000;
+		if (text.length() > maxChars) {
+			return text.substring(0, maxChars) + "... (truncated, length=" + text.length() + ")";
+		}
+		return text;
+	}
 
     private String safeMessage(Exception ex) {
         if (ex == null) {

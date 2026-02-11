@@ -27,6 +27,7 @@ public class KnowledgeBaseRefreshService {
 	private static final Pattern ISIN_RE = Pattern.compile("^[A-Z]{2}[A-Z0-9]{9}[0-9]$");
 	private final KnowledgeBaseConfigService configService;
 	private final KnowledgeBaseService knowledgeBaseService;
+	private final KnowledgeBaseMaintenanceService maintenanceService;
 	private final KnowledgeBaseRunService runService;
 	private final InstrumentDossierRepository dossierRepository;
 	private final KnowledgeBaseBatchPlanner batchPlanner = new KnowledgeBaseBatchPlanner();
@@ -37,6 +38,7 @@ public class KnowledgeBaseRefreshService {
 							   InstrumentDossierRepository dossierRepository) {
 		this.configService = configService;
 		this.knowledgeBaseService = knowledgeBaseService;
+		this.maintenanceService = maintenanceService;
 		this.runService = runService;
 		this.dossierRepository = dossierRepository;
 	}
@@ -179,12 +181,12 @@ public class KnowledgeBaseRefreshService {
         }
     }
 
-    private KnowledgeBaseBulkResearchItemDto runExtractionFlow(String isin,
-                                                               DossierStatus dossierStatus,
-                                                               Long dossierId,
-                                                               String actor,
-                                                               boolean autoApprove,
-                                                               boolean applyOverrides) {
+	private KnowledgeBaseBulkResearchItemDto runExtractionFlow(String isin,
+																 DossierStatus dossierStatus,
+																 Long dossierId,
+																 String actor,
+																 boolean autoApprove,
+																 boolean applyOverrides) {
         if (Thread.currentThread().isInterrupted()) {
             throw new CancellationException("Canceled");
         }
@@ -198,13 +200,16 @@ public class KnowledgeBaseRefreshService {
                         extraction.extractionId(), extraction.error(),
                         knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status()));
             }
+            extraction = maintenanceService.patchMissingDataIfNeeded(dossierId, extraction, autoApprove, actor);
             Long extractionId = extraction.extractionId();
-            if (autoApprove) {
+            if (autoApprove && extraction.status() != DossierExtractionStatus.APPROVED
+                    && extraction.status() != DossierExtractionStatus.APPLIED) {
                 extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
                 extractionId = extraction.extractionId();
             }
+            Long resolvedDossierId = extraction.dossierId() == null ? dossierId : extraction.dossierId();
             runService.markSucceeded(extractRun);
-            return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
+            return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, resolvedDossierId,
                     extractionId, null, knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status()));
         } catch (CancellationException ex) {
             runService.markFailed(extractRun, "Canceled");

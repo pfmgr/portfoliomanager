@@ -285,7 +285,12 @@ class KnowledgeBaseServiceTest {
 				null,
 				null,
 				null,
+				null,
+				null,
 				List.of(),
+				null,
+				List.of(),
+				null,
 				List.of(),
 				List.of()
 		);
