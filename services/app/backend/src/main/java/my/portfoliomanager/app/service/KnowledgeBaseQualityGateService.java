@@ -308,7 +308,9 @@ public class KnowledgeBaseQualityGateService {
 		if (content == null || content.isBlank() || labels == null || labels.isEmpty()) {
 			return false;
 		}
-		Pattern scaledPattern = Pattern.compile("(?i)([-+]?[0-9]+(?:[.,][0-9]+)?)\\s*(b|bn|billion|m|mn|million|k|thousand)\\b");
+		Pattern scaledPattern = Pattern.compile(
+				"(?i)([-+]?[0-9]+(?:[.,][0-9]+)?)\\s*(?:\\(?[a-z]{3}\\)?\\s*)?(b|bn|billion|m|mn|million|k|thousand)\\b"
+		);
 		for (String line : content.split("\\R")) {
 			String lower = line.toLowerCase(Locale.ROOT);
 			boolean labelFound = false;
@@ -569,6 +571,8 @@ public class KnowledgeBaseQualityGateService {
 		}
 		java.util.LinkedHashSet<String> tokens = new java.util.LinkedHashSet<>();
 		addNumericTokens(tokens, value);
+		addGroupedVariants(tokens, value.toPlainString());
+		addGroupedVariants(tokens, value.stripTrailingZeros().toPlainString());
 		addScaledTokens(tokens, value, new BigDecimal("1000000000"), List.of("b", "bn", "billion"));
 		addScaledTokens(tokens, value, new BigDecimal("1000000"), List.of("m", "mn", "million"));
 		addScaledTokens(tokens, value, new BigDecimal("1000"), List.of("k", "thousand"));
@@ -625,7 +629,7 @@ public class KnowledgeBaseQualityGateService {
 		}
 	}
 
-	private void addToken(java.util.LinkedHashSet<String> tokens, String value) {
+	private void addToken(java.util.Set<String> tokens, String value) {
 		if (value == null || value.isBlank()) {
 			return;
 		}
@@ -651,7 +655,7 @@ public class KnowledgeBaseQualityGateService {
 		}
 	}
 
-	private void addGroupedVariants(List<String> tokens, String value) {
+	private void addGroupedVariants(java.util.Set<String> tokens, String value) {
 		if (value == null || value.isBlank()) {
 			return;
 		}
@@ -672,7 +676,7 @@ public class KnowledgeBaseQualityGateService {
 		addGroupedToken(tokens, sign, groupedDot, fractionalPart, ',');
 	}
 
-	private void addGroupedToken(List<String> tokens,
+	private void addGroupedToken(java.util.Set<String> tokens,
 			String sign,
 			String integerPart,
 			String fractionalPart,
@@ -685,7 +689,7 @@ public class KnowledgeBaseQualityGateService {
 		if (fractionalPart != null && !fractionalPart.isBlank()) {
 			builder.append(decimalSeparator).append(fractionalPart);
 		}
-		addNumericToken(tokens, builder.toString());
+		addToken(tokens, builder.toString());
 	}
 
 	private String groupDigits(String digits, char separator) {

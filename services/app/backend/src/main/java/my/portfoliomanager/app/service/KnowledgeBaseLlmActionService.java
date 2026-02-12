@@ -167,9 +167,10 @@ public class KnowledgeBaseLlmActionService {
 	}
 
 	public KnowledgeBaseLlmActionDto startRefreshSingle(String isin,
-														String actor,
-														Boolean autoApprove,
-														KnowledgeBaseLlmActionTrigger trigger) {
+									String actor,
+									Boolean autoApprove,
+									Boolean force,
+									KnowledgeBaseLlmActionTrigger trigger) {
 		String normalized = normalizeIsin(isin);
 		cleanupExpired();
 		ensureNotActive(List.of(normalized));
@@ -182,7 +183,7 @@ public class KnowledgeBaseLlmActionService {
 				activeSet);
 		actions.put(state.actionId, state);
 		state.message = "Queued refresh";
-		state.future = executor.submit(() -> runRefreshSingle(state, normalized, autoApprove, actor));
+		state.future = executor.submit(() -> runRefreshSingle(state, normalized, autoApprove, force, actor));
 		return toDto(state, false);
 	}
 
@@ -370,6 +371,7 @@ public class KnowledgeBaseLlmActionService {
 	private void runRefreshSingle(LlmActionState state,
 								  String isin,
 								  Boolean autoApprove,
+								  Boolean force,
 								  String actor) {
 		if (!acquireSlot(state)) {
 			return;
@@ -378,7 +380,7 @@ public class KnowledgeBaseLlmActionService {
 			state.status = KnowledgeBaseLlmActionStatus.RUNNING;
 			state.message = "Running refresh";
 			state.updatedAt = LocalDateTime.now();
-			KnowledgeBaseRefreshItemDto result = refreshService.refreshSingle(isin, autoApprove, actor, Set.of());
+			KnowledgeBaseRefreshItemDto result = refreshService.refreshSingle(isin, autoApprove, force, actor, Set.of());
 			state.refreshItemResult = result;
 			state.status = KnowledgeBaseLlmActionStatus.DONE;
 			state.message = "Refresh " + (result.status() == null ? "done" : result.status().name().toLowerCase(Locale.ROOT));

@@ -224,6 +224,58 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
+	void evaluateExtractionEvidence_equityScaledNumbersWithCurrencyTokenMatch() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE0007236101",
+				"Equity",
+				null,
+				null,
+				financials(
+						new BigDecimal("78914000000"),
+						new BigDecimal("8992000000"),
+						new BigDecimal("5.20")
+				),
+				valuation(
+						new BigDecimal("241.10"),
+						new BigDecimal("26.13"),
+						new BigDecimal("3.21"),
+						new BigDecimal("199710000000"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						List.of(
+								epsHistory(2024, new BigDecimal("11.15")),
+								epsHistory(2023, new BigDecimal("10.77"))
+						)
+				)
+		);
+		String dossierContent = "revenue: 78,914.0 EUR million (FY)\n"
+				+ "net_income: 8,992.0 EUR million (FY)\n"
+				+ "price: 241.10 EUR\n"
+				+ "pe_current: 26.13\n"
+				+ "pb_current: 3.21\n"
+				+ "dividend_per_share: 5.20 EUR\n"
+				+ "eps_history:\n"
+				+ "- 2024: 11.15 EUR\n"
+				+ "- 2023: 10.77 EUR\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain(
+				"revenue",
+				"net_income"
+		);
+	}
+
+	@Test
 	void evaluateExtractionEvidence_reitProfile_requiresReitFields() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"US8288071029",

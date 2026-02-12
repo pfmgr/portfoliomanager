@@ -111,12 +111,13 @@ public class KnowledgeBaseController {
 	@PostMapping("/dossiers/{isin:[A-Z0-9]{12}}/refresh")
 	@Operation(summary = "Refresh dossier for ISIN")
 	public KnowledgeBaseLlmActionDto refreshDossier(@PathVariable("isin") String isin,
-													@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
-													Principal principal) {
+										@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
+										Principal principal) {
 		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		Boolean autoApprove = request == null ? null : request.autoApprove();
-		return actionService.startRefreshSingle(isin, actor, autoApprove, KnowledgeBaseLlmActionTrigger.USER);
+		Boolean force = request == null ? null : request.force();
+		return actionService.startRefreshSingle(isin, actor, autoApprove, force, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
 	@PostMapping("/alternatives/{isin:[A-Z0-9]{12}}")
@@ -142,12 +143,13 @@ public class KnowledgeBaseController {
 	@PostMapping("/refresh/{isin:[A-Z0-9]{12}}")
 	@Operation(summary = "Refresh single ISIN (admin)")
 	public KnowledgeBaseLlmActionDto refreshSingle(@PathVariable("isin") String isin,
-												   @RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
-												   Principal principal) {
+									   @RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
+									   Principal principal) {
 		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		Boolean autoApprove = request == null ? null : request.autoApprove();
-		return actionService.startRefreshSingle(isin, actor, autoApprove, KnowledgeBaseLlmActionTrigger.USER);
+		Boolean force = request == null ? null : request.force();
+		return actionService.startRefreshSingle(isin, actor, autoApprove, force, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
 	@PostMapping("/dossiers/websearch")

@@ -34,6 +34,7 @@ public class KnowledgeBaseRefreshService {
 
 	public KnowledgeBaseRefreshService(KnowledgeBaseConfigService configService,
 							   KnowledgeBaseService knowledgeBaseService,
+							   KnowledgeBaseMaintenanceService maintenanceService,
 							   KnowledgeBaseRunService runService,
 							   InstrumentDossierRepository dossierRepository) {
 		this.configService = configService;
@@ -44,22 +45,31 @@ public class KnowledgeBaseRefreshService {
 	}
 
 	public KnowledgeBaseRefreshItemDto refreshSingle(String isin, Boolean autoApprove, String actor) {
-		return refreshSingle(isin, autoApprove, actor, Set.of());
+		return refreshSingle(isin, autoApprove, null, actor, Set.of());
 	}
 
 	public KnowledgeBaseRefreshItemDto refreshSingle(String isin,
-													 Boolean autoApprove,
-													 String actor,
-													 Set<String> blockedIsins) {
+									 Boolean autoApprove,
+									 Boolean force,
+									 String actor) {
+		return refreshSingle(isin, autoApprove, force, actor, Set.of());
+	}
+
+	public KnowledgeBaseRefreshItemDto refreshSingle(String isin,
+									 Boolean autoApprove,
+									 Boolean force,
+									 String actor,
+									 Set<String> blockedIsins) {
 		String normalized = normalizeIsin(isin);
 		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
 		runService.markTimedOutRuns(Duration.ofMinutes(config.runTimeoutMinutes()));
 		boolean autoApproveFlag = autoApprove != null ? autoApprove : config.autoApprove();
 		boolean applyOverrides = config.applyExtractionsToOverrides();
+		boolean forceRefresh = force != null && force;
         if (blockedIsins != null && blockedIsins.contains(normalized)) {
             return new KnowledgeBaseRefreshItemDto(normalized, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "already_running", null);
         }
-        return runRefreshForIsin(normalized, autoApproveFlag, applyOverrides, actor, null);
+        return runRefreshForIsin(normalized, autoApproveFlag, applyOverrides, actor, null, forceRefresh);
     }
 
 	public KnowledgeBaseRefreshBatchResponseDto refreshBatch(KnowledgeBaseRefreshBatchRequestDto request, String actor) {
@@ -115,7 +125,7 @@ public class KnowledgeBaseRefreshService {
                     continue;
                 }
 				KnowledgeBaseRefreshItemDto item = runRefreshForIsin(isin, config.autoApprove(), config.applyExtractionsToOverrides(),
-						actor, batchId);
+						actor, batchId, false);
 				items.add(item);
 				processed++;
 				switch (item.status()) {
@@ -138,21 +148,22 @@ public class KnowledgeBaseRefreshService {
 	}
 
 	private KnowledgeBaseRefreshItemDto runRefreshForIsin(String isin,
-														 boolean autoApprove,
-														 boolean applyOverrides,
-														 String actor,
-														 String batchId) {
+									 boolean autoApprove,
+									 boolean applyOverrides,
+									 String actor,
+									 String batchId,
+									 boolean forceRefresh) {
 		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
 		if (Thread.currentThread().isInterrupted()) {
 			throw new CancellationException("Canceled");
 		}
 
-        if (shouldSkipRefresh(isin, config)) {
-            KnowledgeBaseRun skipped = runService.startRun(isin, KnowledgeBaseRunAction.REFRESH, batchId, null);
-            runService.incrementAttempt(skipped);
-            runService.markSkipped(skipped, "Recently refreshed");
-            return new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "recently_refreshed", null);
-        }
+		if (!forceRefresh && shouldSkipRefresh(isin, config)) {
+			KnowledgeBaseRun skipped = runService.startRun(isin, KnowledgeBaseRunAction.REFRESH, batchId, null);
+			runService.incrementAttempt(skipped);
+			runService.markSkipped(skipped, "Recently refreshed");
+			return new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SKIPPED, null, null, "recently_refreshed", null);
+		}
 
 		KnowledgeBaseRun run = runService.startRun(isin, KnowledgeBaseRunAction.REFRESH, batchId, null);
 		runService.incrementAttempt(run);

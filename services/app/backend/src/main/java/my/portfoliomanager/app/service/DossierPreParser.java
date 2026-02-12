@@ -272,7 +272,8 @@ public class DossierPreParser {
 			summaryRiskIndicator == null
 					? null
 					: new InstrumentDossierExtractionPayload.RiskPayload(
-							new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(summaryRiskIndicator)
+							new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(summaryRiskIndicator),
+							null
 					);
 		InstrumentDossierExtractionPayload.FinancialsPayload financialsPayload =
 				(revenue == null && netIncome == null && dividendPerShare == null && financialsFxRateToEur == null)
@@ -385,10 +386,15 @@ public class DossierPreParser {
 			instrumentType,
 			assetClass,
 			subClass,
+			null,
+			null,
+			null,
+			null,
 			layer,
 			layerNotes,
 			etfPayload,
 			riskPayload,
+			null,
 			null,
 			null,
 			financialsPayload,

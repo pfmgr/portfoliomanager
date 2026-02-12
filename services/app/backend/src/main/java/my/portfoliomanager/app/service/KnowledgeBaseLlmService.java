@@ -1370,11 +1370,12 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Do not fail solely because primary sources are unavailable; if the instrument type cannot be confirmed, proceed with secondary sources and mark instrument_type as unknown.
 				- For single stocks/REITs, market-data sources are acceptable and required for valuation metrics (price, P/E, P/B, market cap, EPS history) when issuer pages do not list them. Do not omit valuation metrics just because they are not on issuer pages.
 				- Disambiguation: verify the ISIN matches the instrument name using at least one citation that explicitly lists the ISIN and issuer/instrument name. If you encounter a name mismatch, keep searching; do not mix results between ISINs.
-				- Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
-				- Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
-				- Include the research date (%s) and, if available, the “data as of” date for key metrics (factsheet date, holdings date).
-				- Only add verified information to the dossier.
-				- No financial advice; informational only.
+			- Provide citations: every key claim (e.g., TER/fees, replication method, index tracked, domicile, distribution policy, SRI) must be backed by a source.
+			- Do not invent data. If something cannot be verified, write "unknown" and briefly explain why.
+			- Include the research date (%s) and, if available, the “data as of” date for key metrics (factsheet date, holdings date).
+			- Only add verified information to the dossier.
+			- Numeric format: use plain digits with "." as decimal separator and no thousands separators. When a currency is present, use the ISO 3-letter code immediately after the number; if you include scale words (million/billion/thousand or m/bn/k), place them after the currency (e.g., "revenue: 78914.0 EUR million").
+			- No financial advice; informational only.
 				
 				
 				Output format:
@@ -1429,7 +1430,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 - After the last valuation bullet (ffo), immediately start the next section header; do not add notes, explanations, or a second template.
                 - For unknown values, write exactly "unknown" with no explanation.
                 - Never add parenthetical qualifiers to "unknown" values.
-                - Use numeric values as stated in sources (B/M abbreviations are acceptable if that is how the source reports them).
+			- Use numeric values as stated in sources, but normalize to the numeric format rules above (no thousands separators, "." decimal). B/M abbreviations are acceptable if that is how the source reports them.
                 - If you cite a source for a valuation metric, include its numeric value in the template (do not cite without a number).
                 - For enum fields (holdings_weight_method, pe_method, pe_horizon, neg_earnings_handling), use exactly one allowed value or "unknown".
                 - Never output pipe-separated option lists in values (e.g., "ttm|normalized"); choose a single value or "unknown".
@@ -1522,10 +1523,11 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Only add or update content required to fill the missing fields. Do not rewrite unrelated sections.
 				- Preserve the existing structure, headings, and wording wherever possible.
 				- If a missing field cannot be verified, leave the field as "unknown" in the dossier and do not invent data.
-				- Keep the dossier under %d characters.
-				- Keep the existing citations and append new citations for any added data.
-				- Provide citations for every new data point you add.
-				- Keep the research date (%s).
+			- Keep the dossier under %d characters.
+			- Keep the existing citations and append new citations for any added data.
+			- Provide citations for every new data point you add.
+			- Keep the research date (%s).
+			- Numeric format: use plain digits with "." as decimal separator and no thousands separators. When a currency is present, use the ISO 3-letter code immediately after the number; if you include scale words (million/billion/thousand or m/bn/k), place them after the currency.
 
 				Single-stock completion rules (apply when context says "Single stock: true"):
 				- If any of these fields are missing, you must fill them when sources provide values: price, pe_current, pb_current, market_cap, shares_outstanding, eps_history.
@@ -1572,9 +1574,10 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- If primary sources are not available, you may use reliable secondary sources (e.g., justETF, ETF.com, exchange/market-data portals) but still provide citations.
 				- Provide citations: every alternative must include sources backing the rationale.
 				- Do not invent data. If something cannot be verified, exclude the alternative.
-				- Do not return the original ISIN as an alternative.
-				- Return 3 to 6 alternatives when possible; if fewer are available, return the best available alternatives instead of an empty list.
-				- Include the research date (%s).
+			- Do not return the original ISIN as an alternative.
+			- Return 3 to 6 alternatives when possible; if fewer are available, return the best available alternatives instead of an empty list.
+			- Include the research date (%s).
+			- If you mention numeric values in rationale, use plain digits with "." as decimal separator and no thousands separators.
 
 				Output format:
 				Return a single JSON object:
@@ -1606,8 +1609,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Include every key listed below, even when the value is null. Do not omit required keys.
 				- Do not guess. Only use information explicitly present in the dossier.
 				- Use null for unknown/missing values (not the string "unknown").
-				- Keep string values short and literal (e.g., "ETF", "Equity", "Developed Markets", ...).
-				- layer must be an integer 1..5 (5 = Unclassified).
+			- Keep string values short and literal (e.g., "ETF", "Equity", "Developed Markets", ...).
+			- Numeric format: output JSON numbers with "." as decimal separator and no thousands separators. Do not include unit suffixes in numeric fields.
+			- layer must be an integer 1..5 (5 = Unclassified).
 				- risk.summary_risk_indicator.value must be an integer 1..7.
 				- If the dossier states a risk between two numbers choose the higher value.
 				- etf.ongoing_charges_pct is a number in percent units (e.g., 0.20 for 0.20%%). Strip "%%" if present.
