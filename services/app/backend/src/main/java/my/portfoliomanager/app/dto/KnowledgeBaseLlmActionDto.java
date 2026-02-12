@@ -25,6 +25,7 @@ public record KnowledgeBaseLlmActionDto(
 		KnowledgeBaseAlternativesResponseDto alternativesResult,
 		KnowledgeBaseRefreshBatchResponseDto refreshBatchResult,
 		KnowledgeBaseRefreshItemDto refreshItemResult,
-		InstrumentDossierExtractionResponseDto extractionResult
+		InstrumentDossierExtractionResponseDto extractionResult,
+		KnowledgeBaseMissingMetricsResponseDto missingMetricsResult
 ) {
 }

@@ -34,6 +34,7 @@ Minimum config fields:
 - `max_retries_per_instrument`
 - `base_backoff_seconds`
 - `max_backoff_seconds`
+- `quality_gate_retry_limit`
 - `dossier_max_chars`
 - `kb_refresh_min_days_between_runs_per_instrument`
 - `run_timeout_minutes`

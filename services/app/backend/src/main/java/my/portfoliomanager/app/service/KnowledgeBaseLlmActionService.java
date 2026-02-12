@@ -13,6 +13,7 @@ import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionStatus;
 import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionTrigger;
 import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionType;
 import my.portfoliomanager.app.dto.KnowledgeBaseManualApprovalItemDto;
+import my.portfoliomanager.app.dto.KnowledgeBaseMissingMetricsResponseDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseRefreshBatchRequestDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseRefreshBatchResponseDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseRefreshItemDto;
@@ -166,9 +167,10 @@ public class KnowledgeBaseLlmActionService {
 	}
 
 	public KnowledgeBaseLlmActionDto startRefreshSingle(String isin,
-														String actor,
-														Boolean autoApprove,
-														KnowledgeBaseLlmActionTrigger trigger) {
+									String actor,
+									Boolean autoApprove,
+									Boolean force,
+									KnowledgeBaseLlmActionTrigger trigger) {
 		String normalized = normalizeIsin(isin);
 		cleanupExpired();
 		ensureNotActive(List.of(normalized));
@@ -181,13 +183,13 @@ public class KnowledgeBaseLlmActionService {
 				activeSet);
 		actions.put(state.actionId, state);
 		state.message = "Queued refresh";
-		state.future = executor.submit(() -> runRefreshSingle(state, normalized, autoApprove, actor));
+		state.future = executor.submit(() -> runRefreshSingle(state, normalized, autoApprove, force, actor));
 		return toDto(state, false);
 	}
 
 	public KnowledgeBaseLlmActionDto startExtraction(Long dossierId,
-									 String actor,
-									 KnowledgeBaseLlmActionTrigger trigger) {
+								 String actor,
+								 KnowledgeBaseLlmActionTrigger trigger) {
 		InstrumentDossier dossier = dossierRepository.findById(dossierId)
 				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Dossier not found"));
 		String isin = dossier.getIsin();
@@ -206,23 +208,24 @@ public class KnowledgeBaseLlmActionService {
 		return toDto(state, false);
 	}
 
-	public KnowledgeBaseLlmActionDto startMissingDataFill(String isin,
+	public KnowledgeBaseLlmActionDto startMissingMetrics(Long dossierId,
 									 String actor,
-									 Boolean autoApprove,
 									 KnowledgeBaseLlmActionTrigger trigger) {
-		String normalized = normalizeIsin(isin);
+		InstrumentDossier dossier = dossierRepository.findById(dossierId)
+				.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Dossier not found"));
+		String isin = dossier.getIsin();
 		cleanupExpired();
-		ensureNotActive(List.of(normalized));
+		ensureNotActive(List.of(isin));
 		Set<String> activeSet = ConcurrentHashMap.newKeySet();
-		activeSet.add(normalized);
+		activeSet.add(isin);
 		LlmActionState state = new LlmActionState(UUID.randomUUID().toString(),
-				KnowledgeBaseLlmActionType.MISSING_DATA,
+				KnowledgeBaseLlmActionType.MISSING_METRICS,
 				trigger,
-				List.of(normalized),
+				List.of(isin),
 				activeSet);
 		actions.put(state.actionId, state);
-		state.message = "Queued missing data fill";
-		state.future = executor.submit(() -> runMissingDataFill(state, normalized, autoApprove, actor));
+		state.message = "Queued missing metrics completion";
+		state.future = executor.submit(() -> runMissingMetrics(state, dossierId, actor));
 		return toDto(state, false);
 	}
 
@@ -368,6 +371,7 @@ public class KnowledgeBaseLlmActionService {
 	private void runRefreshSingle(LlmActionState state,
 								  String isin,
 								  Boolean autoApprove,
+								  Boolean force,
 								  String actor) {
 		if (!acquireSlot(state)) {
 			return;
@@ -376,10 +380,34 @@ public class KnowledgeBaseLlmActionService {
 			state.status = KnowledgeBaseLlmActionStatus.RUNNING;
 			state.message = "Running refresh";
 			state.updatedAt = LocalDateTime.now();
-			KnowledgeBaseRefreshItemDto result = refreshService.refreshSingle(isin, autoApprove, actor, Set.of());
+			KnowledgeBaseRefreshItemDto result = refreshService.refreshSingle(isin, autoApprove, force, actor, Set.of());
 			state.refreshItemResult = result;
 			state.status = KnowledgeBaseLlmActionStatus.DONE;
 			state.message = "Refresh " + (result.status() == null ? "done" : result.status().name().toLowerCase(Locale.ROOT));
+		} catch (CancellationException ex) {
+			state.status = KnowledgeBaseLlmActionStatus.CANCELED;
+			state.message = "Canceled";
+		} catch (Exception ex) {
+			state.status = KnowledgeBaseLlmActionStatus.FAILED;
+			state.message = failWithReference(state, ex);
+		} finally {
+			state.updatedAt = LocalDateTime.now();
+			concurrency.release();
+		}
+	}
+
+	private void runMissingMetrics(LlmActionState state, Long dossierId, String actor) {
+		if (!acquireSlot(state)) {
+			return;
+		}
+		try {
+			state.status = KnowledgeBaseLlmActionStatus.RUNNING;
+			state.message = "Completing missing metrics";
+			state.updatedAt = LocalDateTime.now();
+			KnowledgeBaseMissingMetricsResponseDto result = knowledgeBaseService.completeMissingMetrics(dossierId, actor);
+			state.missingMetricsResult = result;
+			state.status = KnowledgeBaseLlmActionStatus.DONE;
+			state.message = missingMetricsSummary(result);
 		} catch (CancellationException ex) {
 			state.status = KnowledgeBaseLlmActionStatus.CANCELED;
 			state.message = "Canceled";
@@ -579,6 +607,30 @@ public class KnowledgeBaseLlmActionService {
 				+ " | Failed " + result.failed();
 	}
 
+	private String missingMetricsSummary(KnowledgeBaseMissingMetricsResponseDto result) {
+		if (result == null) {
+			return "Missing metrics completed";
+		}
+		if (result.status() == null) {
+			return "Missing metrics completed";
+		}
+		switch (result.status()) {
+			case FAILED -> {
+				return "Missing metrics failed" + (result.error() == null ? "" : ": " + result.error());
+			}
+			case SKIPPED -> {
+				return "Missing metrics skipped" + (result.error() == null ? "" : ": " + result.error());
+			}
+			case SUCCEEDED -> {
+				int remaining = result.missingFields() == null ? 0 : result.missingFields().size();
+				return "Missing metrics completed | Remaining " + remaining;
+			}
+			default -> {
+				return "Missing metrics completed";
+			}
+		}
+	}
+
 	private KnowledgeBaseLlmActionDto toDto(LlmActionState state, boolean includeResults) {
 		List<KnowledgeBaseManualApprovalItemDto> manualApprovals = knowledgeBaseService.resolveManualApprovals(state.isins);
 		return new KnowledgeBaseLlmActionDto(
@@ -595,7 +647,8 @@ public class KnowledgeBaseLlmActionService {
 				includeResults ? state.alternativesResult : null,
 				includeResults ? state.refreshBatchResult : null,
 				includeResults ? state.refreshItemResult : null,
-				includeResults ? state.extractionResult : null
+				includeResults ? state.extractionResult : null,
+				includeResults ? state.missingMetricsResult : null
 		);
 	}
 
@@ -658,6 +711,7 @@ public class KnowledgeBaseLlmActionService {
 		private volatile KnowledgeBaseRefreshBatchResponseDto refreshBatchResult;
 		private volatile KnowledgeBaseRefreshItemDto refreshItemResult;
 		private volatile InstrumentDossierExtractionResponseDto extractionResult;
+		private volatile KnowledgeBaseMissingMetricsResponseDto missingMetricsResult;
 		private volatile Future<?> future;
 
 		private LlmActionState(String actionId,

@@ -71,7 +71,7 @@ public class KnowledgeBaseController {
 												 @RequestParam(required = false, defaultValue = "50") int size,
 												 @RequestParam(required = false) Integer limit,
 												 @RequestParam(required = false) Integer offset) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String finalQuery = q != null ? q : query;
 		int finalLimit = limit != null ? limit : size;
 		int finalOffset = offset != null ? offset : page * finalLimit;
@@ -86,7 +86,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Create dossier")
 	public InstrumentDossierResponseDto createDossier(@Valid @RequestBody InstrumentDossierCreateRequest request,
 												  Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String createdBy = principal == null ? "system" : principal.getName();
 		return knowledgeBaseService.createDossier(request, createdBy);
 	}
@@ -95,7 +95,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Run bulk KB research")
 	public KnowledgeBaseLlmActionDto bulkResearch(@Valid @RequestBody KnowledgeBaseBulkResearchRequestDto request,
 												 Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		return actionService.startBulkResearch(request.isins(), request.autoApprove(), request.applyToOverrides(), actor,
 				KnowledgeBaseLlmActionTrigger.USER);
@@ -104,19 +104,20 @@ public class KnowledgeBaseController {
 	@PostMapping("/dossiers/delete")
 	@Operation(summary = "Delete knowledge base dossiers by ISIN")
 	public KnowledgeBaseDossierDeleteResultDto deleteDossiers(@Valid @RequestBody KnowledgeBaseDossierDeleteRequestDto request) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return knowledgeBaseService.deleteDossiers(request.isins());
 	}
 
 	@PostMapping("/dossiers/{isin:[A-Z0-9]{12}}/refresh")
 	@Operation(summary = "Refresh dossier for ISIN")
 	public KnowledgeBaseLlmActionDto refreshDossier(@PathVariable("isin") String isin,
-													@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
-													Principal principal) {
-		availabilityService.assertAvailable();
+										@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
+										Principal principal) {
+		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		Boolean autoApprove = request == null ? null : request.autoApprove();
-		return actionService.startRefreshSingle(isin, actor, autoApprove, KnowledgeBaseLlmActionTrigger.USER);
+		Boolean force = request == null ? null : request.force();
+		return actionService.startRefreshSingle(isin, actor, autoApprove, force, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
 	@PostMapping("/alternatives/{isin:[A-Z0-9]{12}}")
@@ -124,7 +125,7 @@ public class KnowledgeBaseController {
 	public KnowledgeBaseLlmActionDto findAlternatives(@PathVariable("isin") String isin,
 													  @RequestBody(required = false) KnowledgeBaseAlternativesRequestDto request,
 													  Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		Boolean autoApprove = request == null ? null : request.autoApprove();
 		return actionService.startAlternatives(isin, autoApprove, actor, KnowledgeBaseLlmActionTrigger.USER);
@@ -134,7 +135,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Run KB refresh batch")
 	public KnowledgeBaseLlmActionDto refreshBatch(@RequestBody(required = false) KnowledgeBaseRefreshBatchRequestDto request,
 												  Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		return actionService.startRefreshBatch(request, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
@@ -142,18 +143,19 @@ public class KnowledgeBaseController {
 	@PostMapping("/refresh/{isin:[A-Z0-9]{12}}")
 	@Operation(summary = "Refresh single ISIN (admin)")
 	public KnowledgeBaseLlmActionDto refreshSingle(@PathVariable("isin") String isin,
-												   @RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
-												   Principal principal) {
-		availabilityService.assertAvailable();
+									   @RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
+									   Principal principal) {
+		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		Boolean autoApprove = request == null ? null : request.autoApprove();
-		return actionService.startRefreshSingle(isin, actor, autoApprove, KnowledgeBaseLlmActionTrigger.USER);
+		Boolean force = request == null ? null : request.force();
+		return actionService.startRefreshSingle(isin, actor, autoApprove, force, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
 	@PostMapping("/dossiers/websearch")
 	@Operation(summary = "Start LLM websearch draft")
 	public InstrumentDossierWebsearchJobResponseDto startWebsearchDraft(@Valid @RequestBody InstrumentDossierWebsearchRequest request) {
-		availabilityService.assertAvailable();
+		availabilityService.assertLlmAvailable();
 		return websearchJobService.start(request.isin());
 	}
 
@@ -161,7 +163,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Start bulk LLM websearch draft")
 	public InstrumentDossierBulkWebsearchJobResponseDto startBulkWebsearchDraft(@Valid @RequestBody InstrumentDossierBulkWebsearchRequest request,
 													Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertLlmAvailable();
 		String createdBy = principal == null ? "system" : principal.getName();
 		return bulkWebsearchJobService.start(request.isins(), createdBy);
 	}
@@ -169,28 +171,28 @@ public class KnowledgeBaseController {
 	@GetMapping("/dossiers/websearch/{jobId}")
 	@Operation(summary = "Get LLM websearch draft job")
 	public InstrumentDossierWebsearchJobResponseDto getWebsearchDraft(@PathVariable("jobId") String jobId) {
-		availabilityService.assertAvailable();
+		availabilityService.assertLlmAvailable();
 		return websearchJobService.get(jobId);
 	}
 
 	@GetMapping("/dossiers/websearch/bulk/{jobId}")
 	@Operation(summary = "Get bulk LLM websearch draft job")
 	public InstrumentDossierBulkWebsearchJobResponseDto getBulkWebsearchDraft(@PathVariable("jobId") String jobId) {
-		availabilityService.assertAvailable();
+		availabilityService.assertLlmAvailable();
 		return bulkWebsearchJobService.get(jobId);
 	}
 
 	@GetMapping("/dossiers/{isin:[A-Z0-9]{12}}")
 	@Operation(summary = "Get dossier detail by ISIN")
 	public KnowledgeBaseDossierDetailDto getDossierByIsin(@PathVariable("isin") String isin) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return knowledgeBaseService.getDossierDetail(isin);
 	}
 
 	@GetMapping("/dossiers/{id:\\d+}")
 	@Operation(summary = "Get dossier by id")
 	public InstrumentDossierResponseDto getDossier(@PathVariable("id") Long dossierId) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return knowledgeBaseService.getDossier(dossierId);
 	}
 
@@ -199,7 +201,7 @@ public class KnowledgeBaseController {
 	public InstrumentDossierResponseDto updateDossier(@PathVariable("id") Long dossierId,
 												  @Valid @RequestBody InstrumentDossierUpdateRequest request,
 												  Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String updatedBy = principal == null ? "system" : principal.getName();
 		return knowledgeBaseService.updateDossier(dossierId, request, updatedBy);
 	}
@@ -207,7 +209,7 @@ public class KnowledgeBaseController {
 	@PostMapping("/dossiers/{id:\\d+}/approve")
 	@Operation(summary = "Approve dossier")
 	public InstrumentDossierResponseDto approveDossier(@PathVariable("id") Long dossierId, Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String approvedBy = principal == null ? "system" : principal.getName();
 		return knowledgeBaseService.approveDossier(dossierId, approvedBy);
 	}
@@ -215,7 +217,7 @@ public class KnowledgeBaseController {
 	@PostMapping("/dossiers/{id:\\d+}/reject")
 	@Operation(summary = "Reject dossier")
 	public InstrumentDossierResponseDto rejectDossier(@PathVariable("id") Long dossierId, Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String rejectedBy = principal == null ? "system" : principal.getName();
 		return knowledgeBaseService.rejectDossier(dossierId, rejectedBy);
 	}
@@ -224,26 +226,24 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Run extraction for dossier")
 	public KnowledgeBaseLlmActionDto runExtraction(@PathVariable("id") Long dossierId,
 								   Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String actor = principal == null ? "system" : principal.getName();
 		return actionService.startExtraction(dossierId, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
-	@PostMapping("/dossiers/{isin:[A-Z0-9]{12}}/missing-data")
-	@Operation(summary = "Fill missing dossier data for ISIN")
-	public KnowledgeBaseLlmActionDto fillMissingData(@PathVariable("isin") String isin,
-									@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
-									Principal principal) {
-		availabilityService.assertAvailable();
+	@PostMapping("/dossiers/{id:\\d+}/complete-missing-metrics")
+	@Operation(summary = "Complete missing metrics for dossier")
+	public KnowledgeBaseLlmActionDto completeMissingMetrics(@PathVariable("id") Long dossierId,
+														   Principal principal) {
+		availabilityService.assertLlmAvailable();
 		String actor = principal == null ? "system" : principal.getName();
-		Boolean autoApprove = request == null ? null : request.autoApprove();
-		return actionService.startMissingDataFill(isin, actor, autoApprove, KnowledgeBaseLlmActionTrigger.USER);
+		return actionService.startMissingMetrics(dossierId, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
 	@GetMapping("/dossiers/{id:\\d+}/extractions")
 	@Operation(summary = "List dossier extractions")
 	public List<InstrumentDossierExtractionResponseDto> listExtractions(@PathVariable("id") Long dossierId) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return knowledgeBaseService.listExtractions(dossierId);
 	}
 
@@ -251,7 +251,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Approve extraction")
 	public InstrumentDossierExtractionResponseDto approveExtraction(@PathVariable("id") Long extractionId,
 													Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String approvedBy = principal == null ? "system" : principal.getName();
 		return knowledgeBaseService.approveExtraction(extractionId, approvedBy);
 	}
@@ -260,7 +260,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Reject extraction")
 	public InstrumentDossierExtractionResponseDto rejectExtraction(@PathVariable("id") Long extractionId,
 												  Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String rejectedBy = principal == null ? "system" : principal.getName();
 		return knowledgeBaseService.rejectExtraction(extractionId, rejectedBy);
 	}
@@ -269,7 +269,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Apply extraction to overrides")
 	public InstrumentDossierExtractionResponseDto applyExtraction(@PathVariable("id") Long extractionId,
 												  Principal principal) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		String appliedBy = principal == null ? "system" : principal.getName();
 		return knowledgeBaseService.applyExtraction(extractionId, appliedBy);
 	}
