@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -95,7 +97,8 @@ class KnowledgeBaseRefreshServiceTest {
 				runService,
 				dossierRepository
 		);
-		when(configService.getSnapshot()).thenReturn(snapshot(5, 100));
+		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot configSnapshot = snapshot(5, 100);
+		when(configService.getSnapshot()).thenReturn(configSnapshot);
 		KnowledgeBaseRun recent = new KnowledgeBaseRun();
 		recent.setStatus(KnowledgeBaseRunStatus.SUCCEEDED);
 		recent.setStartedAt(LocalDateTime.now().minusDays(1));
@@ -105,6 +108,33 @@ class KnowledgeBaseRefreshServiceTest {
 		KnowledgeBaseRefreshItemDto result = service.refreshSingle("DE0000000001", null, "tester");
 
 		assertThat(result.status()).isEqualTo(KnowledgeBaseBulkResearchItemStatus.SKIPPED);
+	}
+
+	@Test
+	void refreshSingle_forceBypassesRecentRunSkip() {
+		KnowledgeBaseRefreshService service = new KnowledgeBaseRefreshService(
+				configService,
+				knowledgeBaseService,
+				maintenanceService,
+				runService,
+				dossierRepository
+		);
+		when(configService.getSnapshot()).thenReturn(snapshot(5, 100));
+		when(runService.startRun("DE0000000001", KnowledgeBaseRunAction.REFRESH, null, null))
+				.thenReturn(new KnowledgeBaseRun());
+		when(knowledgeBaseService.generateDossierDraftWithQualityRetries(
+				eq("DE0000000001"),
+				eq(null),
+				any(KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot.class),
+				eq(false)
+		)).thenThrow(new RuntimeException("forced refresh"));
+
+		KnowledgeBaseRefreshItemDto result = service.refreshSingle("DE0000000001", null, true, "tester");
+
+		assertThat(result.status()).isEqualTo(KnowledgeBaseBulkResearchItemStatus.FAILED);
+		assertThat(result.error()).isEqualTo("forced refresh");
+		org.mockito.Mockito.verify(runService, org.mockito.Mockito.never())
+				.findLatest("DE0000000001", KnowledgeBaseRunAction.REFRESH);
 	}
 
 	private KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot snapshot(int maxBatches, int maxInstruments) {

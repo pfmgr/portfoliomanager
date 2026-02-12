@@ -34,7 +34,8 @@ public class KnowledgeBaseQualityGateService {
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
 							"(valuation\\s*&\\s*profitability|valuation\\s*and\\s*profitability|valuation|profitability)\\b")),
 			new SectionRequirement("sources", Pattern.compile(
-					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(sources?|references?|quellen|citations?|bibliography)\\b"))
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
+					"(sources?|references?|quellen|citations?|bibliography|data\\s*sources?|anchor\\s*data\\s*sources?)\\b"))
 	);
 	private static final List<String> SECONDARY_DOMAINS = List.of(
 			"justetf.com",

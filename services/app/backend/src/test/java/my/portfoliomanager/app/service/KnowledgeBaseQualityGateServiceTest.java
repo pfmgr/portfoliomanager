@@ -70,6 +70,29 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
+	void evaluateDossier_acceptsAnchorDataSourcesHeading() {
+		String content = "# DE000A1ML7J1 - Sample\n"
+				+ "## Quick profile\n"
+				+ "instrument_type: Equity\n"
+				+ "## Classification\n"
+				+ "## Risk\n"
+				+ "## Costs & structure\n"
+				+ "## Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## Anchor data sources (for context and traceability)\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"DE000A1ML7J1",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain("missing_section:sources");
+	}
+
+	@Test
 	void evaluateExtractionEvidence_fundProfile_requiresFundFieldsAndHoldings() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"IE00B4L5Y983",
