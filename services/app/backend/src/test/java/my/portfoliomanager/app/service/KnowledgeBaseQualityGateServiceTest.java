@@ -310,7 +310,7 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
-	void evaluateExtractionEvidence_acceptsStructuredRiskIndicatorValueAcrossLines() {
+	void evaluateExtractionEvidence_acceptsStructuredRiskIndicatorValueAcrossLinesInLegacyMode() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"DE000ETFL474",
 				"ETF",
@@ -339,12 +339,54 @@ class KnowledgeBaseQualityGateServiceTest {
 				+ "- SRI: unknown\n"
 				+ "- risk_indicator: {\n"
 				+ "  - value: 1\n"
-				+ "}\n";
+				+ "}\n"
+				+ "## Sourcing\n"
+				+ "1) https://example.com\n";
 
 		KnowledgeBaseQualityGateService.EvidenceResult result =
 				service.evaluateExtractionEvidence(dossierContent, payload, null);
 
 		assertThat(result.missingEvidence()).doesNotContain("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_rejectsStructuredRiskIndicatorValueInCanonicalMode() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE000ETFL474",
+				"ETF",
+				etf(new BigDecimal("0.40"), "Solactive Euro Prime ESG Index (price index)"),
+				risk(1),
+				null,
+				valuation(
+						new BigDecimal("35.21"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk (SRI and notes)\n"
+				+ "- SRI: unknown\n"
+				+ "- risk_indicator: {\n"
+				+ "  - value: 1\n"
+				+ "}\n"
+				+ "## Sources\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).contains("sri");
 	}
 
 	@Test
@@ -422,7 +464,7 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
-	void evaluateExtractionEvidence_acceptsPathStyleSriValueLine() {
+	void evaluateExtractionEvidence_acceptsPathStyleSriValueLineInLegacyMode() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"IE00BJ5JNZ06",
 				"ETF",
@@ -449,7 +491,9 @@ class KnowledgeBaseQualityGateServiceTest {
 		);
 		String dossierContent = "## Risk (SRI and notes)\n"
 				+ "- SRI: unknown\n"
-				+ "- risk.summary_risk_indicator.value: 1\n";
+				+ "- risk.summary_risk_indicator.value: 1\n"
+				+ "## Sourcing\n"
+				+ "1) https://example.com\n";
 
 		KnowledgeBaseQualityGateService.EvidenceResult result =
 				service.evaluateExtractionEvidence(dossierContent, payload, null);
@@ -458,7 +502,7 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
-	void evaluateExtractionEvidence_acceptsStructuredRiskIndicatorValueSameLine() {
+	void evaluateExtractionEvidence_acceptsStructuredRiskIndicatorValueSameLineInLegacyMode() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"DE000ETFL474",
 				"ETF",
@@ -484,7 +528,9 @@ class KnowledgeBaseQualityGateServiceTest {
 				)
 		);
 		String dossierContent = "## Risk (SRI and notes)\n"
-				+ "- risk_indicator: {\"value\": 1}\n";
+				+ "- risk_indicator: {\"value\": 1}\n"
+				+ "## Sourcing\n"
+				+ "1) https://example.com\n";
 
 		KnowledgeBaseQualityGateService.EvidenceResult result =
 				service.evaluateExtractionEvidence(dossierContent, payload, null);

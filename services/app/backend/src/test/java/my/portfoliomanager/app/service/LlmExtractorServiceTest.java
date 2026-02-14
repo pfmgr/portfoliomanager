@@ -25,7 +25,7 @@ class LlmExtractorServiceTest {
 	void extract_parserOnlyPathForcesLayer3ForRealEstateEtf() {
 		KnowledgeBaseLlmClient llmClient = mock(KnowledgeBaseLlmClient.class);
 		DossierPreParser preParser = mock(DossierPreParser.class);
-		when(preParser.parse(any())).thenReturn(realEstatePreParsedPayload(null));
+		when(preParser.parse(any())).thenReturn(realEstatePreParsedPayload("ETF", null));
 
 		LlmExtractorService service = new LlmExtractorService(
 				llmClient,
@@ -54,7 +54,7 @@ class LlmExtractorServiceTest {
 				new InstrumentDossierExtractionPayload.MissingFieldPayload("layer", "missing"),
 				new InstrumentDossierExtractionPayload.MissingFieldPayload("layer_notes", "missing")
 		);
-		when(preParser.parse(any())).thenReturn(realEstatePreParsedPayload(missing));
+		when(preParser.parse(any())).thenReturn(realEstatePreParsedPayload("ETF", missing));
 
 		LlmExtractorService service = new LlmExtractorService(
 				llmClient,
@@ -67,7 +67,9 @@ class LlmExtractorServiceTest {
 		ExtractionResult result = service.extract(buildDossier());
 
 		assertThat(result.model()).isEqualTo("parser");
-		assertThat(result.payload().missingFields()).isNull();
+		assertThat(result.payload().missingFields())
+				.extracting(InstrumentDossierExtractionPayload.MissingFieldPayload::reason)
+				.allMatch(reason -> reason != null && reason.contains("resolved_by_theme_policy_override"));
 		assertThat(result.payload().layer()).isEqualTo(3);
 		verify(llmClient, never()).extractMetadata(anyString());
 	}
@@ -81,7 +83,7 @@ class LlmExtractorServiceTest {
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing = List.of(
 				new InstrumentDossierExtractionPayload.MissingFieldPayload("risk.summary_risk_indicator.value", "missing")
 		);
-		when(preParser.parse(any())).thenReturn(genericPreParsedPayload(missing));
+		when(preParser.parse(any())).thenReturn(genericPreParsedPayload("ETF", missing));
 		when(llmClient.extractMetadata(anyString())).thenReturn(new KnowledgeBaseLlmExtractionDraft(
 				llmExtractionJson(mapper),
 				"llm-model"
@@ -109,6 +111,30 @@ class LlmExtractorServiceTest {
 				.filteredOn(message -> message.contains("Layer forced to 3 (Themes) by extraction postprocessor"))
 				.hasSize(1);
 		verify(llmClient).extractMetadata(anyString());
+	}
+
+	@Test
+	void extract_parserOnlyPathDoesNotForceLayer3ForNonEtfWithThematicBenchmark() {
+		KnowledgeBaseLlmClient llmClient = mock(KnowledgeBaseLlmClient.class);
+		DossierPreParser preParser = mock(DossierPreParser.class);
+		when(preParser.parse(any())).thenReturn(realEstatePreParsedPayload("Equity", null));
+
+		LlmExtractorService service = new LlmExtractorService(
+				llmClient,
+				new ObjectMapper(),
+				preParser,
+				null,
+				null
+		);
+
+		ExtractionResult result = service.extract(buildDossier());
+
+		assertThat(result.model()).isEqualTo("parser");
+		assertThat(result.payload().layer()).isEqualTo(2);
+		assertThat(result.payload().warnings())
+				.extracting(InstrumentDossierExtractionPayload.WarningPayload::message)
+				.noneMatch(message -> message.contains("Layer forced to 3 (Themes) by extraction postprocessor"));
+		verify(llmClient, never()).extractMetadata(anyString());
 	}
 
 	@Test
@@ -165,11 +191,12 @@ class LlmExtractorServiceTest {
 	}
 
 	private InstrumentDossierExtractionPayload realEstatePreParsedPayload(
+			String instrumentType,
 			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields) {
 		return new InstrumentDossierExtractionPayload(
 				"DE000A0Q4R44",
 				"iShares STOXX Europe 600 Real Estate",
-				"Equity",
+				instrumentType,
 				"Real Estate",
 				"Regional Equity",
 				null,
@@ -192,11 +219,12 @@ class LlmExtractorServiceTest {
 	}
 
 	private InstrumentDossierExtractionPayload genericPreParsedPayload(
+			String instrumentType,
 			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields) {
 		return new InstrumentDossierExtractionPayload(
 				"DE000A0Q4R44",
 				"Europe Equity",
-				"Equity",
+				instrumentType,
 				"Equity",
 				"Regional Equity",
 				null,
@@ -223,7 +251,7 @@ class LlmExtractorServiceTest {
 		return new InstrumentDossierExtractionPayload(
 				"DE000A0Q4R44",
 				"iShares STOXX Europe 600 Technology Sector",
-				"Equity",
+				"ETF",
 				"Equity",
 				"Regional Equity",
 				null,
@@ -249,7 +277,7 @@ class LlmExtractorServiceTest {
 		return new InstrumentDossierExtractionPayload(
 				"DE000A0Q4R44",
 				"Europe Fundamental Real Estate Equity",
-				"Equity",
+				"Fundamental Equity",
 				"Equity",
 				"Fundamental Equity",
 				null,

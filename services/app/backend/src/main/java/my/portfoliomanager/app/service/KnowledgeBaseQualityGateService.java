@@ -39,7 +39,7 @@ public class KnowledgeBaseQualityGateService {
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
 					"(sources?|sourcing|source\\s*list|source\\s*links?|references?|quellen|citations?|bibliography|data\\s*sources?|anchor\\s*data\\s*sources?)\\b"))
 	);
-	private static final List<String> SRI_LABELS = List.of(
+	private static final List<String> NATURAL_SRI_LABELS = List.of(
 			"sri",
 			"srri",
 			"summary risk",
@@ -48,16 +48,19 @@ public class KnowledgeBaseQualityGateService {
 			"risk category",
 			"risk class",
 			"synthetic risk indicator",
-			"synthetic risk",
-			"risk_indicator",
-			"summary_risk_indicator",
-			"summary_risk_indicator.value",
-			"risk.summary_risk_indicator.value"
+			"synthetic risk"
 	);
 	private static final List<String> STRUCTURED_SRI_LABELS = List.of(
 			"risk_indicator",
 			"summary_risk_indicator",
 			"risk.summary_risk_indicator"
+	);
+	private static final List<String> LEGACY_SRI_COMPAT_MARKERS = List.of(
+			"## sourcing",
+			"## prospectus / key information",
+			"## prospectus and key information",
+			"## holdings & exposure",
+			"## layer notes"
 	);
 	private static final int SRI_VALUE_LOOKAHEAD_LINES = 3;
 	private static final List<String> SECONDARY_DOMAINS = List.of(
@@ -310,10 +313,23 @@ public class KnowledgeBaseQualityGateService {
 		String[] lines = content.split("\\R");
 		for (int i = 0; i < lines.length; i++) {
 			String lower = lines[i].toLowerCase(Locale.ROOT);
-			if (!containsAnyLabel(lower, SRI_LABELS)) {
+			if (!containsAnyLabel(lower, NATURAL_SRI_LABELS)) {
 				continue;
 			}
-			if (matchesSriValueLine(lower, token)) {
+			if (matchesCanonicalSriValueLine(lower, token)) {
+				return;
+			}
+		}
+		if (!isLegacySriCompatibilityMode(content)) {
+			missing.add("sri");
+			return;
+		}
+		for (int i = 0; i < lines.length; i++) {
+			String lower = lines[i].toLowerCase(Locale.ROOT);
+			if (!containsAnyLabel(lower, STRUCTURED_SRI_LABELS)) {
+				continue;
+			}
+			if (matchesStructuredSriValueLine(lower, token)) {
 				return;
 			}
 			if (matchesNestedSriValue(lines, i, token)) {
@@ -321,6 +337,19 @@ public class KnowledgeBaseQualityGateService {
 			}
 		}
 		missing.add("sri");
+	}
+
+	private boolean isLegacySriCompatibilityMode(String content) {
+		if (content == null || content.isBlank()) {
+			return false;
+		}
+		String lower = content.toLowerCase(Locale.ROOT);
+		for (String marker : LEGACY_SRI_COMPAT_MARKERS) {
+			if (marker != null && !marker.isBlank() && lower.contains(marker)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private boolean containsAnyLabel(String text, List<String> labels) {
@@ -335,12 +364,21 @@ public class KnowledgeBaseQualityGateService {
 		return false;
 	}
 
-	private boolean matchesSriValueLine(String line, String token) {
+	private boolean matchesCanonicalSriValueLine(String line, String token) {
 		if (line == null || line.isBlank() || token == null || token.isBlank()) {
 			return false;
 		}
 		String pattern = "\\b(?:sri|srri|summary\\s*risk|risk\\s*indicator|risk\\s*level|risk\\s*category|risk\\s*class|"
-				+ "synthetic\\s*risk(?:\\s*indicator)?|risk_indicator(?:\\.value)?|summary_risk_indicator(?:\\.value)?|"
+				+ "synthetic\\s*risk(?:\\s*indicator)?)\\b[^\\n:=]*[:=]\\s*"
+				+ "(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+		return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(line).find();
+	}
+
+	private boolean matchesStructuredSriValueLine(String line, String token) {
+		if (line == null || line.isBlank() || token == null || token.isBlank()) {
+			return false;
+		}
+		String pattern = "\\b(?:risk_indicator(?:\\.value)?|summary_risk_indicator(?:\\.value)?|"
 				+ "risk\\.summary_risk_indicator\\.value)\\b[^\\n:=]*[:=]\\s*(?:\\{\\s*)?(?:\"?value\"?\\s*[:=]\\s*)?"
 				+ "(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
 		return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(line).find();

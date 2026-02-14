@@ -372,10 +372,15 @@ class KnowledgeBaseLlmServiceTest {
 		var draft = client.extractMetadata("Research date: 2026-01-24");
 
 		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(3);
+		List<String> warningMessages = new java.util.ArrayList<>();
+		draft.extractionJson().path("warnings")
+				.forEach(node -> warningMessages.add(node.path("message").asText()));
+		assertThat(warningMessages)
+				.anyMatch(message -> message.contains("Layer forced to 3 (Themes) by extraction postprocessor"));
 	}
 
 	@Test
-	void extractMetadata_forcesLayer3ForRealEstateBenchmarkEvenWithNonEtfType() {
+	void extractMetadata_doesNotForceLayer3ForRealEstateBenchmarkWhenTypeIsNonEtf() {
 		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
 			@Override
 			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
@@ -426,12 +431,12 @@ class KnowledgeBaseLlmServiceTest {
 
 		var draft = client.extractMetadata("Research date: 2026-01-24");
 
-		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(3);
-		assertThat(draft.extractionJson().get("layer_notes").asText()).contains("benchmark_index");
+		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(2);
+		assertThat(draft.extractionJson().get("layer_notes").asText()).doesNotContain("benchmark_index");
 	}
 
 	@Test
-	void extractMetadata_forcesLayer3ForSectorBenchmarkEvenWithNonEtfType() {
+	void extractMetadata_doesNotForceLayer3ForSectorBenchmarkWhenTypeIsNonEtf() {
 		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
 			@Override
 			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
@@ -482,8 +487,8 @@ class KnowledgeBaseLlmServiceTest {
 
 		var draft = client.extractMetadata("Research date: 2026-01-24");
 
-		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(3);
-		assertThat(draft.extractionJson().get("layer_notes").asText()).contains("keyword=sector");
+		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(2);
+		assertThat(draft.extractionJson().get("layer_notes").asText()).doesNotContain("keyword=sector");
 	}
 
 	@Test

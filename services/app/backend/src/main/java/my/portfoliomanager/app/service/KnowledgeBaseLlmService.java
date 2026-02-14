@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -994,9 +995,11 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 
 	private void forceThemeLayerIfNeeded(ObjectNode root) {
 		String instrumentType = textOrNull(root, "instrument_type");
+		if (!isEtfType(instrumentType)) {
+			return;
+		}
 		String name = textOrNull(root, "name");
 		String subClass = textOrNull(root, "sub_class");
-		String layerNotesValue = textOrNull(root, "layer_notes");
 		String benchmarkIndex = null;
 		ObjectNode etfNode = objectNode(root, "etf");
 		if (etfNode != null) {
@@ -1004,9 +1007,6 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			if (benchmarkIndex == null) {
 				benchmarkIndex = textOrNull(etfNode, "benchmarkIndex");
 			}
-		}
-		if (!isEtfLikeInstrument(instrumentType, name, subClass, benchmarkIndex)) {
-			return;
 		}
 		ThematicKeywordMatch match = findThematicKeywordMatch(
 				name,
@@ -1022,15 +1022,31 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			originalLayer = layerNode.asInt();
 		}
 		boolean changed = originalLayer == null || originalLayer != 3;
+		String previousLayerNotes = textOrNull(root, "layer_notes");
 		if (changed) {
 			root.put("layer", 3);
 		}
-		String layerNotes = textOrNull(root, "layer_notes");
+		String layerNotes = previousLayerNotes;
 		if (layerNotes == null || shouldOverwriteThemeNotes(layerNotes)) {
 			root.put("layer_notes", "Thematic ETF");
 		}
 		if (changed) {
 			root.put("layer_notes", appendPostprocessorHint(textOrNull(root, "layer_notes"), match));
+			appendWarningNode(root, buildThemeOverrideWarningMessage(match));
+		}
+		String updatedLayerNotes = textOrNull(root, "layer_notes");
+		boolean notesChanged = !Objects.equals(previousLayerNotes, updatedLayerNotes);
+		if (changed || notesChanged) {
+			String isin = textOrNull(root, "isin");
+			logger.info(
+					"Applied theme postprocessor override [isin={}, fromLayer={}, toLayer=3, notesChanged={}, keyword={}, source={}, instrumentType={}]",
+					isin,
+					originalLayer,
+					notesChanged,
+					match.keyword(),
+					match.sourceField(),
+					instrumentType
+			);
 		}
 	}
 
@@ -1086,25 +1102,46 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		return List.copyOf(patterns);
 	}
 
-	private boolean isEtfLikeInstrument(String instrumentType,
-						 String name,
-						 String subClass,
-						 String benchmarkIndex) {
-		if (containsEtfTypeHint(instrumentType)) {
-			return true;
-		}
-		if (benchmarkIndex != null && !benchmarkIndex.isBlank()) {
-			return true;
-		}
-		return containsEtfTypeHint(name)
-				|| containsEtfTypeHint(subClass);
-	}
-
-	private boolean containsEtfTypeHint(String value) {
+	private boolean isEtfType(String value) {
 		if (value == null || value.isBlank()) {
 			return false;
 		}
 		return ETF_TYPE_HINT_PATTERN.matcher(value).find();
+	}
+
+	private String buildThemeOverrideWarningMessage(ThematicKeywordMatch match) {
+		String message = "Layer forced to 3 (Themes) by extraction postprocessor";
+		if (match != null && match.keyword() != null && match.sourceField() != null) {
+			message = message + " using keyword '" + match.keyword() + "' from " + match.sourceField() + ".";
+		} else {
+			message = message + ".";
+		}
+		return message;
+	}
+
+	private void appendWarningNode(ObjectNode root, String message) {
+		if (root == null || message == null || message.isBlank()) {
+			return;
+		}
+		ArrayNode warnings;
+		JsonNode warningsNode = root.get("warnings");
+		if (warningsNode instanceof ArrayNode arrayNode) {
+			warnings = arrayNode;
+		} else {
+			warnings = objectMapper.createArrayNode();
+			root.set("warnings", warnings);
+		}
+		for (JsonNode node : warnings) {
+			if (node != null && node.isObject()) {
+				String existing = textOrNull(node, "message");
+				if (message.equals(existing)) {
+					return;
+				}
+			}
+		}
+		ObjectNode warningNode = objectMapper.createObjectNode();
+		warningNode.put("message", message);
+		warnings.add(warningNode);
 	}
 
 	private boolean shouldOverwriteThemeNotes(String value) {

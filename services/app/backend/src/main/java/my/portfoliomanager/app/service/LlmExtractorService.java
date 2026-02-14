@@ -71,6 +71,7 @@ public class LlmExtractorService implements ExtractorService {
 	);
 	private static final Pattern RISK_SECTION_PATTERN =
 			Pattern.compile("(?m)^##\\s+risk\\b", Pattern.CASE_INSENSITIVE);
+	private static final String THEME_OVERRIDE_MISSING_REASON = "resolved_by_theme_policy_override";
 
 	public LlmExtractorService(KnowledgeBaseLlmClient llmClient,
 						   ObjectMapper objectMapper,
@@ -360,7 +361,7 @@ public class LlmExtractorService implements ExtractorService {
 				preParsed.regions(),
 				preParsed.sectors(),
 				preParsed.topHoldings());
-		boolean hasMissing = missing != null && !missing.isEmpty();
+		boolean hasMissing = hasActionableMissingFields(missing);
 		boolean evidenceFailed = false;
 		if (qualityGateService != null) {
 			KnowledgeBaseQualityGateService.EvidenceResult result = qualityGateService.evaluateExtractionEvidence(
@@ -371,6 +372,23 @@ public class LlmExtractorService implements ExtractorService {
 			evidenceFailed = !result.passed();
 		}
 		return new PreParseAssessment(hasMissing || evidenceFailed, missing);
+	}
+
+	private boolean hasActionableMissingFields(List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing) {
+		if (missing == null || missing.isEmpty()) {
+			return false;
+		}
+		for (InstrumentDossierExtractionPayload.MissingFieldPayload item : missing) {
+			if (item == null || item.field() == null || item.field().isBlank()) {
+				continue;
+			}
+			String reason = item.reason();
+			if (reason != null && reason.contains(THEME_OVERRIDE_MISSING_REASON)) {
+				continue;
+			}
+			return true;
+		}
+		return false;
 	}
 
 	private InstrumentDossierExtractionPayload applyMissingFieldsAndWarnings(
@@ -1138,7 +1156,7 @@ public class LlmExtractorService implements ExtractorService {
 								   String subClass,
 								   String layerNotes,
 								   String benchmarkIndex) {
-		if (!isEtfLikeInstrument(instrumentType, name, subClass, benchmarkIndex)) {
+		if (!isEtfType(instrumentType)) {
 			return new ThemeLayerDecision(layer, layerNotes, false, null, null);
 		}
 		ThematicKeywordMatch match = findThematicKeywordMatch(name, subClass, benchmarkIndex);
@@ -1167,21 +1185,15 @@ public class LlmExtractorService implements ExtractorService {
 				payload.layerNotes(),
 				benchmarkIndex
 		);
-		Integer resolvedLayer = decision.applied() ? decision.layer() : payload.layer();
-		String resolvedLayerNotes = decision.applied() ? decision.layerNotes() : payload.layerNotes();
-		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields = removeResolvedLayerMissingFields(
-				payload.missingFields(),
-				resolvedLayer,
-				resolvedLayerNotes
-		);
-		boolean missingChanged = !Objects.equals(missingFields, payload.missingFields());
-		if (!decision.applied() && !missingChanged) {
+		if (!decision.applied()) {
 			return payload;
 		}
+		Integer resolvedLayer = decision.layer();
+		String resolvedLayerNotes = decision.layerNotes();
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields =
+				annotateThemeResolvedMissingFields(payload.missingFields());
 		List<InstrumentDossierExtractionPayload.WarningPayload> warnings = payload.warnings();
-		if (decision.applied()) {
-			warnings = appendWarning(warnings, buildThemeOverrideWarning(decision));
-		}
+		warnings = appendWarning(warnings, buildThemeOverrideWarning(decision));
 		return new InstrumentDossierExtractionPayload(
 				payload.isin(),
 				payload.name(),
@@ -1273,57 +1285,52 @@ public class LlmExtractorService implements ExtractorService {
 				+ ".";
 	}
 
-	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> removeResolvedLayerMissingFields(
-			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields,
-			Integer layer,
-			String layerNotes) {
+	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> annotateThemeResolvedMissingFields(
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields) {
 		if (missingFields == null || missingFields.isEmpty()) {
 			return missingFields;
 		}
-		List<InstrumentDossierExtractionPayload.MissingFieldPayload> filtered = new ArrayList<>();
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> updated = new ArrayList<>();
+		boolean changed = false;
 		for (InstrumentDossierExtractionPayload.MissingFieldPayload item : missingFields) {
 			if (item == null || item.field() == null) {
 				continue;
 			}
 			String normalizedField = item.field().toLowerCase(Locale.ROOT).trim();
-			if (layer != null && normalizedField.equals("layer")) {
+			if (normalizedField.equals("layer")
+					|| normalizedField.equals("layer_notes")
+					|| normalizedField.equals("layernotes")) {
+				String reason = appendMissingReason(item.reason(), THEME_OVERRIDE_MISSING_REASON);
+				updated.add(new InstrumentDossierExtractionPayload.MissingFieldPayload(item.field(), reason));
+				changed = true;
 				continue;
 			}
-			if (layerNotes != null && (normalizedField.equals("layer_notes") || normalizedField.equals("layernotes"))) {
-				continue;
-			}
-			filtered.add(item);
+			updated.add(item);
 		}
-		return filtered.isEmpty() ? null : filtered;
+		if (!changed) {
+			return missingFields;
+		}
+		return updated.isEmpty() ? null : updated;
 	}
 
-	private boolean isEtfLikeInstrument(String instrumentType,
-						 String name,
-						 String subClass,
-						 String benchmarkIndex) {
-		if (isEtfType(instrumentType)) {
-			return true;
+	private String appendMissingReason(String existing, String suffix) {
+		if (suffix == null || suffix.isBlank()) {
+			return existing;
 		}
-		if (benchmarkIndex != null && !benchmarkIndex.isBlank()) {
-			return true;
+		if (existing == null || existing.isBlank()) {
+			return suffix;
 		}
-		return containsEtfTypeHint(name)
-				|| containsEtfTypeHint(subClass);
-	}
-
-	private boolean containsEtfTypeHint(String value) {
-		if (value == null || value.isBlank()) {
-			return false;
+		if (existing.contains(suffix)) {
+			return existing;
 		}
-		return ETF_TYPE_HINT_PATTERN.matcher(value).find();
+		return existing + "; " + suffix;
 	}
 
 	private boolean isEtfType(String instrumentType) {
 		if (instrumentType == null || instrumentType.isBlank()) {
 			return false;
 		}
-		String normalized = instrumentType.toLowerCase(Locale.ROOT);
-		return normalized.contains("etf") || normalized.contains("fund") || normalized.contains("etp");
+		return ETF_TYPE_HINT_PATTERN.matcher(instrumentType).find();
 	}
 
 	private boolean isSingleStockType(String instrumentType) {
