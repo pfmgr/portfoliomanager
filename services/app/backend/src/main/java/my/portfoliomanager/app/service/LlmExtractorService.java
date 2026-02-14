@@ -23,6 +23,9 @@ import java.util.regex.Pattern;
 public class LlmExtractorService implements ExtractorService {
 	private final KnowledgeBaseLlmClient llmClient;
 	private final ObjectMapper objectMapper;
+	private final DossierPreParser preParser;
+	private final KnowledgeBaseQualityGateService qualityGateService;
+	private final KnowledgeBaseConfigService configService;
 	private static final List<String> THEMATIC_KEYWORDS = List.of(
 			"theme",
 			"thematic",
@@ -60,15 +63,86 @@ public class LlmExtractorService implements ExtractorService {
 			Pattern.compile("(?m)^##\\s+risk\\b", Pattern.CASE_INSENSITIVE);
 
 	public LlmExtractorService(KnowledgeBaseLlmClient llmClient,
-							   ObjectMapper objectMapper) {
+						   ObjectMapper objectMapper,
+						   DossierPreParser preParser,
+						   KnowledgeBaseQualityGateService qualityGateService,
+						   KnowledgeBaseConfigService configService) {
 		this.llmClient = llmClient;
 		this.objectMapper = objectMapper;
+		this.preParser = preParser;
+		this.qualityGateService = qualityGateService;
+		this.configService = configService;
 	}
 
 	@Override
 	public ExtractionResult extract(InstrumentDossier dossier) {
+		InstrumentDossierExtractionPayload preParsed = preParser.parse(dossier);
+		PreParseAssessment assessment = assessPreParsed(dossier, preParsed);
+		if (!assessment.useLlm()) {
+			InstrumentDossierExtractionPayload skipped = applyMissingFieldsAndWarnings(
+					preParsed,
+					assessment.missingFields(),
+					appendWarning(preParsed == null ? null : preParsed.warnings(),
+							"LLM extraction skipped; parser evidence/missing checks passed.")
+			);
+			return new ExtractionResult(skipped, "parser");
+		}
 		KnowledgeBaseLlmExtractionDraft draft = llmClient.extractMetadata(dossier.getContentMd());
-		InstrumentDossierExtractionPayload payload = parseExtraction(dossier, draft.extractionJson());
+		InstrumentDossierExtractionPayload llmPayload = parseExtraction(dossier, draft.extractionJson());
+		InstrumentDossierExtractionPayload merged = mergePayloads(preParsed, llmPayload);
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields =
+				filterMissingFields(llmPayload == null ? null : llmPayload.missingFields(), merged);
+		if (missingFields == null || missingFields.isEmpty()) {
+			missingFields = buildMissingFields(
+					merged.name(),
+					merged.instrumentType(),
+					merged.assetClass(),
+					merged.subClass(),
+					merged.layer(),
+					merged.layerNotes(),
+					merged.etf() == null ? null : merged.etf().ongoingChargesPct(),
+					merged.etf() == null ? null : merged.etf().benchmarkIndex(),
+					merged.risk() == null || merged.risk().summaryRiskIndicator() == null
+							? null
+							: merged.risk().summaryRiskIndicator().value(),
+					merged.financials(),
+					merged.valuation(),
+					merged.gicsSector(),
+					merged.gicsIndustryGroup(),
+					merged.gicsIndustry(),
+					merged.gicsSubIndustry(),
+					merged.sectors(),
+					merged.instrumentType()
+			);
+		}
+		List<InstrumentDossierExtractionPayload.WarningPayload> warnings = mergeWarnings(
+				preParsed == null ? null : preParsed.warnings(),
+				llmPayload == null ? null : llmPayload.warnings()
+		);
+		warnings = appendWarning(warnings, "LLM extraction merged with parser prefill.");
+		InstrumentDossierExtractionPayload payload = new InstrumentDossierExtractionPayload(
+				merged.isin(),
+				merged.name(),
+				merged.instrumentType(),
+				merged.assetClass(),
+				merged.subClass(),
+				merged.gicsSector(),
+				merged.gicsIndustryGroup(),
+				merged.gicsIndustry(),
+				merged.gicsSubIndustry(),
+				merged.layer(),
+				merged.layerNotes(),
+				merged.etf(),
+				merged.risk(),
+				merged.regions(),
+				merged.sectors(),
+				merged.topHoldings(),
+				merged.financials(),
+				merged.valuation(),
+				merged.sources(),
+				missingFields,
+				warnings
+		);
 		return new ExtractionResult(payload, draft.model());
 	}
 
@@ -214,6 +288,460 @@ public class LlmExtractorService implements ExtractorService {
 				missingFields,
 				warnings.isEmpty() ? null : warnings
 		);
+	}
+
+	private InstrumentDossierExtractionPayload mergePayloads(InstrumentDossierExtractionPayload pre,
+								InstrumentDossierExtractionPayload llm) {
+		if (pre == null) {
+			return llm;
+		}
+		if (llm == null) {
+			return pre;
+		}
+		return new InstrumentDossierExtractionPayload(
+				first(pre.isin(), llm.isin()),
+				first(pre.name(), llm.name()),
+				first(pre.instrumentType(), llm.instrumentType()),
+				first(pre.assetClass(), llm.assetClass()),
+				first(pre.subClass(), llm.subClass()),
+				first(pre.gicsSector(), llm.gicsSector()),
+				first(pre.gicsIndustryGroup(), llm.gicsIndustryGroup()),
+				first(pre.gicsIndustry(), llm.gicsIndustry()),
+				first(pre.gicsSubIndustry(), llm.gicsSubIndustry()),
+				first(pre.layer(), llm.layer()),
+				first(pre.layerNotes(), llm.layerNotes()),
+				mergeEtf(pre.etf(), llm.etf()),
+				mergeRisk(pre.risk(), llm.risk()),
+				mergeList(pre.regions(), llm.regions()),
+				mergeList(pre.sectors(), llm.sectors()),
+				mergeList(pre.topHoldings(), llm.topHoldings()),
+				mergeFinancials(pre.financials(), llm.financials()),
+				mergeValuation(pre.valuation(), llm.valuation()),
+				mergeList(pre.sources(), llm.sources()),
+				null,
+				null
+		);
+	}
+
+	private PreParseAssessment assessPreParsed(InstrumentDossier dossier,
+									InstrumentDossierExtractionPayload preParsed) {
+		if (preParsed == null) {
+			return new PreParseAssessment(true, null);
+		}
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing = preParsed.missingFields();
+		missing = augmentMissingFields(missing, preParsed.valuation(), preParsed.instrumentType(), preParsed.layer());
+		missing = sanitizeMissingFields(missing,
+				preParsed.instrumentType(),
+				preParsed.regions(),
+				preParsed.sectors(),
+				preParsed.topHoldings());
+		boolean hasMissing = missing != null && !missing.isEmpty();
+		boolean evidenceFailed = false;
+		if (qualityGateService != null) {
+			KnowledgeBaseQualityGateService.EvidenceResult result = qualityGateService.evaluateExtractionEvidence(
+				dossier == null ? null : dossier.getContentMd(),
+				preParsed,
+				configService == null ? null : configService.getSnapshot()
+			);
+			evidenceFailed = !result.passed();
+		}
+		return new PreParseAssessment(hasMissing || evidenceFailed, missing);
+	}
+
+	private InstrumentDossierExtractionPayload applyMissingFieldsAndWarnings(
+			InstrumentDossierExtractionPayload payload,
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing,
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
+		if (payload == null) {
+			return null;
+		}
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> resolvedMissing =
+				missing == null || missing.isEmpty() ? null : missing;
+		List<InstrumentDossierExtractionPayload.WarningPayload> resolvedWarnings =
+				warnings == null || warnings.isEmpty() ? null : warnings;
+		return new InstrumentDossierExtractionPayload(
+				payload.isin(),
+				payload.name(),
+				payload.instrumentType(),
+				payload.assetClass(),
+				payload.subClass(),
+				payload.gicsSector(),
+				payload.gicsIndustryGroup(),
+				payload.gicsIndustry(),
+				payload.gicsSubIndustry(),
+				payload.layer(),
+				payload.layerNotes(),
+				payload.etf(),
+				payload.risk(),
+				payload.regions(),
+				payload.sectors(),
+				payload.topHoldings(),
+				payload.financials(),
+				payload.valuation(),
+				payload.sources(),
+				resolvedMissing,
+				resolvedWarnings
+		);
+	}
+
+	private InstrumentDossierExtractionPayload.EtfPayload mergeEtf(
+			InstrumentDossierExtractionPayload.EtfPayload pre,
+			InstrumentDossierExtractionPayload.EtfPayload llm) {
+		if (pre == null) {
+			return llm;
+		}
+		if (llm == null) {
+			return pre;
+		}
+		return new InstrumentDossierExtractionPayload.EtfPayload(
+				first(pre.ongoingChargesPct(), llm.ongoingChargesPct()),
+				first(pre.benchmarkIndex(), llm.benchmarkIndex())
+		);
+	}
+
+	private InstrumentDossierExtractionPayload.RiskPayload mergeRisk(
+			InstrumentDossierExtractionPayload.RiskPayload pre,
+			InstrumentDossierExtractionPayload.RiskPayload llm) {
+		if (pre == null) {
+			return llm;
+		}
+		if (llm == null) {
+			return pre;
+		}
+		InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload preSri = pre.summaryRiskIndicator();
+		InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload llmSri = llm.summaryRiskIndicator();
+		InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload merged = preSri != null ? preSri : llmSri;
+		Boolean sectionPresent = null;
+		if (Boolean.TRUE.equals(pre.sectionPresent()) || Boolean.TRUE.equals(llm.sectionPresent())) {
+			sectionPresent = true;
+		} else if (pre.sectionPresent() != null) {
+			sectionPresent = pre.sectionPresent();
+		} else if (llm.sectionPresent() != null) {
+			sectionPresent = llm.sectionPresent();
+		}
+		if (merged == null && sectionPresent == null) {
+			return null;
+		}
+		return new InstrumentDossierExtractionPayload.RiskPayload(merged, sectionPresent);
+	}
+
+	private InstrumentDossierExtractionPayload.FinancialsPayload mergeFinancials(
+			InstrumentDossierExtractionPayload.FinancialsPayload pre,
+			InstrumentDossierExtractionPayload.FinancialsPayload llm) {
+		if (pre == null) {
+			return llm;
+		}
+		if (llm == null) {
+			return pre;
+		}
+		return new InstrumentDossierExtractionPayload.FinancialsPayload(
+				first(pre.revenue(), llm.revenue()),
+				first(pre.revenueCurrency(), llm.revenueCurrency()),
+				first(pre.revenueEur(), llm.revenueEur()),
+				first(pre.revenuePeriodEnd(), llm.revenuePeriodEnd()),
+				first(pre.revenuePeriodType(), llm.revenuePeriodType()),
+				first(pre.netIncome(), llm.netIncome()),
+				first(pre.netIncomeCurrency(), llm.netIncomeCurrency()),
+				first(pre.netIncomeEur(), llm.netIncomeEur()),
+				first(pre.netIncomePeriodEnd(), llm.netIncomePeriodEnd()),
+				first(pre.netIncomePeriodType(), llm.netIncomePeriodType()),
+				first(pre.dividendPerShare(), llm.dividendPerShare()),
+				first(pre.dividendCurrency(), llm.dividendCurrency()),
+				first(pre.dividendAsOf(), llm.dividendAsOf()),
+				first(pre.fxRateToEur(), llm.fxRateToEur())
+		);
+	}
+
+	private InstrumentDossierExtractionPayload.ValuationPayload mergeValuation(
+			InstrumentDossierExtractionPayload.ValuationPayload pre,
+			InstrumentDossierExtractionPayload.ValuationPayload llm) {
+		if (pre == null) {
+			return llm;
+		}
+		if (llm == null) {
+			return pre;
+		}
+		return new InstrumentDossierExtractionPayload.ValuationPayload(
+				first(pre.ebitda(), llm.ebitda()),
+				first(pre.ebitdaCurrency(), llm.ebitdaCurrency()),
+				first(pre.ebitdaEur(), llm.ebitdaEur()),
+				first(pre.fxRateToEur(), llm.fxRateToEur()),
+				first(pre.ebitdaPeriodEnd(), llm.ebitdaPeriodEnd()),
+				first(pre.ebitdaPeriodType(), llm.ebitdaPeriodType()),
+				first(pre.enterpriseValue(), llm.enterpriseValue()),
+				first(pre.netDebt(), llm.netDebt()),
+				first(pre.marketCap(), llm.marketCap()),
+				first(pre.sharesOutstanding(), llm.sharesOutstanding()),
+				first(pre.evToEbitda(), llm.evToEbitda()),
+				first(pre.netRent(), llm.netRent()),
+				first(pre.netRentCurrency(), llm.netRentCurrency()),
+				first(pre.netRentPeriodEnd(), llm.netRentPeriodEnd()),
+				first(pre.netRentPeriodType(), llm.netRentPeriodType()),
+				first(pre.noi(), llm.noi()),
+				first(pre.noiCurrency(), llm.noiCurrency()),
+				first(pre.noiPeriodEnd(), llm.noiPeriodEnd()),
+				first(pre.noiPeriodType(), llm.noiPeriodType()),
+				first(pre.affo(), llm.affo()),
+				first(pre.affoCurrency(), llm.affoCurrency()),
+				first(pre.affoPeriodEnd(), llm.affoPeriodEnd()),
+				first(pre.affoPeriodType(), llm.affoPeriodType()),
+				first(pre.ffo(), llm.ffo()),
+				first(pre.ffoCurrency(), llm.ffoCurrency()),
+				first(pre.ffoPeriodEnd(), llm.ffoPeriodEnd()),
+				first(pre.ffoPeriodType(), llm.ffoPeriodType()),
+				first(pre.ffoType(), llm.ffoType()),
+				first(pre.price(), llm.price()),
+				first(pre.priceCurrency(), llm.priceCurrency()),
+				first(pre.priceAsOf(), llm.priceAsOf()),
+				first(pre.epsType(), llm.epsType()),
+				first(pre.epsNorm(), llm.epsNorm()),
+				first(pre.epsNormYearsUsed(), llm.epsNormYearsUsed()),
+				first(pre.epsNormYearsAvailable(), llm.epsNormYearsAvailable()),
+				mergeEpsHistory(pre.epsHistory(), llm.epsHistory()),
+				first(pre.epsFloorPolicy(), llm.epsFloorPolicy()),
+				first(pre.epsFloorValue(), llm.epsFloorValue()),
+				first(pre.epsNormPeriodEnd(), llm.epsNormPeriodEnd()),
+				first(pre.peLongterm(), llm.peLongterm()),
+				first(pre.earningsYieldLongterm(), llm.earningsYieldLongterm()),
+				first(pre.peCurrent(), llm.peCurrent()),
+				first(pre.peCurrentAsOf(), llm.peCurrentAsOf()),
+				first(pre.pbCurrent(), llm.pbCurrent()),
+				first(pre.pbCurrentAsOf(), llm.pbCurrentAsOf()),
+				first(pre.peTtmHoldings(), llm.peTtmHoldings()),
+				first(pre.earningsYieldTtmHoldings(), llm.earningsYieldTtmHoldings()),
+				first(pre.holdingsCoverageWeightPct(), llm.holdingsCoverageWeightPct()),
+				first(pre.holdingsCoverageCount(), llm.holdingsCoverageCount()),
+				first(pre.holdingsAsOf(), llm.holdingsAsOf()),
+				first(pre.holdingsWeightMethod(), llm.holdingsWeightMethod()),
+				first(pre.peMethod(), llm.peMethod()),
+				first(pre.peHorizon(), llm.peHorizon()),
+				first(pre.negEarningsHandling(), llm.negEarningsHandling())
+		);
+	}
+
+	private List<InstrumentDossierExtractionPayload.EpsHistoryPayload> mergeEpsHistory(
+			List<InstrumentDossierExtractionPayload.EpsHistoryPayload> pre,
+			List<InstrumentDossierExtractionPayload.EpsHistoryPayload> llm) {
+		if (pre == null || pre.isEmpty()) {
+			return llm;
+		}
+		if (llm == null || llm.isEmpty()) {
+			return pre;
+		}
+		java.util.LinkedHashMap<Integer, InstrumentDossierExtractionPayload.EpsHistoryPayload> merged =
+				new java.util.LinkedHashMap<>();
+		List<InstrumentDossierExtractionPayload.EpsHistoryPayload> extra = new ArrayList<>();
+		for (InstrumentDossierExtractionPayload.EpsHistoryPayload item : llm) {
+			if (item == null) {
+				continue;
+			}
+			if (item.year() == null) {
+				extra.add(item);
+			} else {
+				merged.put(item.year(), item);
+			}
+		}
+		for (InstrumentDossierExtractionPayload.EpsHistoryPayload item : pre) {
+			if (item == null) {
+				continue;
+			}
+			if (item.year() == null) {
+				extra.add(item);
+			} else {
+				merged.put(item.year(), item);
+			}
+		}
+		List<InstrumentDossierExtractionPayload.EpsHistoryPayload> result = new ArrayList<>(merged.values());
+		result.addAll(extra);
+		return result.isEmpty() ? null : result;
+	}
+
+	private <T> List<T> mergeList(List<T> pre, List<T> llm) {
+		if (pre != null && !pre.isEmpty()) {
+			return pre;
+		}
+		return llm;
+	}
+
+	private <T> T first(T pre, T llm) {
+		return pre != null ? pre : llm;
+	}
+
+	private List<InstrumentDossierExtractionPayload.WarningPayload> mergeWarnings(
+			List<InstrumentDossierExtractionPayload.WarningPayload> pre,
+			List<InstrumentDossierExtractionPayload.WarningPayload> llm) {
+		List<InstrumentDossierExtractionPayload.WarningPayload> merged = new ArrayList<>();
+		if (pre != null) {
+			merged.addAll(pre);
+		}
+		if (llm != null) {
+			merged.addAll(llm);
+		}
+		return merged.isEmpty() ? null : merged;
+	}
+
+	private List<InstrumentDossierExtractionPayload.WarningPayload> appendWarning(
+			List<InstrumentDossierExtractionPayload.WarningPayload> warnings,
+			String message) {
+		if (message == null || message.isBlank()) {
+			return warnings;
+		}
+		List<InstrumentDossierExtractionPayload.WarningPayload> next = new ArrayList<>();
+		if (warnings != null) {
+			next.addAll(warnings);
+		}
+		next.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
+		return next;
+	}
+
+	private record PreParseAssessment(
+			boolean useLlm,
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields
+	) {
+	}
+
+	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> filterMissingFields(
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing,
+			InstrumentDossierExtractionPayload payload) {
+		if (missing == null || missing.isEmpty() || payload == null) {
+			return missing;
+		}
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> filtered = new ArrayList<>();
+		for (InstrumentDossierExtractionPayload.MissingFieldPayload item : missing) {
+			if (item == null || item.field() == null) {
+				continue;
+			}
+			if (!isFieldPresent(payload, item.field())) {
+				filtered.add(item);
+			}
+		}
+		return filtered.isEmpty() ? null : filtered;
+	}
+
+	private boolean isFieldPresent(InstrumentDossierExtractionPayload payload, String field) {
+		String normalized = field.toLowerCase(Locale.ROOT).trim();
+		if (normalized.startsWith("valuation.")) {
+			normalized = normalized.substring("valuation.".length());
+		}
+		if (normalized.startsWith("financials.")) {
+			normalized = normalized.substring("financials.".length());
+		}
+		switch (normalized) {
+			case "name" -> {
+				return payload.name() != null;
+			}
+			case "instrument_type" -> {
+				return payload.instrumentType() != null;
+			}
+			case "asset_class" -> {
+				return payload.assetClass() != null;
+			}
+			case "sub_class" -> {
+				return payload.subClass() != null;
+			}
+			case "layer" -> {
+				return payload.layer() != null;
+			}
+			case "layer_notes" -> {
+				return payload.layerNotes() != null;
+			}
+			case "etf.ongoing_charges_pct", "ongoing_charges_pct", "ter" -> {
+				return payload.etf() != null && payload.etf().ongoingChargesPct() != null;
+			}
+			case "etf.benchmark_index", "benchmark_index" -> {
+				return payload.etf() != null && payload.etf().benchmarkIndex() != null;
+			}
+			case "risk.summary_risk_indicator.value", "summary_risk_indicator", "sri" -> {
+				return payload.risk() != null
+						&& payload.risk().summaryRiskIndicator() != null
+						&& payload.risk().summaryRiskIndicator().value() != null;
+			}
+			case "financials" -> {
+				return payload.financials() != null;
+			}
+			case "valuation" -> {
+				return payload.valuation() != null;
+			}
+			case "revenue" -> {
+				return payload.financials() != null && payload.financials().revenue() != null;
+			}
+			case "net_income" -> {
+				return payload.financials() != null && payload.financials().netIncome() != null;
+			}
+			case "dividend_per_share" -> {
+				return payload.financials() != null && payload.financials().dividendPerShare() != null;
+			}
+			case "price" -> {
+				return payload.valuation() != null && payload.valuation().price() != null;
+			}
+			case "pe_current" -> {
+				return payload.valuation() != null && payload.valuation().peCurrent() != null;
+			}
+			case "pb_current" -> {
+				return payload.valuation() != null && payload.valuation().pbCurrent() != null;
+			}
+			case "market_cap" -> {
+				return payload.valuation() != null && payload.valuation().marketCap() != null;
+			}
+			case "shares_outstanding" -> {
+				return payload.valuation() != null && payload.valuation().sharesOutstanding() != null;
+			}
+			case "ebitda" -> {
+				return payload.valuation() != null && payload.valuation().ebitda() != null;
+			}
+			case "enterprise_value" -> {
+				return payload.valuation() != null && payload.valuation().enterpriseValue() != null;
+			}
+			case "net_debt" -> {
+				return payload.valuation() != null && payload.valuation().netDebt() != null;
+			}
+			case "ev_to_ebitda" -> {
+				return payload.valuation() != null && payload.valuation().evToEbitda() != null;
+			}
+			case "eps_history" -> {
+				return payload.valuation() != null && payload.valuation().epsHistory() != null
+						&& !payload.valuation().epsHistory().isEmpty();
+			}
+			case "eps_norm" -> {
+				return payload.valuation() != null && payload.valuation().epsNorm() != null;
+			}
+			case "pe_longterm" -> {
+				return payload.valuation() != null && payload.valuation().peLongterm() != null;
+			}
+			case "earnings_yield_longterm" -> {
+				return payload.valuation() != null && payload.valuation().earningsYieldLongterm() != null;
+			}
+			case "pe_ttm_holdings" -> {
+				return payload.valuation() != null && payload.valuation().peTtmHoldings() != null;
+			}
+			case "earnings_yield_ttm_holdings" -> {
+				return payload.valuation() != null && payload.valuation().earningsYieldTtmHoldings() != null;
+			}
+			case "holdings_coverage_weight_pct" -> {
+				return payload.valuation() != null && payload.valuation().holdingsCoverageWeightPct() != null;
+			}
+			case "holdings_coverage_count" -> {
+				return payload.valuation() != null && payload.valuation().holdingsCoverageCount() != null;
+			}
+			case "holdings_asof" -> {
+				return payload.valuation() != null && payload.valuation().holdingsAsOf() != null;
+			}
+			case "holdings_weight_method" -> {
+				return payload.valuation() != null && payload.valuation().holdingsWeightMethod() != null;
+			}
+			case "pe_method" -> {
+				return payload.valuation() != null && payload.valuation().peMethod() != null;
+			}
+			case "pe_horizon" -> {
+				return payload.valuation() != null && payload.valuation().peHorizon() != null;
+			}
+			case "neg_earnings_handling" -> {
+				return payload.valuation() != null && payload.valuation().negEarningsHandling() != null;
+			}
+			default -> {
+				return false;
+			}
+		}
 	}
 
 	private Integer extractSri(JsonNode riskNode) {
@@ -422,12 +950,32 @@ public class LlmExtractorService implements ExtractorService {
 			if (isEtf && field.startsWith("gics_")) {
 				continue;
 			}
-			if (!isEtf && (field.startsWith("etf.") || field.startsWith("etf_") || field.equals("etf"))) {
+			if (!isEtf && isEtfOnlyMissingField(field)) {
 				continue;
 			}
 			filtered.add(item);
 		}
 		return filtered.isEmpty() ? null : filtered;
+	}
+
+	private boolean isEtfOnlyMissingField(String normalizedField) {
+		if (normalizedField == null || normalizedField.isBlank()) {
+			return false;
+		}
+		if (normalizedField.startsWith("etf.") || normalizedField.startsWith("etf_") || normalizedField.equals("etf")) {
+			return true;
+		}
+		return switch (normalizedField) {
+			case "ter",
+					"ongoing_charges_pct",
+					"ongoing charges pct",
+					"ongoing charges",
+					"ongoing charge",
+					"total expense ratio",
+					"benchmark_index",
+					"benchmark index" -> true;
+			default -> false;
+		};
 	}
 
 	private <T> T parsePayload(JsonNode node,

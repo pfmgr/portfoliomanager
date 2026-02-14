@@ -42,6 +42,7 @@ public class KnowledgeBaseConfigService {
 	private static final boolean DEFAULT_BULK_REQUIRE_PRIMARY_SOURCE = true;
 	private static final double DEFAULT_ALTERNATIVES_MIN_SIMILARITY_SCORE = 0.6;
 	private static final boolean DEFAULT_EXTRACTION_EVIDENCE_REQUIRED = true;
+	private static final int DEFAULT_QUALITY_GATE_RETRY_LIMIT = 2;
 	private static final String DEFAULT_QUALITY_GATE_PROFILE_KEY = "BALANCED";
 
 	private final KnowledgeBaseConfigRepository repository;
@@ -128,6 +129,8 @@ public class KnowledgeBaseConfigService {
 		boolean extractionEvidenceRequired = raw != null && raw.extractionEvidenceRequired() != null
 				? raw.extractionEvidenceRequired()
 				: DEFAULT_EXTRACTION_EVIDENCE_REQUIRED;
+		int qualityGateRetryLimit = nonNegativeOrDefault(raw == null ? null : raw.qualityGateRetryLimit(),
+				DEFAULT_QUALITY_GATE_RETRY_LIMIT);
 		KnowledgeBaseQualityGateConfigSnapshot qualityGateProfiles = normalizeQualityGateConfig(
 				raw == null ? null : raw.qualityGateProfiles()
 		);
@@ -161,12 +164,20 @@ public class KnowledgeBaseConfigService {
 				bulkRequirePrimarySource,
 				alternativesMinSimilarityScore,
 				extractionEvidenceRequired,
+				qualityGateRetryLimit,
 				qualityGateProfiles
 		);
 	}
 
 	private int positiveOrDefault(Integer value, int fallback) {
 		if (value == null || value <= 0) {
+			return fallback;
+		}
+		return value;
+	}
+
+	private int nonNegativeOrDefault(Integer value, int fallback) {
+		if (value == null || value < 0) {
 			return fallback;
 		}
 		return value;
@@ -555,6 +566,7 @@ public class KnowledgeBaseConfigService {
 				snapshot.bulkRequirePrimarySource(),
 				snapshot.alternativesMinSimilarityScore(),
 				snapshot.extractionEvidenceRequired(),
+				snapshot.qualityGateRetryLimit(),
 				toQualityGateDto(snapshot.qualityGateProfiles())
 		);
 	}
@@ -611,6 +623,7 @@ public class KnowledgeBaseConfigService {
 			boolean bulkRequirePrimarySource,
 			double alternativesMinSimilarityScore,
 			boolean extractionEvidenceRequired,
+			int qualityGateRetryLimit,
 			KnowledgeBaseQualityGateConfigSnapshot qualityGateProfiles
 	) {
 	}

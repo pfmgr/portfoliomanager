@@ -5,5 +5,5 @@ public enum KnowledgeBaseLlmActionType {
 	ALTERNATIVES,
 	EXTRACTION,
 	REFRESH,
-	MISSING_DATA
+	MISSING_METRICS
 }
