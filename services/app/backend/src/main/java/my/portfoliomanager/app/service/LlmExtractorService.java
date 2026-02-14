@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 @Service
@@ -57,7 +58,16 @@ public class LlmExtractorService implements ExtractorService {
 			"mining",
 			"metals",
 			"commodity",
-			"commodities"
+			"commodities",
+			"real estate",
+			"property",
+			"reit",
+			"immobilien"
+	);
+	private static final List<Pattern> THEMATIC_KEYWORD_PATTERNS = compileThematicKeywordPatterns();
+	private static final Pattern ETF_TYPE_HINT_PATTERN = Pattern.compile(
+			"(?<![\\p{L}\\p{N}])(etf|fund|etp|ucits)(?![\\p{L}\\p{N}])",
+			Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
 	);
 	private static final Pattern RISK_SECTION_PATTERN =
 			Pattern.compile("(?m)^##\\s+risk\\b", Pattern.CASE_INSENSITIVE);
@@ -76,7 +86,7 @@ public class LlmExtractorService implements ExtractorService {
 
 	@Override
 	public ExtractionResult extract(InstrumentDossier dossier) {
-		InstrumentDossierExtractionPayload preParsed = preParser.parse(dossier);
+		InstrumentDossierExtractionPayload preParsed = applyThemeLayerPolicy(preParser.parse(dossier));
 		PreParseAssessment assessment = assessPreParsed(dossier, preParsed);
 		if (!assessment.useLlm()) {
 			InstrumentDossierExtractionPayload skipped = applyMissingFieldsAndWarnings(
@@ -89,7 +99,7 @@ public class LlmExtractorService implements ExtractorService {
 		}
 		KnowledgeBaseLlmExtractionDraft draft = llmClient.extractMetadata(dossier.getContentMd());
 		InstrumentDossierExtractionPayload llmPayload = parseExtraction(dossier, draft.extractionJson());
-		InstrumentDossierExtractionPayload merged = mergePayloads(preParsed, llmPayload);
+		InstrumentDossierExtractionPayload merged = applyThemeLayerPolicy(mergePayloads(preParsed, llmPayload));
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields =
 				filterMissingFields(llmPayload == null ? null : llmPayload.missingFields(), merged);
 		if (missingFields == null || missingFields.isEmpty()) {
@@ -116,8 +126,11 @@ public class LlmExtractorService implements ExtractorService {
 			);
 		}
 		List<InstrumentDossierExtractionPayload.WarningPayload> warnings = mergeWarnings(
-				preParsed == null ? null : preParsed.warnings(),
-				llmPayload == null ? null : llmPayload.warnings()
+				mergeWarnings(
+						preParsed == null ? null : preParsed.warnings(),
+						llmPayload == null ? null : llmPayload.warnings()
+				),
+				merged == null ? null : merged.warnings()
 		);
 		warnings = appendWarning(warnings, "LLM extraction merged with parser prefill.");
 		InstrumentDossierExtractionPayload payload = new InstrumentDossierExtractionPayload(
@@ -172,9 +185,6 @@ public class LlmExtractorService implements ExtractorService {
 			layer = null;
 		}
 		String layerNotes = textOrNull(data, "layer_notes", "layerNotes");
-		ThemeLayerDecision themeDecision = forceThemeLayerIfNeeded(layer, instrumentType, name, subClass, layerNotes);
-		layer = themeDecision.layer();
-		layerNotes = themeDecision.layerNotes();
 
 		JsonNode etfNode = objectOrNull(data, "etf");
 		BigDecimal ongoingChargesPct = decimalOrNull(etfNode, "ongoing_charges_pct", "ongoingChargesPct");
@@ -185,6 +195,21 @@ public class LlmExtractorService implements ExtractorService {
 			ongoingChargesPct = null;
 		}
 		String benchmarkIndex = textOrNull(etfNode, "benchmark_index", "benchmarkIndex");
+		ThemeLayerDecision themeDecision = forceThemeLayerIfNeeded(
+				layer,
+				instrumentType,
+				name,
+				subClass,
+				layerNotes,
+				benchmarkIndex
+		);
+		layer = themeDecision.layer();
+		layerNotes = themeDecision.layerNotes();
+		if (themeDecision.applied()) {
+			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
+					buildThemeOverrideWarning(themeDecision)
+			));
+		}
 
 		JsonNode riskNode = objectOrNull(data, "risk");
 		Integer sriValue = extractSri(riskNode);
@@ -572,10 +597,24 @@ public class LlmExtractorService implements ExtractorService {
 			List<InstrumentDossierExtractionPayload.WarningPayload> llm) {
 		List<InstrumentDossierExtractionPayload.WarningPayload> merged = new ArrayList<>();
 		if (pre != null) {
-			merged.addAll(pre);
+			for (InstrumentDossierExtractionPayload.WarningPayload warning : pre) {
+				if (warning == null || warning.message() == null || warning.message().isBlank()) {
+					continue;
+				}
+				if (!containsWarningMessage(merged, warning.message())) {
+					merged.add(warning);
+				}
+			}
 		}
 		if (llm != null) {
-			merged.addAll(llm);
+			for (InstrumentDossierExtractionPayload.WarningPayload warning : llm) {
+				if (warning == null || warning.message() == null || warning.message().isBlank()) {
+					continue;
+				}
+				if (!containsWarningMessage(merged, warning.message())) {
+					merged.add(warning);
+				}
+			}
 		}
 		return merged.isEmpty() ? null : merged;
 	}
@@ -590,8 +629,25 @@ public class LlmExtractorService implements ExtractorService {
 		if (warnings != null) {
 			next.addAll(warnings);
 		}
-		next.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
+		if (!containsWarningMessage(next, message)) {
+			next.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
+		}
 		return next;
+	}
+
+	private boolean containsWarningMessage(List<InstrumentDossierExtractionPayload.WarningPayload> warnings, String message) {
+		if (warnings == null || warnings.isEmpty() || message == null || message.isBlank()) {
+			return false;
+		}
+		for (InstrumentDossierExtractionPayload.WarningPayload warning : warnings) {
+			if (warning == null || warning.message() == null) {
+				continue;
+			}
+			if (message.equals(warning.message())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private record PreParseAssessment(
@@ -1077,33 +1133,189 @@ public class LlmExtractorService implements ExtractorService {
 	}
 
 	private ThemeLayerDecision forceThemeLayerIfNeeded(Integer layer,
-									   String instrumentType,
-									   String name,
-									   String subClass,
-									   String layerNotes) {
-		if (instrumentType == null) {
-			return new ThemeLayerDecision(layer, layerNotes);
+								   String instrumentType,
+								   String name,
+								   String subClass,
+								   String layerNotes,
+								   String benchmarkIndex) {
+		if (!isEtfLikeInstrument(instrumentType, name, subClass, benchmarkIndex)) {
+			return new ThemeLayerDecision(layer, layerNotes, false, null, null);
 		}
-		String type = instrumentType.toLowerCase(Locale.ROOT);
-		if (!(type.contains("etf") || type.contains("fund") || type.contains("etp"))) {
-			return new ThemeLayerDecision(layer, layerNotes);
+		ThematicKeywordMatch match = findThematicKeywordMatch(name, subClass, benchmarkIndex);
+		if (match == null) {
+			return new ThemeLayerDecision(layer, layerNotes, false, null, null);
 		}
-		String combined = String.join(" ",
-				name == null ? "" : name,
-				subClass == null ? "" : subClass,
-				layerNotes == null ? "" : layerNotes
-		).toLowerCase(Locale.ROOT);
-		for (String keyword : THEMATIC_KEYWORDS) {
-			if (combined.contains(keyword)) {
-				boolean changed = layer == null || layer != 3;
-				String updatedNotes = normalizeThemeNotes(layerNotes);
-				if (changed) {
-					updatedNotes = appendPostprocessorHint(updatedNotes);
-				}
-				return new ThemeLayerDecision(3, updatedNotes);
+		boolean layerChanged = layer == null || layer != 3;
+		String updatedNotes = normalizeThemeNotes(layerNotes);
+		if (layerChanged) {
+			updatedNotes = appendPostprocessorHint(updatedNotes, match.sourceField(), match.keyword());
+		}
+		boolean applied = layerChanged || !Objects.equals(layerNotes, updatedNotes);
+		return new ThemeLayerDecision(3, updatedNotes, applied, match.sourceField(), match.keyword());
+	}
+
+	private InstrumentDossierExtractionPayload applyThemeLayerPolicy(InstrumentDossierExtractionPayload payload) {
+		if (payload == null) {
+			return null;
+		}
+		String benchmarkIndex = payload.etf() == null ? null : payload.etf().benchmarkIndex();
+		ThemeLayerDecision decision = forceThemeLayerIfNeeded(
+				payload.layer(),
+				payload.instrumentType(),
+				payload.name(),
+				payload.subClass(),
+				payload.layerNotes(),
+				benchmarkIndex
+		);
+		Integer resolvedLayer = decision.applied() ? decision.layer() : payload.layer();
+		String resolvedLayerNotes = decision.applied() ? decision.layerNotes() : payload.layerNotes();
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields = removeResolvedLayerMissingFields(
+				payload.missingFields(),
+				resolvedLayer,
+				resolvedLayerNotes
+		);
+		boolean missingChanged = !Objects.equals(missingFields, payload.missingFields());
+		if (!decision.applied() && !missingChanged) {
+			return payload;
+		}
+		List<InstrumentDossierExtractionPayload.WarningPayload> warnings = payload.warnings();
+		if (decision.applied()) {
+			warnings = appendWarning(warnings, buildThemeOverrideWarning(decision));
+		}
+		return new InstrumentDossierExtractionPayload(
+				payload.isin(),
+				payload.name(),
+				payload.instrumentType(),
+				payload.assetClass(),
+				payload.subClass(),
+				payload.gicsSector(),
+				payload.gicsIndustryGroup(),
+				payload.gicsIndustry(),
+				payload.gicsSubIndustry(),
+				resolvedLayer,
+				resolvedLayerNotes,
+				payload.etf(),
+				payload.risk(),
+				payload.regions(),
+				payload.sectors(),
+				payload.topHoldings(),
+				payload.financials(),
+				payload.valuation(),
+				payload.sources(),
+				missingFields,
+				warnings
+		);
+	}
+
+	private ThematicKeywordMatch findThematicKeywordMatch(String name,
+									  String subClass,
+									  String benchmarkIndex) {
+		ThematicKeywordMatch match = findThematicKeywordMatch("benchmark_index", benchmarkIndex);
+		if (match != null) {
+			return match;
+		}
+		match = findThematicKeywordMatch("name", name);
+		if (match != null) {
+			return match;
+		}
+		match = findThematicKeywordMatch("sub_class", subClass);
+		if (match != null) {
+			return match;
+		}
+		return null;
+	}
+
+	private ThematicKeywordMatch findThematicKeywordMatch(String sourceField, String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		for (int i = 0; i < THEMATIC_KEYWORDS.size(); i++) {
+			Pattern keywordPattern = THEMATIC_KEYWORD_PATTERNS.get(i);
+			if (keywordPattern.matcher(value).find()) {
+				return new ThematicKeywordMatch(sourceField, THEMATIC_KEYWORDS.get(i));
 			}
 		}
-		return new ThemeLayerDecision(layer, layerNotes);
+		return null;
+	}
+
+	private static List<Pattern> compileThematicKeywordPatterns() {
+		List<Pattern> patterns = new ArrayList<>();
+		for (String keyword : THEMATIC_KEYWORDS) {
+			String normalizedKeyword = keyword == null ? null : keyword.trim().toLowerCase(Locale.ROOT);
+			if (normalizedKeyword == null || normalizedKeyword.isBlank()) {
+				continue;
+			}
+			String[] parts = normalizedKeyword.split("\\s+");
+			StringBuilder regex = new StringBuilder("(?<![\\p{L}\\p{N}])");
+			for (int i = 0; i < parts.length; i++) {
+				if (i > 0) {
+					regex.append("[\\s\\-_/]+");
+				}
+				regex.append(Pattern.quote(parts[i]));
+			}
+			regex.append("(?![\\p{L}\\p{N}])");
+			patterns.add(Pattern.compile(regex.toString(), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE));
+		}
+		return List.copyOf(patterns);
+	}
+
+	private String buildThemeOverrideWarning(ThemeLayerDecision decision) {
+		if (decision == null) {
+			return "Layer forced to 3 (Themes) by extraction postprocessor.";
+		}
+		if (decision.keyword() == null || decision.sourceField() == null) {
+			return "Layer forced to 3 (Themes) by extraction postprocessor.";
+		}
+		return "Layer forced to 3 (Themes) by extraction postprocessor using keyword '"
+				+ decision.keyword()
+				+ "' from "
+				+ decision.sourceField()
+				+ ".";
+	}
+
+	private List<InstrumentDossierExtractionPayload.MissingFieldPayload> removeResolvedLayerMissingFields(
+			List<InstrumentDossierExtractionPayload.MissingFieldPayload> missingFields,
+			Integer layer,
+			String layerNotes) {
+		if (missingFields == null || missingFields.isEmpty()) {
+			return missingFields;
+		}
+		List<InstrumentDossierExtractionPayload.MissingFieldPayload> filtered = new ArrayList<>();
+		for (InstrumentDossierExtractionPayload.MissingFieldPayload item : missingFields) {
+			if (item == null || item.field() == null) {
+				continue;
+			}
+			String normalizedField = item.field().toLowerCase(Locale.ROOT).trim();
+			if (layer != null && normalizedField.equals("layer")) {
+				continue;
+			}
+			if (layerNotes != null && (normalizedField.equals("layer_notes") || normalizedField.equals("layernotes"))) {
+				continue;
+			}
+			filtered.add(item);
+		}
+		return filtered.isEmpty() ? null : filtered;
+	}
+
+	private boolean isEtfLikeInstrument(String instrumentType,
+						 String name,
+						 String subClass,
+						 String benchmarkIndex) {
+		if (isEtfType(instrumentType)) {
+			return true;
+		}
+		if (benchmarkIndex != null && !benchmarkIndex.isBlank()) {
+			return true;
+		}
+		return containsEtfTypeHint(name)
+				|| containsEtfTypeHint(subClass);
+	}
+
+	private boolean containsEtfTypeHint(String value) {
+		if (value == null || value.isBlank()) {
+			return false;
+		}
+		return ETF_TYPE_HINT_PATTERN.matcher(value).find();
 	}
 
 	private boolean isEtfType(String instrumentType) {
@@ -1137,8 +1349,11 @@ public class LlmExtractorService implements ExtractorService {
 		return layerNotes;
 	}
 
-	private String appendPostprocessorHint(String notes) {
+	private String appendPostprocessorHint(String notes, String sourceField, String keyword) {
 		String hint = "Layer overridden by extraction postprocessor";
+		if (keyword != null && sourceField != null) {
+			hint = hint + " [keyword=" + keyword + ", source=" + sourceField + "]";
+		}
 		if (notes == null || notes.isBlank()) {
 			return hint;
 		}
@@ -1148,7 +1363,16 @@ public class LlmExtractorService implements ExtractorService {
 		return notes + " (" + hint + ")";
 	}
 
-	private record ThemeLayerDecision(Integer layer, String layerNotes) {
+	private record ThemeLayerDecision(
+			Integer layer,
+			String layerNotes,
+			boolean applied,
+			String sourceField,
+			String keyword
+	) {
+	}
+
+	private record ThematicKeywordMatch(String sourceField, String keyword) {
 	}
 
 	private Integer integerOrNull(JsonNode node, String... fields) {

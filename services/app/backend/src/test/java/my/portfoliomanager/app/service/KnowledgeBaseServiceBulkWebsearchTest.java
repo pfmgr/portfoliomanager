@@ -25,6 +25,7 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 		AtomicReference<String> schemaName = new AtomicReference<>();
 		AtomicReference<Map<String, Object>> schema = new AtomicReference<>();
 		AtomicReference<String> reasoningEffort = new AtomicReference<>();
+		AtomicReference<String> promptCapture = new AtomicReference<>();
 		LlmClient llmClient = new LlmClient() {
 			@Override
 			public LlmSuggestion suggestReclassification(String context) {
@@ -38,9 +39,10 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 
 			@Override
 			public LlmSuggestion createInstrumentDossierViaWebSearch(String context,
-																	 String schemaNameArg,
-																	 Map<String, Object> schemaArg,
-																	 String reasoningEffortArg) {
+												 String schemaNameArg,
+												 Map<String, Object> schemaArg,
+												 String reasoningEffortArg) {
+				promptCapture.set(context);
 				schemaName.set(schemaNameArg);
 				schema.set(schemaArg);
 				reasoningEffort.set(reasoningEffortArg);
@@ -98,6 +100,13 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 		assertThat(result.items().getFirst().isin()).isEqualTo("DE0000000001");
 		assertThat(result.items().getFirst().contentMd()).contains("# DE0000000001");
 		assertThat(result.items().getFirst().error()).isNull();
+		assertThat(promptCapture.get()).contains("Use canonical section headings.");
+		assertThat(promptCapture.get()).contains("Legacy aliases (e.g., \"Sourcing\", \"Prospectus / Key Information\", \"Holdings & exposure\")");
+		assertThat(promptCapture.get()).contains("must not be emitted in new output.");
+		assertThat(promptCapture.get()).contains("In the ## Risk section, write SRI exactly as \"SRI: <1-7>\" when a numeric value is verified, otherwise write \"SRI: unknown\".");
+		assertThat(promptCapture.get()).contains("Do not use SFDR article labels (e.g., \"Article 8\" or \"Article 9\") as numeric SRI values.");
+		assertThat(promptCapture.get()).contains("Do not output JSON-like risk keys in Markdown");
+		assertThat(promptCapture.get()).contains("Real-estate-focused ETFs/funds (including Real Estate, Property, and REIT index ETFs/funds) must always be classified as Layer 3 Themes");
 	}
 
 	private KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot defaultSnapshot() {

@@ -31,7 +31,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -87,7 +86,16 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			"mining",
 			"metals",
 			"commodity",
-			"commodities"
+			"commodities",
+			"real estate",
+			"property",
+			"reit",
+			"immobilien"
+	);
+	private static final List<Pattern> THEMATIC_KEYWORD_PATTERNS = compileThematicKeywordPatterns();
+	private static final Pattern ETF_TYPE_HINT_PATTERN = Pattern.compile(
+			"(?<![\\p{L}\\p{N}])(etf|fund|etp|ucits)(?![\\p{L}\\p{N}])",
+			Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
 	);
 	private static final List<String> VALUATION_KEY_ORDER = List.of(
 			"price",
@@ -986,19 +994,26 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 
 	private void forceThemeLayerIfNeeded(ObjectNode root) {
 		String instrumentType = textOrNull(root, "instrument_type");
-		if (instrumentType == null) {
+		String name = textOrNull(root, "name");
+		String subClass = textOrNull(root, "sub_class");
+		String layerNotesValue = textOrNull(root, "layer_notes");
+		String benchmarkIndex = null;
+		ObjectNode etfNode = objectNode(root, "etf");
+		if (etfNode != null) {
+			benchmarkIndex = textOrNull(etfNode, "benchmark_index");
+			if (benchmarkIndex == null) {
+				benchmarkIndex = textOrNull(etfNode, "benchmarkIndex");
+			}
+		}
+		if (!isEtfLikeInstrument(instrumentType, name, subClass, benchmarkIndex)) {
 			return;
 		}
-		String type = instrumentType.toLowerCase(Locale.ROOT);
-		if (!(type.contains("etf") || type.contains("fund") || type.contains("etp"))) {
-			return;
-		}
-		String combined = String.join(" ",
-				Objects.toString(textOrNull(root, "name"), ""),
-				Objects.toString(textOrNull(root, "sub_class"), ""),
-				Objects.toString(textOrNull(root, "layer_notes"), "")
-		).toLowerCase(Locale.ROOT);
-		if (!containsThematicKeyword(combined)) {
+		ThematicKeywordMatch match = findThematicKeywordMatch(
+				name,
+				subClass,
+				benchmarkIndex
+		);
+		if (match == null) {
 			return;
 		}
 		Integer originalLayer = null;
@@ -1015,20 +1030,81 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			root.put("layer_notes", "Thematic ETF");
 		}
 		if (changed) {
-			root.put("layer_notes", appendPostprocessorHint(textOrNull(root, "layer_notes")));
+			root.put("layer_notes", appendPostprocessorHint(textOrNull(root, "layer_notes"), match));
 		}
 	}
 
-	private boolean containsThematicKeyword(String value) {
+	private ThematicKeywordMatch findThematicKeywordMatch(String name,
+								 String subClass,
+								 String benchmarkIndex) {
+		ThematicKeywordMatch match = findThematicKeywordMatch("benchmark_index", benchmarkIndex);
+		if (match != null) {
+			return match;
+		}
+		match = findThematicKeywordMatch("name", name);
+		if (match != null) {
+			return match;
+		}
+		match = findThematicKeywordMatch("sub_class", subClass);
+		if (match != null) {
+			return match;
+		}
+		return null;
+	}
+
+	private ThematicKeywordMatch findThematicKeywordMatch(String sourceField, String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		for (int i = 0; i < THEMATIC_KEYWORDS.size(); i++) {
+			Pattern keywordPattern = THEMATIC_KEYWORD_PATTERNS.get(i);
+			if (keywordPattern.matcher(value).find()) {
+				return new ThematicKeywordMatch(sourceField, THEMATIC_KEYWORDS.get(i));
+			}
+		}
+		return null;
+	}
+
+	private static List<Pattern> compileThematicKeywordPatterns() {
+		List<Pattern> patterns = new ArrayList<>();
+		for (String keyword : THEMATIC_KEYWORDS) {
+			String normalizedKeyword = keyword == null ? null : keyword.trim().toLowerCase(Locale.ROOT);
+			if (normalizedKeyword == null || normalizedKeyword.isBlank()) {
+				continue;
+			}
+			String[] parts = normalizedKeyword.split("\\s+");
+			StringBuilder regex = new StringBuilder("(?<![\\p{L}\\p{N}])");
+			for (int i = 0; i < parts.length; i++) {
+				if (i > 0) {
+					regex.append("[\\s\\-_/]+");
+				}
+				regex.append(Pattern.quote(parts[i]));
+			}
+			regex.append("(?![\\p{L}\\p{N}])");
+			patterns.add(Pattern.compile(regex.toString(), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE));
+		}
+		return List.copyOf(patterns);
+	}
+
+	private boolean isEtfLikeInstrument(String instrumentType,
+						 String name,
+						 String subClass,
+						 String benchmarkIndex) {
+		if (containsEtfTypeHint(instrumentType)) {
+			return true;
+		}
+		if (benchmarkIndex != null && !benchmarkIndex.isBlank()) {
+			return true;
+		}
+		return containsEtfTypeHint(name)
+				|| containsEtfTypeHint(subClass);
+	}
+
+	private boolean containsEtfTypeHint(String value) {
 		if (value == null || value.isBlank()) {
 			return false;
 		}
-		for (String keyword : THEMATIC_KEYWORDS) {
-			if (value.contains(keyword)) {
-				return true;
-			}
-		}
-		return false;
+		return ETF_TYPE_HINT_PATTERN.matcher(value).find();
 	}
 
 	private boolean shouldOverwriteThemeNotes(String value) {
@@ -1043,8 +1119,11 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				|| normalized.contains("core");
 	}
 
-	private String appendPostprocessorHint(String notes) {
+	private String appendPostprocessorHint(String notes, ThematicKeywordMatch match) {
 		String hint = "Layer overridden by extraction postprocessor";
+		if (match != null && match.keyword() != null && match.sourceField() != null) {
+			hint = hint + " [keyword=" + match.keyword() + ", source=" + match.sourceField() + "]";
+		}
 		if (notes == null || notes.isBlank()) {
 			return hint;
 		}
@@ -1054,7 +1133,11 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 		return notes + " (" + hint + ")";
 	}
 
+	private record ThematicKeywordMatch(String sourceField, String keyword) {
+	}
+
 	private void applyAsOfFallback(ObjectNode node, String valueField, String dateField, String researchDate) {
+
 		if (node == null) {
 			return;
 		}
@@ -1398,10 +1481,14 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 
                 Additional requirements:
                 - Use the exact section headings shown above. Do not rename headings (e.g., do not replace "Classification" with "Layer notes").
+				- Use the canonical section headings above. Legacy aliases (e.g., "Sourcing", "Prospectus / Key Information", "Holdings & exposure") may be tolerated by validators for old dossiers but must not be emitted in new output.
                 - Headings must start with "## " at the beginning of the line. Do not use bullets as substitutes for headings.
                 - Always include every required section heading. If a section has no verified data, still include the heading and write "unknown" for the relevant fields.
                 - Do not include wrapper markers like "---BEGIN DOSSIER MARKDOWN---" or "---END DOSSIER MARKDOWN---" in contentMd.
                 - Keep index/benchmark names exactly as stated in sources (e.g., MSCI, S&P, FTSE, STOXX, iBoxx); do not insert or remove spaces inside acronyms.
+				- In the ## Risk section, write SRI exactly as "SRI: <1-7>" when a numeric value is verified, otherwise write "SRI: unknown".
+				- Do not use SFDR article labels (e.g., "Article 8" or "Article 9") as numeric SRI values.
+				- Do not output JSON-like risk keys in Markdown (e.g., risk_indicator, summary_risk_indicator, risk.summary_risk_indicator.value).
                 - Write the dossier in English.
                 - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.
                 - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
@@ -1418,9 +1505,10 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                 - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                 - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
-                - If the ETF is thematic/sector/industry/commodity focused (e.g., defense, energy, lithium/batteries, clean tech, semiconductors, robotics/AI, healthcare subsectors, commodities), it must be Layer 3. Do not classify such ETFs as Layer 2 even if they are globally diversified.
+                - If the ETF is thematic/sector/industry/commodity focused (e.g., defense, energy, lithium/batteries, clean tech, semiconductors, robotics/AI, healthcare subsectors, commodities, real estate/property/REIT), it must be Layer 3. Do not classify such ETFs as Layer 2 even if they are globally diversified.
+                - Real-estate-focused ETFs/funds (including Real Estate, Property, and REIT index ETFs/funds) must always be classified as Layer 3 Themes, even when diversified across regions such as Europe or globally.
                 - If there is any doubt between Layer 2 and Layer 3 for a thematic ETF, choose Layer 3.
-                - Practical check: if the instrument name, benchmark, or description contains a theme/sector/industry keyword (Defense, Energy, Battery, Lithium, Semiconductor, Robotics, AI, Clean, Water, Gold, Oil, Commodity, Cloud, Cyber, Biotech, Healthcare subsector), force Layer 3.
+                - Practical check: if the instrument name, benchmark, or description contains a theme/sector/industry keyword (Defense, Energy, Battery, Lithium, Semiconductor, Robotics, AI, Clean, Water, Gold, Oil, Commodity, Cloud, Cyber, Biotech, Healthcare subsector, Real Estate, Property, REIT, Immobilien), force Layer 3.
                 - For single stocks, collect the raw inputs needed for long-term P/E:
                   EBITDA (currency + TTM/FY label), share price (currency + as-of date), and annual EPS history for the last 3-7 fiscal years (include year, period end, EPS value, and whether EPS is adjusted or reported).
                   If EPS history is incomplete or only a single year is available, still report what you have and explain the gap; do not fabricate long-term P/E.
@@ -1525,6 +1613,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Use web research (web_search) and reliable sources appropriate for the instrument type.
 				- Only add or update content required to fill the missing fields. Do not rewrite unrelated sections.
 				- Preserve the existing structure, headings, and wording wherever possible.
+				- Keep canonical section headings unchanged. Legacy aliases (e.g., "Sourcing", "Prospectus / Key Information", "Holdings & exposure") may be tolerated by validators for old dossiers but must not be emitted.
 				- Ensure every required section heading is present; if any are missing, add them with "unknown" values.
 				- If a missing field cannot be verified, leave the field as "unknown" in the dossier and do not invent data.
 				- Do not include wrapper markers like "---BEGIN DOSSIER MARKDOWN---" or "---END DOSSIER MARKDOWN---" in contentMd.
@@ -1532,6 +1621,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 			- Keep the existing citations and append new citations for any added data.
 			- Provide citations for every new data point you add.
 				- Keep the research date (%s).
+				- In the ## Risk section, write SRI exactly as "SRI: <1-7>" when a numeric value is verified, otherwise write "SRI: unknown".
+				- Do not use SFDR article labels (e.g., "Article 8" or "Article 9") as numeric SRI values.
+				- Do not output JSON-like risk keys in Markdown (e.g., risk_indicator, summary_risk_indicator, risk.summary_risk_indicator.value).
 				- Numeric format: use plain digits with "." as decimal separator and no thousands separators. When a currency is present, use the ISO 3-letter code immediately after the number; if you include scale words (million/billion/thousand or m/bn/k), place them after the currency.
 				- Keep index/benchmark names exactly as stated in sources (e.g., MSCI, S&P, FTSE, STOXX, iBoxx); do not insert or remove spaces inside acronyms.
 

@@ -27,7 +27,9 @@ public class KnowledgeBaseQualityGateService {
 			new SectionRequirement("costs_structure", Pattern.compile(
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
 							"(costs\\s*&\\s*structure|costs\\s*and\\s*structure|costs\\s*structure|" +
-							"fees\\s*&\\s*structure|fees\\s*and\\s*structure|fees\\s*structure)\\b")),
+							"fees\\s*&\\s*structure|fees\\s*and\\s*structure|fees\\s*structure|" +
+							"ter\\s*&\\s*fees?|fees?\\s*&\\s*ter|" +
+							"prospectus\\s*(?:/|and)\\s*key\\s*information|prospectus\\s*key\\s*information)\\b")),
 			new SectionRequirement("exposures", Pattern.compile(
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(exposures?|holdings|top\\s*holdings|portfolio)\\b")),
 			new SectionRequirement("valuation_profitability", Pattern.compile(
@@ -35,8 +37,29 @@ public class KnowledgeBaseQualityGateService {
 							"(valuation\\s*&\\s*profitability|valuation\\s*and\\s*profitability|valuation|profitability)\\b")),
 			new SectionRequirement("sources", Pattern.compile(
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
-					"(sources?|references?|quellen|citations?|bibliography|data\\s*sources?|anchor\\s*data\\s*sources?)\\b"))
+					"(sources?|sourcing|source\\s*list|source\\s*links?|references?|quellen|citations?|bibliography|data\\s*sources?|anchor\\s*data\\s*sources?)\\b"))
 	);
+	private static final List<String> SRI_LABELS = List.of(
+			"sri",
+			"srri",
+			"summary risk",
+			"risk indicator",
+			"risk level",
+			"risk category",
+			"risk class",
+			"synthetic risk indicator",
+			"synthetic risk",
+			"risk_indicator",
+			"summary_risk_indicator",
+			"summary_risk_indicator.value",
+			"risk.summary_risk_indicator.value"
+	);
+	private static final List<String> STRUCTURED_SRI_LABELS = List.of(
+			"risk_indicator",
+			"summary_risk_indicator",
+			"risk.summary_risk_indicator"
+	);
+	private static final int SRI_VALUE_LOOKAHEAD_LINES = 3;
 	private static final List<String> SECONDARY_DOMAINS = List.of(
 			"justetf.com",
 			"etf.com",
@@ -284,31 +307,70 @@ public class KnowledgeBaseQualityGateService {
 			return;
 		}
 		String token = sri.toString();
-		List<String> labels = List.of(
-				"sri",
-				"srri",
-				"summary risk",
-				"risk indicator",
-				"risk level",
-				"risk category",
-				"risk class",
-				"synthetic risk indicator",
-				"synthetic risk"
-		);
-		for (String line : content.split("\\R")) {
-			String lower = line.toLowerCase(Locale.ROOT);
-			boolean labelFound = false;
-			for (String label : labels) {
-				if (lower.contains(label)) {
-					labelFound = true;
-					break;
-				}
+		String[] lines = content.split("\\R");
+		for (int i = 0; i < lines.length; i++) {
+			String lower = lines[i].toLowerCase(Locale.ROOT);
+			if (!containsAnyLabel(lower, SRI_LABELS)) {
+				continue;
 			}
-			if (labelFound && lower.contains(token)) {
+			if (matchesSriValueLine(lower, token)) {
+				return;
+			}
+			if (matchesNestedSriValue(lines, i, token)) {
 				return;
 			}
 		}
 		missing.add("sri");
+	}
+
+	private boolean containsAnyLabel(String text, List<String> labels) {
+		if (text == null || text.isBlank() || labels == null || labels.isEmpty()) {
+			return false;
+		}
+		for (String label : labels) {
+			if (label != null && !label.isBlank() && text.contains(label)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean matchesSriValueLine(String line, String token) {
+		if (line == null || line.isBlank() || token == null || token.isBlank()) {
+			return false;
+		}
+		String pattern = "\\b(?:sri|srri|summary\\s*risk|risk\\s*indicator|risk\\s*level|risk\\s*category|risk\\s*class|"
+				+ "synthetic\\s*risk(?:\\s*indicator)?|risk_indicator(?:\\.value)?|summary_risk_indicator(?:\\.value)?|"
+				+ "risk\\.summary_risk_indicator\\.value)\\b[^\\n:=]*[:=]\\s*(?:\\{\\s*)?(?:\"?value\"?\\s*[:=]\\s*)?"
+				+ "(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+		return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(line).find();
+	}
+
+	private boolean matchesNestedSriValue(String[] lines, int startIndex, String token) {
+		if (lines == null || token == null || token.isBlank()) {
+			return false;
+		}
+		String startLine = lines[startIndex] == null ? "" : lines[startIndex].toLowerCase(Locale.ROOT);
+		if (!containsAnyLabel(startLine, STRUCTURED_SRI_LABELS)) {
+			return false;
+		}
+		String trimmedStart = startLine.trim();
+		if (!startLine.contains("{") && !trimmedStart.endsWith(":")) {
+			return false;
+		}
+		String pattern = "\\b\"?value\"?\\b\\s*[:=]\\s*(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+		Pattern valuePattern = Pattern.compile("^\\s*[-*+]?\\s*" + pattern + "\\b", Pattern.CASE_INSENSITIVE);
+		int endExclusive = Math.min(lines.length, startIndex + SRI_VALUE_LOOKAHEAD_LINES + 1);
+		for (int i = startIndex + 1; i < endExclusive; i++) {
+			String candidate = lines[i];
+			if (candidate == null || candidate.isBlank()) {
+				continue;
+			}
+			if (valuePattern.matcher(candidate).find()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void checkNumericEvidence(String content,

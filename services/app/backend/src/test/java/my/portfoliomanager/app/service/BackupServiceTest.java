@@ -60,6 +60,18 @@ class BackupServiceTest {
 		}
 	}
 
+	@Test
+	@Transactional
+	void canImportSanitizedBackupFixtureWithZuluDates() throws Exception {
+		var resource = new ClassPathResource("imports/database-backup_14_02_2026_sanitized.zip");
+		try (InputStream stream = resource.getInputStream()) {
+			var file = new MockMultipartFile("file", "database-backup_14_02_2026_sanitized.zip", "application/zip", stream);
+			var result = backupService.importBackup(file);
+			assertThat(result).isNotNull();
+			assertThat(result.tablesImported()).isGreaterThan(0);
+		}
+	}
+
 	@AfterEach
 	void tearDown() {
 		databaseCleaner.clean();

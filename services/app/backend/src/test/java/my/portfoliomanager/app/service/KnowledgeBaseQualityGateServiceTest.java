@@ -93,6 +93,53 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
+	void evaluateDossier_acceptsProspectusKeyInformationAsCostsHeading() {
+		String content = "# IE00BK5BQT80 - Sample\n"
+				+ "## Quick profile\n"
+				+ "instrument_type: ETF\n"
+				+ "## Classification\n"
+				+ "## Risk\n"
+				+ "## Prospectus / Key Information\n"
+				+ "- TER: 0.19%\n"
+				+ "## Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## Sources\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"IE00BK5BQT80",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain("missing_section:costs_structure");
+	}
+
+	@Test
+	void evaluateDossier_acceptsSourcingHeading() {
+		String content = "# LU2339811767 - Sample\n"
+				+ "## Quick profile\n"
+				+ "instrument_type: ETF\n"
+				+ "## Classification\n"
+				+ "## Risk\n"
+				+ "## Costs & structure\n"
+				+ "## Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## Sourcing\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"LU2339811767",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain("missing_section:sources");
+	}
+
+	@Test
 	void evaluateExtractionEvidence_fundProfile_requiresFundFieldsAndHoldings() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"IE00B4L5Y983",
@@ -255,6 +302,189 @@ class KnowledgeBaseQualityGateServiceTest {
 		);
 		String dossierContent = "## Risk\n"
 				+ "- Synthetic risk indicator: 1 of 7\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_acceptsStructuredRiskIndicatorValueAcrossLines() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE000ETFL474",
+				"ETF",
+				etf(new BigDecimal("0.40"), "Solactive Euro Prime ESG Index (price index)"),
+				risk(1),
+				null,
+				valuation(
+						new BigDecimal("35.21"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk (SRI and notes)\n"
+				+ "- SRI: unknown\n"
+				+ "- risk_indicator: {\n"
+				+ "  - value: 1\n"
+				+ "}\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_doesNotAcceptUnrelatedNestedValueAsSriEvidence() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE000ETFL474",
+				"ETF",
+				etf(new BigDecimal("0.40"), "Solactive Euro Prime ESG Index (price index)"),
+				risk(1),
+				null,
+				valuation(
+						new BigDecimal("35.21"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk (SRI and notes)\n"
+				+ "- SRI: unknown\n"
+				+ "- risk_indicator: unknown\n"
+				+ "## Costs & structure\n"
+				+ "- value: 1\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).contains("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_rejectsSfdrArticleLabelAsSriEvidence() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE000ETFL474",
+				"ETF",
+				etf(new BigDecimal("0.40"), "Solactive Euro Prime ESG Index (price index)"),
+				risk(1),
+				null,
+				valuation(
+						new BigDecimal("35.21"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk (SRI and notes)\n"
+				+ "- SRI: Article 8 SFDR ESG Fund\n"
+				+ "- Notes: Unknown if PRIIPs SRI value is published\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).contains("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_acceptsPathStyleSriValueLine() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"IE00BJ5JNZ06",
+				"ETF",
+				etf(new BigDecimal("0.18"), "MSCI World Health Care 20/35 Capped Index"),
+				risk(1),
+				null,
+				valuation(
+						new BigDecimal("14.22"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk (SRI and notes)\n"
+				+ "- SRI: unknown\n"
+				+ "- risk.summary_risk_indicator.value: 1\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_acceptsStructuredRiskIndicatorValueSameLine() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE000ETFL474",
+				"ETF",
+				etf(new BigDecimal("0.40"), "Solactive Euro Prime ESG Index (price index)"),
+				risk(1),
+				null,
+				valuation(
+						new BigDecimal("35.21"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk (SRI and notes)\n"
+				+ "- risk_indicator: {\"value\": 1}\n";
 
 		KnowledgeBaseQualityGateService.EvidenceResult result =
 				service.evaluateExtractionEvidence(dossierContent, payload, null);
