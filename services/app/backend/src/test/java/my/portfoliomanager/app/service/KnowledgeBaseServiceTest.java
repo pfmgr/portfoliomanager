@@ -171,6 +171,26 @@ class KnowledgeBaseServiceTest {
 	}
 
 	@Test
+	void createDossier_stripsMarkersAndAddsIsinHeader() {
+		String content = "---BEGIN DOSSIER MARKDOWN---\n"
+				+ "DE0000000001 - Sample Dossier\n"
+				+ "\n## Quick profile (table)\n"
+				+ "\n---END DOSSIER MARKDOWN---";
+		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				content,
+				DossierOrigin.USER,
+				DossierStatus.DRAFT,
+				objectMapper.createArrayNode()
+		);
+		var dossier = knowledgeBaseService.createDossier(request, "tester");
+		InstrumentDossier saved = dossierRepository.findById(dossier.dossierId()).orElseThrow();
+		assertThat(saved.getContentMd()).doesNotContain("BEGIN DOSSIER MARKDOWN");
+		assertThat(saved.getContentMd()).startsWith("# DE0000000001 - Sample Dossier");
+	}
+
+	@Test
 	void applyExtraction_doesNotOverwriteExistingValues_whenOverwriteDisabled() throws Exception {
 		InstrumentOverride override = new InstrumentOverride();
 		override.setIsin("DE0000000001");

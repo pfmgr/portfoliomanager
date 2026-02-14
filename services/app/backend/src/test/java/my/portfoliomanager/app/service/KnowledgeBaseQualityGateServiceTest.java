@@ -193,6 +193,111 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
+	void evaluateExtractionEvidence_acceptsRiskIndicatorLabel() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"IE00BKM4GZ66",
+				"ETF",
+				etf(new BigDecimal("0.18"), "MSCI Emerging Markets Investable Market Index"),
+				risk(4),
+				null,
+				valuation(
+						new BigDecimal("48.96"),
+						new BigDecimal("16.96"),
+						new BigDecimal("2.23"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk\n"
+				+ "- Risk level: 4 on a 1-7 scale\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_acceptsSyntheticRiskIndicatorLabel() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"LU2641054551",
+				"ETF",
+				etf(new BigDecimal("0.07"), "iBoxx EUR Germany 0-1"),
+				risk(1),
+				null,
+				valuation(
+						new BigDecimal("34.70"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Risk\n"
+				+ "- Synthetic risk indicator: 1 of 7\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain("sri");
+	}
+
+	@Test
+	void evaluateExtractionEvidence_acceptsBenchmarkAcronymSpacing() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"IE00BKM4GZ66",
+				"ETF",
+				etf(new BigDecimal("0.18"), "MSC I Emerging Markets Investable Market Index"),
+				risk(4),
+				null,
+				valuation(
+						new BigDecimal("48.96"),
+						new BigDecimal("16.96"),
+						new BigDecimal("2.23"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null
+				)
+		);
+		String dossierContent = "## Exposures\n"
+				+ "- Benchmark/index: MSCI Emerging Markets Investable Market Index\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain("benchmark_index");
+	}
+
+	@Test
 	void evaluateExtractionEvidence_equityScaledNumbersMatch() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"DE0007030009",

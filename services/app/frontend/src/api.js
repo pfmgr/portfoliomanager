@@ -44,6 +44,39 @@ function handleUnauthorized() {
   redirectToLogin('Session expired; please log in again.')
 }
 
+async function readPayload(response) {
+  if (response && typeof response.text === 'function') {
+    const text = await response.text().catch(() => '')
+    if (!text) {
+      return { payload: {}, raw: '' }
+    }
+    try {
+      return { payload: JSON.parse(text), raw: text }
+    } catch (err) {
+      return { payload: {}, raw: text }
+    }
+  }
+  if (response && typeof response.json === 'function') {
+    const payload = await response.json().catch(() => ({}))
+    return { payload, raw: '' }
+  }
+  return { payload: {}, raw: '' }
+}
+
+function extractErrorDetail(response, payload, raw) {
+  const detail = payload.detail || payload.message
+  if (detail) {
+    return detail
+  }
+  const trimmed = (raw || '').trim()
+  if (trimmed && !trimmed.toLowerCase().startsWith('<!doctype') && !trimmed.toLowerCase().startsWith('<html')) {
+    return trimmed
+  }
+  const status = response.status
+  const statusText = response.statusText || 'Request failed'
+  return `${statusText} (HTTP ${status})`
+}
+
 async function handleResponse(response) {
   if (response.status === 401) {
     handleUnauthorized()
@@ -52,10 +85,9 @@ async function handleResponse(response) {
   if (response.status === 204) {
     return null
   }
-  const payload = await response.json().catch(() => ({}))
+  const { payload, raw } = await readPayload(response)
   if (!response.ok) {
-    const detail = payload.detail || payload.message || 'Request failed'
-    throw new Error(detail)
+    throw new Error(extractErrorDetail(response, payload, raw))
   }
   return payload
 }
@@ -87,10 +119,9 @@ export async function authRequest(path, options = {}) {
   if (response.status === 204) {
     return null
   }
-  const payload = await response.json().catch(() => ({}))
+  const { payload, raw } = await readPayload(response)
   if (!response.ok) {
-    const detail = payload.detail || payload.message || 'Request failed'
-    throw new Error(detail)
+    throw new Error(extractErrorDetail(response, payload, raw))
   }
   return payload
 }
@@ -118,9 +149,8 @@ export async function apiDownload(path) {
     throw new Error('Session expired')
   }
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}))
-    const detail = payload.detail || payload.message || 'Request failed'
-    throw new Error(detail)
+    const { payload, raw } = await readPayload(response)
+    throw new Error(extractErrorDetail(response, payload, raw))
   }
   return response
 }

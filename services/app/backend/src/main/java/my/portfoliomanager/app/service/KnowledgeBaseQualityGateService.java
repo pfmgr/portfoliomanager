@@ -254,12 +254,27 @@ public class KnowledgeBaseQualityGateService {
 	}
 
 	private void checkTextEvidence(String normalizedContent, String field, String value, List<String> missing) {
+		checkTextEvidence(normalizedContent, field, value, missing, false);
+	}
+
+	private void checkTextEvidence(String normalizedContent,
+							String field,
+							String value,
+							List<String> missing,
+							boolean allowCompact) {
 		if (value == null || value.isBlank()) {
 			return;
 		}
 		String normalizedValue = normalizeText(value);
 		if (!normalizedValue.isBlank() && normalizedContent.contains(normalizedValue)) {
 			return;
+		}
+		if (allowCompact) {
+			String compactValue = compactNormalizedText(normalizedValue);
+			String compactContent = compactNormalizedText(normalizedContent);
+			if (!compactValue.isBlank() && compactContent.contains(compactValue)) {
+				return;
+			}
 		}
 		missing.add(field);
 	}
@@ -268,12 +283,32 @@ public class KnowledgeBaseQualityGateService {
 		if (sri == null) {
 			return;
 		}
-		String lower = content.toLowerCase(Locale.ROOT);
 		String token = sri.toString();
-		boolean has = (lower.contains("sri") || lower.contains("summary risk")) && lower.contains(token);
-		if (!has) {
-			missing.add("sri");
+		List<String> labels = List.of(
+				"sri",
+				"srri",
+				"summary risk",
+				"risk indicator",
+				"risk level",
+				"risk category",
+				"risk class",
+				"synthetic risk indicator",
+				"synthetic risk"
+		);
+		for (String line : content.split("\\R")) {
+			String lower = line.toLowerCase(Locale.ROOT);
+			boolean labelFound = false;
+			for (String label : labels) {
+				if (lower.contains(label)) {
+					labelFound = true;
+					break;
+				}
+			}
+			if (labelFound && lower.contains(token)) {
+				return;
+			}
 		}
+		missing.add("sri");
 	}
 
 	private void checkNumericEvidence(String content,
@@ -426,8 +461,8 @@ public class KnowledgeBaseQualityGateService {
 				: payload.risk().summaryRiskIndicator().value();
 		for (String key : normalizeEvidenceKeys(evidenceKeys)) {
 			switch (key) {
-				case "benchmark_index" -> checkTextEvidence(normalizedContent, "benchmark_index",
-							etf == null ? null : etf.benchmarkIndex(), missingEvidence);
+			case "benchmark_index" -> checkTextEvidence(normalizedContent, "benchmark_index",
+						etf == null ? null : etf.benchmarkIndex(), missingEvidence, true);
 				case "ongoing_charges_pct" -> checkNumericEvidence(dossierContent, "ongoing_charges_pct",
 							etf == null ? null : etf.ongoingChargesPct(),
 							List.of("ter", "ongoing charges", "ongoing charge", "total expense ratio",
@@ -1074,6 +1109,13 @@ public class KnowledgeBaseQualityGateService {
 		String normalized = value.toLowerCase(Locale.ROOT);
 		normalized = normalized.replaceAll("[^a-z0-9]+", " ").trim();
 		return normalized.replaceAll("\\s+", " ");
+	}
+
+	private String compactNormalizedText(String normalizedValue) {
+		if (normalizedValue == null || normalizedValue.isBlank()) {
+			return "";
+		}
+		return normalizedValue.replace(" ", "");
 	}
 
 	private String safe(String value) {

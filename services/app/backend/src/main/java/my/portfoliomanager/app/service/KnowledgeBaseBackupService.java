@@ -7,7 +7,10 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.cfg.DateTimeFeature;
 import tools.jackson.databind.json.JsonMapper;
 import my.portfoliomanager.app.dto.KnowledgeBaseImportResultDto;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.postgresql.util.PGobject;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -32,17 +35,20 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 @Service
 public class KnowledgeBaseBackupService {
+	private static final Logger logger = LoggerFactory.getLogger(KnowledgeBaseBackupService.class);
 	private static final int FORMAT_VERSION = 1;
 	private static final String METADATA_ENTRY = "metadata.json";
 	private static final String DATA_PREFIX = "data/";
@@ -97,6 +103,9 @@ public class KnowledgeBaseBackupService {
 	@Transactional
 	public KnowledgeBaseImportResultDto importKnowledgeBase(MultipartFile file) {
 		try {
+			logger.info("Importing knowledge base archive (name={}, size={})",
+					file == null ? null : file.getOriginalFilename(),
+					file == null ? null : file.getSize());
 			Map<String, byte[]> entries = readZipEntries(file);
 			byte[] metadataBytes = entries.remove(METADATA_ENTRY);
 			if (metadataBytes == null) {
@@ -107,22 +116,32 @@ public class KnowledgeBaseBackupService {
 				throw new IllegalArgumentException("Unsupported knowledge base format version: " + metadata.formatVersion());
 			}
 			Map<String, byte[]> tableData = prepareTableData(metadata, entries);
+			validateInstrumentReferences(tableData);
 			clearKnowledgeBase();
 			List<String> importOrder = metadata.importOrder() == null || metadata.importOrder().isEmpty()
 					? IMPORT_ORDER
 					: metadata.importOrder();
 			long rowsImported = insertTables(importOrder, metadata.tables(), tableData);
 			resetSequences(TABLES);
-
-			return new KnowledgeBaseImportResultDto(
+			KnowledgeBaseImportResultDto result = new KnowledgeBaseImportResultDto(
 					getRowCount(metadata.tables(), "instrument_dossiers"),
 					getRowCount(metadata.tables(), "instrument_dossier_extractions"),
 					getRowCount(metadata.tables(), "knowledge_base_extractions"),
 					metadata.formatVersion(),
 					metadata.exportedAt()
 			);
+			logger.info("Knowledge base import completed (rowsImported={}, dossiers={}, extractions={}, kbExtractions={})",
+					rowsImported,
+					result.dossiersImported(),
+					result.dossierExtractionsImported(),
+					result.knowledgeBaseExtractionsImported());
+			return result;
 		} catch (IOException e) {
+			logger.error("Knowledge base import failed: unable to read archive", e);
 			throw new IllegalArgumentException("Unable to read knowledge base archive.", e);
+		} catch (RuntimeException e) {
+			logger.error("Knowledge base import failed: {}", e.getMessage(), e);
+			throw e;
 		}
 	}
 
@@ -217,8 +236,8 @@ public class KnowledgeBaseBackupService {
 	}
 
 	private long insertTableRows(String tableName,
-								 byte[] jsonData,
-								 int expectedRows) throws IOException {
+							 byte[] jsonData,
+							 int expectedRows) throws IOException {
 		List<Map<String, Object>> rows = deserializeRows(jsonData);
 		if (expectedRows != rows.size()) {
 			throw new IllegalArgumentException("Row count mismatch for table: " + tableName);
@@ -267,7 +286,16 @@ public class KnowledgeBaseBackupService {
 				ColumnInfo info = columnInfos.get(column.toLowerCase(Locale.ROOT));
 				params.addValue(column, prepareValue(row.get(column), info));
 			}
-			namedParameterJdbcTemplate.update(sql, params);
+			try {
+				namedParameterJdbcTemplate.update(sql, params);
+			} catch (DataAccessException ex) {
+				logger.error("Knowledge base import failed inserting into {} ({}): {}",
+						tableName,
+						buildRowContext(row),
+						ex.getMessage(),
+						ex);
+				throw ex;
+			}
 		}
 		if (needsSupersedesUpdate && !supersedesUpdates.isEmpty()) {
 			applySupersedesUpdates(supersedesUpdates);
@@ -333,6 +361,134 @@ public class KnowledgeBaseBackupService {
 
 	private Map<String, byte[]> readZipEntries(MultipartFile file) throws IOException {
 		return ZipEntryReader.readZipEntries(file);
+	}
+
+	private void validateInstrumentReferences(Map<String, byte[]> tableData) throws IOException {
+		if (tableData == null || tableData.isEmpty()) {
+			return;
+		}
+		byte[] data = tableData.get("instrument_dossiers");
+		if (data == null) {
+			return;
+		}
+		List<Map<String, Object>> rows = deserializeRows(data);
+		if (rows == null || rows.isEmpty()) {
+			return;
+		}
+		Set<String> isins = new HashSet<>();
+		for (Map<String, Object> row : rows) {
+			if (row == null) {
+				continue;
+			}
+			Object value = row.get("isin");
+			if (value != null && !value.toString().isBlank()) {
+				isins.add(value.toString().trim());
+			}
+		}
+		if (isins.isEmpty()) {
+			return;
+		}
+		List<String> missing = findMissingInstrumentIsins(isins);
+		if (missing.isEmpty()) {
+			return;
+		}
+		if (!hasInstrumentDossierInstrumentFk()) {
+			String sample = missing.stream()
+					.sorted()
+					.limit(10)
+					.collect(Collectors.joining(", "));
+			int remaining = missing.size() - Math.min(10, missing.size());
+			String suffix = remaining > 0 ? " (" + remaining + " more)" : "";
+			logger.warn("Knowledge base import: {} instrument ISINs not found in instruments table (examples: {}{}). "
+					+ "Import will proceed because no FK constraint is present.",
+					missing.size(),
+					sample,
+					suffix);
+			return;
+		}
+		if (!missing.isEmpty()) {
+			String sample = missing.stream()
+					.sorted()
+					.limit(10)
+					.collect(Collectors.joining(", "));
+			int remaining = missing.size() - Math.min(10, missing.size());
+			String suffix = remaining > 0 ? " (" + remaining + " more)" : "";
+			String message = "Knowledge base import failed: missing instruments for ISINs: " + sample + suffix
+					+ ". Import instruments before importing the knowledge base.";
+			logger.error(message);
+			throw new IllegalArgumentException(message);
+		}
+	}
+
+	private boolean hasInstrumentDossierInstrumentFk() {
+		String sql = """
+				SELECT count(*)
+				FROM information_schema.table_constraints tc
+				JOIN information_schema.referential_constraints rc
+					ON rc.constraint_name = tc.constraint_name
+				JOIN information_schema.constraint_column_usage ccu
+					ON ccu.constraint_name = rc.constraint_name
+				WHERE tc.constraint_type = 'FOREIGN KEY'
+				  AND lower(tc.table_name) = 'instrument_dossiers'
+				  AND lower(ccu.table_name) = 'instruments'
+				""";
+		try {
+			Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
+			return count != null && count > 0;
+		} catch (Exception ex) {
+			logger.warn("Unable to detect instrument_dossiers foreign keys; skipping instrument reference enforcement: {}",
+					ex.getMessage());
+			return false;
+		}
+	}
+
+	private List<String> findMissingInstrumentIsins(Set<String> isins) {
+		if (isins == null || isins.isEmpty()) {
+			return List.of();
+		}
+		List<String> missing = new ArrayList<>();
+		List<String> all = new ArrayList<>(isins);
+		int batchSize = 1000;
+		for (int i = 0; i < all.size(); i += batchSize) {
+			List<String> batch = all.subList(i, Math.min(i + batchSize, all.size()));
+			MapSqlParameterSource params = new MapSqlParameterSource();
+			params.addValue("isins", batch);
+			List<String> present = namedParameterJdbcTemplate.queryForList(
+					"select isin from instruments where isin in (:isins)",
+					params,
+					String.class
+			);
+			Set<String> presentSet = new HashSet<>(present);
+			for (String isin : batch) {
+				if (!presentSet.contains(isin)) {
+					missing.add(isin);
+				}
+			}
+		}
+		return missing;
+	}
+
+	private String buildRowContext(Map<String, Object> row) {
+		if (row == null || row.isEmpty()) {
+			return "row=unknown";
+		}
+		Object isin = row.get("isin");
+		Object dossierId = row.get("dossier_id");
+		Object extractionId = row.get("extraction_id");
+		List<String> parts = new ArrayList<>();
+		if (isin != null) {
+			parts.add("isin=" + isin);
+		}
+		if (dossierId != null) {
+			parts.add("dossier_id=" + dossierId);
+		}
+		if (extractionId != null) {
+			parts.add("extraction_id=" + extractionId);
+		}
+		if (!parts.isEmpty()) {
+			return String.join(", ", parts);
+		}
+		return "columns=" + String.join(",", row.keySet().stream().sorted().toList());
 	}
 
 	private Map<String, ColumnInfo> getColumnInfos(String tableName) {

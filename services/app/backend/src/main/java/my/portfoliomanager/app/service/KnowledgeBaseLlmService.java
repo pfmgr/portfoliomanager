@@ -1399,6 +1399,9 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
                 Additional requirements:
                 - Use the exact section headings shown above. Do not rename headings (e.g., do not replace "Classification" with "Layer notes").
                 - Headings must start with "## " at the beginning of the line. Do not use bullets as substitutes for headings.
+                - Always include every required section heading. If a section has no verified data, still include the heading and write "unknown" for the relevant fields.
+                - Do not include wrapper markers like "---BEGIN DOSSIER MARKDOWN---" or "---END DOSSIER MARKDOWN---" in contentMd.
+                - Keep index/benchmark names exactly as stated in sources (e.g., MSCI, S&P, FTSE, STOXX, iBoxx); do not insert or remove spaces inside acronyms.
                 - Write the dossier in English.
                 - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.
                 - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
@@ -1522,12 +1525,15 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Use web research (web_search) and reliable sources appropriate for the instrument type.
 				- Only add or update content required to fill the missing fields. Do not rewrite unrelated sections.
 				- Preserve the existing structure, headings, and wording wherever possible.
+				- Ensure every required section heading is present; if any are missing, add them with "unknown" values.
 				- If a missing field cannot be verified, leave the field as "unknown" in the dossier and do not invent data.
+				- Do not include wrapper markers like "---BEGIN DOSSIER MARKDOWN---" or "---END DOSSIER MARKDOWN---" in contentMd.
 			- Keep the dossier under %d characters.
 			- Keep the existing citations and append new citations for any added data.
 			- Provide citations for every new data point you add.
-			- Keep the research date (%s).
-			- Numeric format: use plain digits with "." as decimal separator and no thousands separators. When a currency is present, use the ISO 3-letter code immediately after the number; if you include scale words (million/billion/thousand or m/bn/k), place them after the currency.
+				- Keep the research date (%s).
+				- Numeric format: use plain digits with "." as decimal separator and no thousands separators. When a currency is present, use the ISO 3-letter code immediately after the number; if you include scale words (million/billion/thousand or m/bn/k), place them after the currency.
+				- Keep index/benchmark names exactly as stated in sources (e.g., MSCI, S&P, FTSE, STOXX, iBoxx); do not insert or remove spaces inside acronyms.
 
 				Single-stock completion rules (apply when context says "Single stock: true"):
 				- If any of these fields are missing, you must fill them when sources provide values: price, pe_current, pb_current, market_cap, shares_outstanding, eps_history.
@@ -1610,6 +1616,7 @@ public class KnowledgeBaseLlmService implements KnowledgeBaseLlmClient {
 				- Do not guess. Only use information explicitly present in the dossier.
 				- Use null for unknown/missing values (not the string "unknown").
 			- Keep string values short and literal (e.g., "ETF", "Equity", "Developed Markets", ...).
+			- Keep index/benchmark names exactly as stated in the dossier (e.g., MSCI, S&P, FTSE, STOXX, iBoxx); do not insert spaces inside acronyms.
 			- Numeric format: output JSON numbers with "." as decimal separator and no thousands separators. Do not include unit suffixes in numeric fields.
 			- layer must be an integer 1..5 (5 = Unclassified).
 				- risk.summary_risk_indicator.value must be an integer 1..7.
