@@ -34,6 +34,7 @@ Minimum config fields:
 - `max_retries_per_instrument`
 - `base_backoff_seconds`
 - `max_backoff_seconds`
+- `quality_gate_retry_limit`
 - `dossier_max_chars`
 - `kb_refresh_min_days_between_runs_per_instrument`
 - `run_timeout_minutes`
@@ -75,29 +76,35 @@ batch runs are available via:
 ## Sample curl
 
 ```bash
+# Obtain JWT token
+TOKEN=$(curl -s -X POST "http://localhost:8089/api/auth/token" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin"}' | \
+  python3 -c "import sys, json; print(json.load(sys.stdin).get('token',''))")
+
 # Read KB config
-curl -u admin:admin "http://localhost:8089/api/kb/config"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8089/api/kb/config"
 
 # Update KB config (partial update is allowed)
-curl -u admin:admin -H "Content-Type: application/json" -d '{
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "enabled": true,
   "auto_approve": false
 }' "http://localhost:8089/api/kb/config"
 
 # Bulk research
-curl -u admin:admin -H "Content-Type: application/json" -d '{
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "isins": ["DE0000000001"],
   "autoApprove": false,
   "applyToOverrides": false
 }' "http://localhost:8089/api/kb/dossiers/bulk-research"
 
 # Find alternatives
-curl -u admin:admin -H "Content-Type: application/json" -d '{
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "autoApprove": false
 }' "http://localhost:8089/api/kb/alternatives/DE0000000001"
 
 # Dry-run refresh batch
-curl -u admin:admin -H "Content-Type: application/json" -d '{
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "limit": 2,
   "batchSize": 1,
   "dryRun": true,

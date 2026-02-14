@@ -5,6 +5,7 @@ import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,13 +18,24 @@ import java.util.regex.Pattern;
 @Service
 public class KnowledgeBaseQualityGateService {
 	private static final List<SectionRequirement> REQUIRED_SECTIONS = List.of(
-			new SectionRequirement("quick_profile", Pattern.compile("(?im)^##\\s*quick profile\\b")),
-			new SectionRequirement("classification", Pattern.compile("(?im)^##\\s*classification\\b")),
-			new SectionRequirement("risk", Pattern.compile("(?im)^##\\s*risk\\b")),
-			new SectionRequirement("costs_structure", Pattern.compile("(?im)^##\\s*costs\\s*&\\s*structure\\b")),
-			new SectionRequirement("exposures", Pattern.compile("(?im)^##\\s*exposures\\b")),
-			new SectionRequirement("valuation_profitability", Pattern.compile("(?im)^##\\s*valuation\\s*&\\s*profitability\\b")),
-			new SectionRequirement("sources", Pattern.compile("(?im)^##\\s*sources\\b"))
+			new SectionRequirement("quick_profile", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*quick\\s*profile\\b")),
+			new SectionRequirement("classification", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(classification|layer\\s*notes?)\\b")),
+			new SectionRequirement("risk", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(risk|risiko|sri|summary\\s*risk)\\b")),
+			new SectionRequirement("costs_structure", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
+							"(costs\\s*&\\s*structure|costs\\s*and\\s*structure|costs\\s*structure|" +
+							"fees\\s*&\\s*structure|fees\\s*and\\s*structure|fees\\s*structure)\\b")),
+			new SectionRequirement("exposures", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(exposures?|holdings|top\\s*holdings|portfolio)\\b")),
+			new SectionRequirement("valuation_profitability", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
+							"(valuation\\s*&\\s*profitability|valuation\\s*and\\s*profitability|valuation|profitability)\\b")),
+			new SectionRequirement("sources", Pattern.compile(
+					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
+					"(sources?|references?|quellen|citations?|bibliography|data\\s*sources?|anchor\\s*data\\s*sources?)\\b"))
 	);
 	private static final List<String> SECONDARY_DOMAINS = List.of(
 			"justetf.com",
@@ -100,18 +112,19 @@ public class KnowledgeBaseQualityGateService {
 			reasons.add("empty_content");
 			return new DossierQualityResult(false, reasons);
 		}
-		String trimmed = contentMd.trim();
+		String trimmed = normalizeSectionWhitespace(contentMd).trim();
 		int maxChars = config == null ? 0 : config.dossierMaxChars();
 		if (maxChars > 0 && trimmed.length() > maxChars) {
 			reasons.add("content_exceeds_max_chars");
 		}
 		if (isin != null && !isin.isBlank()) {
-			Pattern header = Pattern.compile("(?im)^#\\s*" + Pattern.quote(isin.trim()) + "\\b");
-			if (!header.matcher(trimmed).find()) {
+			if (!hasIsinHeader(trimmed, isin)) {
 				reasons.add("missing_isin_header");
 			}
 		}
-		for (SectionRequirement section : REQUIRED_SECTIONS) {
+		InstrumentCategory category = resolveInstrumentCategoryFromContent(trimmed);
+		List<SectionRequirement> requiredSections = requiredSectionsForCategory(category);
+		for (SectionRequirement section : requiredSections) {
 			if (!section.pattern().matcher(trimmed).find()) {
 				reasons.add("missing_section:" + section.code());
 			}
@@ -127,6 +140,28 @@ public class KnowledgeBaseQualityGateService {
 			reasons.add("missing_primary_source");
 		}
 		return new DossierQualityResult(reasons.isEmpty(), reasons);
+	}
+
+	public boolean isRetryableDossierFailure(List<String> reasons) {
+		if (reasons == null || reasons.isEmpty()) {
+			return false;
+		}
+		for (String reason : reasons) {
+			if (reason == null) {
+				continue;
+			}
+			if (reason.startsWith("missing_section:")) {
+				return true;
+			}
+			switch (reason) {
+				case "missing_isin_header", "insufficient_citations", "missing_primary_source", "empty_content" -> {
+					return true;
+				}
+				default -> {
+				}
+			}
+		}
+		return false;
 	}
 
 	public EvidenceResult evaluateExtractionEvidence(String dossierContent,
@@ -242,27 +277,58 @@ public class KnowledgeBaseQualityGateService {
 	}
 
 	private void checkNumericEvidence(String content,
-								String field,
-								BigDecimal value,
-								List<String> labels,
-								boolean allowPercent,
-								List<String> missing) {
+							String field,
+							BigDecimal value,
+							List<String> labels,
+							boolean allowPercent,
+							List<String> missing) {
 		if (value == null) {
 			return;
 		}
 		String lower = content.toLowerCase(Locale.ROOT);
 		List<String> tokens = buildNumericTokens(value, allowPercent);
+		boolean labelFound = false;
 		for (String label : labels) {
 			if (!lower.contains(label)) {
 				continue;
 			}
+			labelFound = true;
 			for (String token : tokens) {
 				if (lower.contains(token)) {
 					return;
 				}
 			}
 		}
+		if (labelFound && hasScaledNumberEvidence(content, labels)) {
+			return;
+		}
 		missing.add(field);
+	}
+
+	private boolean hasScaledNumberEvidence(String content, List<String> labels) {
+		if (content == null || content.isBlank() || labels == null || labels.isEmpty()) {
+			return false;
+		}
+		Pattern scaledPattern = Pattern.compile(
+				"(?i)([-+]?[0-9]+(?:[.,][0-9]+)?)\\s*(?:\\(?[a-z]{3}\\)?\\s*)?(b|bn|billion|m|mn|million|k|thousand)\\b"
+		);
+		for (String line : content.split("\\R")) {
+			String lower = line.toLowerCase(Locale.ROOT);
+			boolean labelFound = false;
+			for (String label : labels) {
+				if (lower.contains(label)) {
+					labelFound = true;
+					break;
+				}
+			}
+			if (!labelFound) {
+				continue;
+			}
+			if (scaledPattern.matcher(line).find()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void checkDateEvidence(String content,
@@ -504,24 +570,189 @@ public class KnowledgeBaseQualityGateService {
 		if (value == null) {
 			return List.of();
 		}
-		String raw = value.toPlainString();
-		String plain = value.stripTrailingZeros().toPlainString();
-		List<String> tokens = new ArrayList<>();
-		tokens.add(raw.toLowerCase(Locale.ROOT));
-		tokens.add(plain.toLowerCase(Locale.ROOT));
-		if (raw.contains(".")) {
-			tokens.add(raw.replace('.', ',').toLowerCase(Locale.ROOT));
-		}
-		if (plain.contains(".")) {
-			tokens.add(plain.replace('.', ',').toLowerCase(Locale.ROOT));
-		}
+		java.util.LinkedHashSet<String> tokens = new java.util.LinkedHashSet<>();
+		addNumericTokens(tokens, value);
+		addGroupedVariants(tokens, value.toPlainString());
+		addGroupedVariants(tokens, value.stripTrailingZeros().toPlainString());
+		addScaledTokens(tokens, value, new BigDecimal("1000000000"), List.of("b", "bn", "billion"));
+		addScaledTokens(tokens, value, new BigDecimal("1000000"), List.of("m", "mn", "million"));
+		addScaledTokens(tokens, value, new BigDecimal("1000"), List.of("k", "thousand"));
 		if (allowPercent) {
-			for (String token : List.copyOf(tokens)) {
+			List<String> base = new ArrayList<>(tokens);
+			for (String token : base) {
 				tokens.add(token + "%");
 				tokens.add(token + " %");
 			}
 		}
-		return tokens;
+		return new ArrayList<>(tokens);
+	}
+
+	private void addNumericTokens(java.util.LinkedHashSet<String> tokens, BigDecimal value) {
+		String raw = value.toPlainString();
+		String plain = value.stripTrailingZeros().toPlainString();
+		addToken(tokens, raw);
+		addToken(tokens, plain);
+		if (raw.contains(".")) {
+			addToken(tokens, raw.replace('.', ','));
+		}
+		if (plain.contains(".")) {
+			addToken(tokens, plain.replace('.', ','));
+		}
+	}
+
+	private void addScaledTokens(java.util.LinkedHashSet<String> tokens,
+								BigDecimal value,
+								BigDecimal divisor,
+								List<String> suffixes) {
+		if (value.compareTo(divisor) < 0) {
+			return;
+		}
+		BigDecimal scaled = value.divide(divisor, 4, java.math.RoundingMode.HALF_UP);
+		List<String> numbers = new ArrayList<>();
+		numbers.add(scaled.stripTrailingZeros().toPlainString());
+		numbers.add(scaled.setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString());
+		numbers.add(scaled.setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString());
+		for (String number : numbers) {
+			if (number == null || number.isBlank()) {
+				continue;
+			}
+			List<String> variants = new ArrayList<>();
+			variants.add(number);
+			if (number.contains(".")) {
+				variants.add(number.replace('.', ','));
+			}
+			for (String variant : variants) {
+				for (String suffix : suffixes) {
+					addToken(tokens, variant + suffix);
+					addToken(tokens, variant + " " + suffix);
+				}
+			}
+		}
+	}
+
+	private void addToken(java.util.Set<String> tokens, String value) {
+		if (value == null || value.isBlank()) {
+			return;
+		}
+		tokens.add(value.toLowerCase(Locale.ROOT));
+	}
+
+	private void addNumericToken(List<String> tokens, String token) {
+		if (token == null || token.isBlank()) {
+			return;
+		}
+		String normalized = token.toLowerCase(Locale.ROOT);
+		if (!tokens.contains(normalized)) {
+			tokens.add(normalized);
+		}
+	}
+
+	private void addDecimalVariants(List<String> tokens, String value) {
+		if (value == null || value.isBlank()) {
+			return;
+		}
+		if (value.contains(".")) {
+			addNumericToken(tokens, value.replace('.', ','));
+		}
+	}
+
+	private void addGroupedVariants(java.util.Set<String> tokens, String value) {
+		if (value == null || value.isBlank()) {
+			return;
+		}
+		String normalized = value.trim();
+		String sign = "";
+		if (normalized.startsWith("-")) {
+			sign = "-";
+			normalized = normalized.substring(1);
+		}
+		String[] parts = normalized.split("\\.", 2);
+		String integerPart = parts[0];
+		String fractionalPart = parts.length > 1 ? parts[1] : "";
+		String groupedComma = groupDigits(integerPart, ',');
+		String groupedDot = groupDigits(integerPart, '.');
+		addGroupedToken(tokens, sign, groupedComma, fractionalPart, '.');
+		addGroupedToken(tokens, sign, groupedComma, fractionalPart, ',');
+		addGroupedToken(tokens, sign, groupedDot, fractionalPart, '.');
+		addGroupedToken(tokens, sign, groupedDot, fractionalPart, ',');
+	}
+
+	private void addGroupedToken(java.util.Set<String> tokens,
+			String sign,
+			String integerPart,
+			String fractionalPart,
+			char decimalSeparator) {
+		if (integerPart == null || integerPart.isBlank()) {
+			return;
+		}
+		StringBuilder builder = new StringBuilder();
+		builder.append(sign).append(integerPart);
+		if (fractionalPart != null && !fractionalPart.isBlank()) {
+			builder.append(decimalSeparator).append(fractionalPart);
+		}
+		addToken(tokens, builder.toString());
+	}
+
+	private String groupDigits(String digits, char separator) {
+		if (digits == null || digits.length() <= 3) {
+			return digits;
+		}
+		StringBuilder builder = new StringBuilder();
+		int length = digits.length();
+		int firstGroup = length % 3;
+		if (firstGroup == 0) {
+			firstGroup = 3;
+		}
+		builder.append(digits, 0, firstGroup);
+		for (int i = firstGroup; i < length; i += 3) {
+			builder.append(separator).append(digits, i, i + 3);
+		}
+		return builder.toString();
+	}
+
+	private void addScaledVariants(List<String> tokens, BigDecimal value) {
+		if (value == null) {
+			return;
+		}
+		BigDecimal abs = value.abs();
+		String sign = value.signum() < 0 ? "-" : "";
+		addScaledTokens(tokens, abs, sign, BigDecimal.valueOf(1_000_000_000L), List.of("b", "bn", "billion"));
+		addScaledTokens(tokens, abs, sign, BigDecimal.valueOf(1_000_000L), List.of("m", "mn", "million"));
+		addScaledTokens(tokens, abs, sign, BigDecimal.valueOf(1_000L), List.of("k", "thousand"));
+	}
+
+	private void addScaledTokens(List<String> tokens,
+			BigDecimal value,
+			String sign,
+			BigDecimal divisor,
+			List<String> suffixes) {
+		if (value.compareTo(divisor) < 0) {
+			return;
+		}
+		List<BigDecimal> variants = List.of(
+				value.divide(divisor, 1, RoundingMode.HALF_UP),
+				value.divide(divisor, 2, RoundingMode.HALF_UP)
+		);
+		for (BigDecimal variant : variants) {
+			if (variant == null) {
+				continue;
+			}
+			String base = variant.stripTrailingZeros().toPlainString();
+			String signedBase = sign + base;
+			addScaledTokenVariants(tokens, signedBase, suffixes);
+			if (base.contains(".")) {
+				String commaBase = sign + base.replace('.', ',');
+				addScaledTokenVariants(tokens, commaBase, suffixes);
+			}
+		}
+	}
+
+	private void addScaledTokenVariants(List<String> tokens, String base, List<String> suffixes) {
+		addNumericToken(tokens, base);
+		for (String suffix : suffixes) {
+			addNumericToken(tokens, base + suffix);
+			addNumericToken(tokens, base + " " + suffix);
+		}
 	}
 
 	private boolean canDerivePeCurrent(InstrumentDossierExtractionPayload.ValuationPayload valuation) {
@@ -595,6 +826,19 @@ public class KnowledgeBaseQualityGateService {
 			return InstrumentCategory.EQUITY;
 		}
 		return InstrumentCategory.UNKNOWN;
+	}
+
+	private List<SectionRequirement> requiredSectionsForCategory(InstrumentCategory category) {
+		if (category == InstrumentCategory.EQUITY || category == InstrumentCategory.REIT) {
+			List<SectionRequirement> filtered = new ArrayList<>();
+			for (SectionRequirement section : REQUIRED_SECTIONS) {
+				if (!"risk".equals(section.code())) {
+					filtered.add(section);
+				}
+			}
+			return filtered;
+		}
+		return REQUIRED_SECTIONS;
 	}
 
 	private InstrumentCategory categorizeInstrumentType(String value) {
@@ -834,6 +1078,26 @@ public class KnowledgeBaseQualityGateService {
 
 	private String safe(String value) {
 		return value == null ? "" : value;
+	}
+
+	private String normalizeSectionWhitespace(String content) {
+		if (content == null) {
+			return "";
+		}
+		String normalized = content
+				.replace('\u00A0', ' ')
+				.replace('\u2007', ' ')
+				.replace('\u202F', ' ');
+		return normalized.replaceAll("[\\u2000-\\u200B]", " ");
+	}
+
+	private boolean hasIsinHeader(String content, String isin) {
+		if (content == null || content.isBlank() || isin == null || isin.isBlank()) {
+			return false;
+		}
+		String normalizedIsin = isin.trim().toUpperCase(Locale.ROOT);
+		Pattern header = Pattern.compile("(?im)^\\s*#\\s*.*\\b" + Pattern.quote(normalizedIsin) + "\\b.*$");
+		return header.matcher(content).find();
 	}
 
 	private enum InstrumentCategory {

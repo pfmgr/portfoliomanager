@@ -14,14 +14,16 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import java.util.UUID;
 
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -62,6 +64,10 @@ class LayerTargetConfigApiIntegrationTest {
 		jdbcTemplate.update("delete from layer_target_config");
 	}
 
+	private RequestPostProcessor adminJwt() {
+		return jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+	}
+
 	@AfterEach
 	void tearDown() {
 		databaseCleaner.clean();
@@ -70,7 +76,7 @@ class LayerTargetConfigApiIntegrationTest {
 	@Test
 	void returnsDefaultConfigWhenMissing() throws Exception {
 		mockMvc.perform(get("/api/layer-targets")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.effectiveLayerTargets").isMap())
 				.andExpect(jsonPath("$.acceptableVariancePct").isNumber())
@@ -93,7 +99,7 @@ class LayerTargetConfigApiIntegrationTest {
 				""";
 
 		mockMvc.perform(put("/api/layer-targets")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType("application/json")
 						.content(payload))
 				.andExpect(status().isOk())
@@ -105,7 +111,7 @@ class LayerTargetConfigApiIntegrationTest {
 				.andExpect(jsonPath("$.customOverridesEnabled").value(true));
 
 		mockMvc.perform(post("/api/layer-targets/reset")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.activeProfileKey").value("BALANCED"))
 				.andExpect(jsonPath("$.customOverridesEnabled").value(false));
@@ -121,7 +127,7 @@ class LayerTargetConfigApiIntegrationTest {
 				""";
 
 		mockMvc.perform(put("/api/layer-targets")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType("application/json")
 						.content(payload))
 				.andExpect(status().isOk())

@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -43,6 +44,7 @@ public class AssessorService {
 	private static final int DEFAULT_MIN_SAVING_PLAN = 15;
 	private static final int DEFAULT_MIN_REBALANCE = 10;
 	private static final int DEFAULT_MIN_INSTRUMENT = 25;
+	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final String ASSESSMENT_TYPE_INSTRUMENT_ONE_TIME = "instrument_one_time";
 
 	private final SavingPlanRepository savingPlanRepository;
@@ -108,6 +110,7 @@ public class AssessorService {
 		Integer minRebalance = applyOverrides && config.getCustomMinimumRebalancingAmount() != null
 				? config.getCustomMinimumRebalancingAmount()
 				: profile.getMinimumRebalancingAmount();
+		Integer projectionHorizonMonths = profile == null ? null : profile.getProjectionHorizonMonths();
 		Integer minInstrument = request == null ? null : request.minimumInstrumentAmountEur();
 		if (variance == null) {
 			variance = DEFAULT_VARIANCE_PCT;
@@ -134,6 +137,9 @@ public class AssessorService {
 		KbDiagnostics kbDiagnostics = buildKbDiagnostics(existingInstrumentLayers.keySet());
 		AssessorGapDetectionPolicy gapDetectionPolicy =
 				AssessorGapDetectionPolicy.from(request == null ? null : request.gapDetectionPolicy());
+		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(selectedProfile, config);
+		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer =
+				resolveRiskThresholdsByLayer(selectedProfile, config, riskThresholds);
 
 		BigDecimal savingPlanDelta = request == null ? null : toBigDecimal(request.savingPlanAmountDeltaEur());
 		if (savingPlanDelta != null && savingPlanDelta.signum() < 0) {
@@ -165,6 +171,9 @@ public class AssessorService {
 				minSavingPlan,
 				minRebalance,
 				minInstrument,
+				profile == null ? null : profile.getProjectionHorizonMonths(),
+				profile == null ? null : toBigDecimal(profile.getProjectionBlendMin()),
+				profile == null ? null : toBigDecimal(profile.getProjectionBlendMax()),
 				plans,
 				savingPlanDelta,
 				oneTimeAmount,
@@ -185,6 +194,8 @@ public class AssessorService {
 				config,
 				existingInstrumentLayers,
 				kbDiagnostics,
+				riskThresholds,
+				riskThresholdsByLayer,
 				gapDetectionPolicy);
 		Set<String> oneTimeSuggestionIsins = collectSuggestionIsins(instrumentSuggestions.oneTimeSuggestions());
 		Set<String> effectiveInstrumentIsins = loadEffectiveInstrumentIsins(oneTimeSuggestionIsins);
@@ -193,7 +204,8 @@ public class AssessorService {
 		Map<String, BigDecimal> adjustedOneTimeBuckets =
 				adjustOneTimeInstrumentBuckets(result.oneTimeAllocation(), savingPlanSnapshot, oneTimeNewInstruments);
 		SavingPlanAllocation savingPlanAllocation = buildSavingPlanAllocation(result, savingPlanSnapshot, savingPlanDelta,
-				minSavingPlan, minRebalance, config, existingInstrumentLayers, kbDiagnostics, gapDetectionPolicy);
+				minSavingPlan, minRebalance, config, existingInstrumentLayers, kbDiagnostics, riskThresholds,
+				riskThresholdsByLayer, gapDetectionPolicy);
 		List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments;
 		List<AssessorSavingPlanSuggestionDto> adjustedSuggestions;
 		Map<Integer, BigDecimal> targetLayerAmounts;
@@ -213,8 +225,9 @@ public class AssessorService {
 			targetLayerAmounts = savingPlanAllocation.targetLayerAmounts();
 			savingPlanAllocationNotes = savingPlanAllocation.allocationNotes();
 		}
+		List<String> riskWarnings = buildRiskWarnings(savingPlanSnapshot, riskThresholds, riskThresholdsByLayer, kbDiagnostics);
 		NarrativeBundle narratives = buildNarratives(result, config, savingPlanSnapshot, variance, minSavingPlan,
-				minRebalance, minInstrument, oneTimeAmount, targetLayerAmounts, adjustedSuggestions,
+				minRebalance, projectionHorizonMonths, minInstrument, oneTimeAmount, targetLayerAmounts, adjustedSuggestions,
 				savingPlanNewInstruments, savingPlanAllocationNotes, oneTimeNewInstruments, adjustedOneTimeBuckets,
 				gapDetectionPolicy);
 
@@ -230,7 +243,7 @@ public class AssessorService {
 				toOneTimeDto(result.oneTimeAllocation(), savingPlanSnapshot, oneTimeNewInstruments, adjustedOneTimeBuckets),
 				narratives.oneTimeNarrative(),
 				null,
-				toDiagnosticsDto(result.diagnostics(), kbDiagnostics)
+				toDiagnosticsDto(result.diagnostics(), kbDiagnostics, riskWarnings)
 		);
 	}
 
@@ -260,13 +273,15 @@ public class AssessorService {
 			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Instrument list must not be empty.");
 		}
 		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(selectedProfile, config);
+		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer =
+				resolveRiskThresholdsByLayer(selectedProfile, config, riskThresholds);
 		AssessorInstrumentAssessmentService.AssessmentResult assessment =
-				instrumentAssessmentService.assess(instruments, amount, targets, riskThresholds);
+				instrumentAssessmentService.assess(instruments, amount, targets, riskThresholds, riskThresholdsByLayer);
 		List<AssessorInstrumentAssessmentItemDto> itemDtos = new ArrayList<>();
 		for (AssessorInstrumentAssessmentService.AssessmentItem item : assessment.items()) {
 			List<AssessorInstrumentAssessmentScoreComponentDto> scoreComponents =
 					toScoreComponentDtos(item.scoreComponents());
-			String riskCategory = riskCategoryForScore(item.score(), riskThresholds);
+			String riskCategory = riskCategoryForScore(item.score(), item.layer(), riskThresholds, riskThresholdsByLayer);
 			itemDtos.add(new AssessorInstrumentAssessmentItemDto(
 					item.isin(),
 					item.name(),
@@ -279,12 +294,13 @@ public class AssessorService {
 		}
 		String narrative = null;
 		if (llmEnabled && assessment.missingIsins().isEmpty() && !itemDtos.isEmpty()) {
-			narrative = buildInstrumentAssessmentNarrative(assessment, config, itemDtos, riskThresholds);
+			narrative = buildInstrumentAssessmentNarrative(assessment, config, itemDtos, riskThresholds, riskThresholdsByLayer);
 		}
 		AssessorInstrumentAssessmentDto instrumentAssessment = new AssessorInstrumentAssessmentDto(
 				(double) amount,
 				assessment.scoreCutoff(),
 				new LayerTargetRiskThresholdsDto(riskThresholds.getLowMax(), riskThresholds.getHighMin()),
+				toRiskThresholdsByLayerDto(riskThresholdsByLayer),
 				itemDtos,
 				assessment.missingIsins(),
 				narrative
@@ -309,7 +325,8 @@ public class AssessorService {
 			AssessorInstrumentAssessmentService.AssessmentResult assessment,
 			LayerTargetConfigResponseDto config,
 			List<AssessorInstrumentAssessmentItemDto> items,
-			LayerTargetRiskThresholds riskThresholds) {
+			LayerTargetRiskThresholds riskThresholds,
+			Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		StringBuilder builder = new StringBuilder();
 		builder.append("Write a concise narrative (2-6 sentences) describing the instrument assessment and allocation.\n");
 		builder.append("Rules:\n");
@@ -320,6 +337,7 @@ public class AssessorService {
 		builder.append("- High risk is not_acceptable_risk and should be called out clearly.\n");
 		builder.append("- Use recommendation_status exactly as given; do not infer or invert the risk bands.\n");
 		builder.append("- Explain how the amount was distributed across layers and instruments.\n");
+		builder.append("- If allocation_criteria includes Assessment score weighting, explain that lower scores receive higher weights.\n");
 		builder.append("- Use instrument name, ISIN, score, allocation amounts, and score component points.\n");
 		builder.append("- You may use short bullets for the score breakdown.\n");
 		builder.append("- Do not invent instruments or criteria.\n");
@@ -328,6 +346,8 @@ public class AssessorService {
 		builder.append("score_cutoff=").append(assessment.scoreCutoff()).append("\n");
 		builder.append("low_risk_max=").append(riskThresholds == null ? null : riskThresholds.getLowMax()).append("\n");
 		builder.append("high_risk_min=").append(riskThresholds == null ? null : riskThresholds.getHighMin()).append("\n");
+		builder.append("risk_thresholds_by_layer=")
+				.append(toRiskThresholdsByLayerDto(riskThresholdsByLayer)).append("\n");
 		builder.append("score_criteria=").append(assessment.scoreCriteria()).append("\n");
 		builder.append("allocation_criteria=").append(assessment.allocationCriteria()).append("\n");
 		builder.append("layer_names=").append(config == null ? Map.of() : config.getLayerNames()).append("\n");
@@ -351,7 +371,8 @@ public class AssessorService {
 			AssessorInstrumentAssessmentService.AssessmentResult assessment,
 			LayerTargetConfigResponseDto config,
 			List<AssessorInstrumentAssessmentItemDto> items,
-			LayerTargetRiskThresholds riskThresholds) {
+			LayerTargetRiskThresholds riskThresholds,
+			Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		if (assessment == null || items == null || items.isEmpty()) {
 			return null;
 		}
@@ -529,10 +550,13 @@ public class AssessorService {
 		return value.trim().toLowerCase(Locale.ROOT);
 	}
 
-	private String riskCategoryForScore(int score, LayerTargetRiskThresholds thresholds) {
-		LayerTargetRiskThresholds effective = RiskThresholdsUtil.normalize(thresholds);
-		int lowMax = effective.getLowMax();
-		int highMin = effective.getHighMin();
+	private String riskCategoryForScore(int score,
+							 Integer layer,
+							 LayerTargetRiskThresholds fallback,
+							 Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
+		LayerTargetRiskThresholds effective = RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, fallback, layer);
+		double lowMax = effective.getLowMax();
+		double highMin = effective.getHighMin();
 		if (score >= highMin) {
 			return "high";
 		}
@@ -560,6 +584,53 @@ public class AssessorService {
 				? new LayerTargetRiskThresholds(RiskThresholdsUtil.DEFAULT_LOW_MAX, RiskThresholdsUtil.DEFAULT_HIGH_MIN)
 				: new LayerTargetRiskThresholds(dto.lowMax(), dto.highMin());
 		return RiskThresholdsUtil.normalize(thresholds);
+	}
+
+	private Map<Integer, LayerTargetRiskThresholds> resolveRiskThresholdsByLayer(
+			String profileKey,
+			LayerTargetConfigResponseDto config,
+			LayerTargetRiskThresholds fallback
+	) {
+		Map<Integer, LayerTargetRiskThresholdsDto> raw = null;
+		if (config != null && config.getProfiles() != null) {
+			LayerTargetConfigResponseDto.LayerTargetProfileDto profile = config.getProfiles().get(profileKey);
+			if (profile != null) {
+				raw = profile.getRiskThresholdsByLayer();
+			}
+			if ((raw == null || raw.isEmpty())) {
+				LayerTargetConfigResponseDto.LayerTargetProfileDto balanced = config.getProfiles().get("BALANCED");
+				if (balanced != null) {
+					raw = balanced.getRiskThresholdsByLayer();
+				}
+			}
+		}
+		Map<Integer, LayerTargetRiskThresholds> mapped = new LinkedHashMap<>();
+		if (raw != null) {
+			for (Map.Entry<Integer, LayerTargetRiskThresholdsDto> entry : raw.entrySet()) {
+				Integer layer = entry.getKey();
+				LayerTargetRiskThresholdsDto dto = entry.getValue();
+				if (layer == null || dto == null) {
+					continue;
+				}
+				mapped.put(layer, new LayerTargetRiskThresholds(dto.lowMax(), dto.highMin()));
+			}
+		}
+		return RiskThresholdsUtil.normalizeByLayer(mapped, fallback);
+	}
+
+	private Map<Integer, LayerTargetRiskThresholdsDto> toRiskThresholdsByLayerDto(
+			Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
+		Map<Integer, LayerTargetRiskThresholdsDto> mapped = new LinkedHashMap<>();
+		if (thresholdsByLayer == null) {
+			return mapped;
+		}
+		for (int layer = 1; layer <= 5; layer++) {
+			LayerTargetRiskThresholds thresholds = thresholdsByLayer.get(layer);
+			if (thresholds != null) {
+				mapped.put(layer, new LayerTargetRiskThresholdsDto(thresholds.getLowMax(), thresholds.getHighMin()));
+			}
+		}
+		return Map.copyOf(mapped);
 	}
 
 	private List<AssessorInstrumentAssessmentScoreComponentDto> toScoreComponentDtos(
@@ -887,14 +958,15 @@ public class AssessorService {
 	}
 
 	private NarrativeBundle buildNarratives(AssessorEngine.AssessorEngineResult result,
-											LayerTargetConfigResponseDto config,
-											SavingPlanSnapshot savingPlanSnapshot,
-											BigDecimal variance,
-											Integer minimumSavingPlanSize,
-											Integer minimumRebalancingAmount,
-											Integer minimumInstrumentAmount,
-											BigDecimal oneTimeAmount,
-											Map<Integer, BigDecimal> targetLayerAmounts,
+									 LayerTargetConfigResponseDto config,
+									 SavingPlanSnapshot savingPlanSnapshot,
+									 BigDecimal variance,
+									 Integer minimumSavingPlanSize,
+									 Integer minimumRebalancingAmount,
+									 Integer projectionHorizonMonths,
+									 Integer minimumInstrumentAmount,
+									 BigDecimal oneTimeAmount,
+									 Map<Integer, BigDecimal> targetLayerAmounts,
 											List<AssessorSavingPlanSuggestionDto> savingPlanSuggestions,
 											List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments,
 											List<String> savingPlanAllocationNotes,
@@ -909,7 +981,7 @@ public class AssessorService {
 				|| (savingPlanNewInstruments != null && !savingPlanNewInstruments.isEmpty());
 		if (hasSavingPlanContext) {
 			String prompt = buildSavingPlanNarrativePrompt(result, config, variance,
-					minimumSavingPlanSize, minimumRebalancingAmount, targetLayerAmounts, savingPlanSuggestions,
+					minimumSavingPlanSize, minimumRebalancingAmount, projectionHorizonMonths, targetLayerAmounts, savingPlanSuggestions,
 					savingPlanNewInstruments, savingPlanAllocationNotes, gapDetectionPolicy);
 			prompt = llmPromptPolicy == null
 					? prompt
@@ -937,20 +1009,23 @@ public class AssessorService {
 	}
 
 	private String buildSavingPlanNarrativePrompt(AssessorEngine.AssessorEngineResult result,
-												 LayerTargetConfigResponseDto config,
-												 BigDecimal variance,
-												 Integer minimumSavingPlanSize,
-												 Integer minimumRebalancingAmount,
-												 Map<Integer, BigDecimal> targetLayerAmounts,
-												 List<AssessorSavingPlanSuggestionDto> savingPlanSuggestions,
-												 List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments,
-												 List<String> savingPlanAllocationNotes,
-												 AssessorGapDetectionPolicy gapDetectionPolicy) {
+									 LayerTargetConfigResponseDto config,
+									 BigDecimal variance,
+									 Integer minimumSavingPlanSize,
+									 Integer minimumRebalancingAmount,
+									 Integer projectionHorizonMonths,
+									 Map<Integer, BigDecimal> targetLayerAmounts,
+									 List<AssessorSavingPlanSuggestionDto> savingPlanSuggestions,
+									 List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments,
+									 List<String> savingPlanAllocationNotes,
+									 AssessorGapDetectionPolicy gapDetectionPolicy) {
 		StringBuilder builder = new StringBuilder();
 		builder.append("Write a concise narrative (2-5 sentences) describing the savings plan proposal.\n");
 		builder.append("Rules:\n");
 		builder.append("- Use the provided layer names.\n");
 		builder.append("- Mention whether the current distribution is within tolerance.\n");
+		builder.append("- Explain that layer budgets blend projected gap weights (using effective holdings) with the current savings plan distribution; longer horizons weight the current distribution more.\n");
+		builder.append("- New instrument suggestions only include low or medium risk instruments (acceptable risk).\n");
 		builder.append("- Summarize the proposed actions using instrument name, ISIN, layer, and delta amounts.\n");
 		builder.append("- If new_instruments is not none, add a sentence for each explaining the portfolio gap and why the specific instrument was selected, using the rationale.\n");
 		builder.append("- If new_instruments is not none, explain the weighting of new instrument amounts using allocation_rules.\n");
@@ -964,6 +1039,20 @@ public class AssessorService {
 				? AssessorGapDetectionPolicy.SAVING_PLAN_GAPS.id()
 				: gapDetectionPolicy.id()).append("\n");
 		builder.append("tolerance_pct=").append(variance == null ? DEFAULT_VARIANCE_PCT : variance).append("\n");
+		builder.append("projection_horizon_months=")
+				.append(normalizeProjectionHorizonMonths(projectionHorizonMonths))
+				.append("\n");
+		LayerTargetConfigResponseDto.LayerTargetProfileDto profile = null;
+		if (config != null && config.getProfiles() != null) {
+			profile = config.getProfiles().get(result.selectedProfile());
+			if (profile == null) {
+				profile = config.getProfiles().get(config.getActiveProfileKey());
+			}
+		}
+		Double projectionBlendMin = profile == null ? null : profile.getProjectionBlendMin();
+		Double projectionBlendMax = profile == null ? null : profile.getProjectionBlendMax();
+		builder.append("projection_blend_min=").append(projectionBlendMin).append("\n");
+		builder.append("projection_blend_max=").append(projectionBlendMax).append("\n");
 		builder.append("minimum_saving_plan_size_eur=").append(minimumSavingPlanSize).append("\n");
 		builder.append("minimum_rebalancing_amount_eur=").append(minimumRebalancingAmount).append("\n");
 		builder.append("allocation_rules=New instrument amounts are split evenly after reserving the minimum per instrument. ")
@@ -1017,6 +1106,8 @@ public class AssessorService {
 		builder.append("Rules:\n");
 		builder.append("- Use the provided layer names.\n");
 		builder.append("- Mention the total one-time amount.\n");
+		builder.append("- Explain that layer amounts close gaps to the target weights using effective holdings.\n");
+		builder.append("- New instrument suggestions only include low or medium risk instruments (acceptable risk).\n");
 		builder.append("- Summarize the layer allocation and any instrument buckets if provided.\n");
 		builder.append("- If new_instruments is not none, add a sentence for each explaining the portfolio gap and why the specific instrument was selected, using the rationale.\n");
 		builder.append("- If new_instruments is none, add one sentence using no_new_instruments_reason verbatim.\n");
@@ -1502,22 +1593,91 @@ public class AssessorService {
 		return normalized;
 	}
 
-	private AssessorDiagnosticsDto toDiagnosticsDto(AssessorEngine.Diagnostics diagnostics, KbDiagnostics kbDiagnostics) {
+	private AssessorDiagnosticsDto toDiagnosticsDto(AssessorEngine.Diagnostics diagnostics,
+									 KbDiagnostics kbDiagnostics,
+									 List<String> riskWarnings) {
 		boolean kbEnabled = kbDiagnostics != null && kbDiagnostics.enabled();
 		boolean kbComplete = kbDiagnostics != null && kbDiagnostics.complete();
 		List<String> missingIsins = kbDiagnostics == null ? List.of() : kbDiagnostics.missingIsins();
 		if (diagnostics == null) {
-			return new AssessorDiagnosticsDto(false, 0, null, List.of(), kbEnabled, kbComplete, missingIsins);
+			return new AssessorDiagnosticsDto(false, 0, null, List.of(),
+					riskWarnings == null ? List.of() : riskWarnings, kbEnabled, kbComplete, missingIsins);
 		}
 		return new AssessorDiagnosticsDto(
 				diagnostics.withinTolerance(),
 				diagnostics.suppressedDeltasCount(),
 				toAmount(diagnostics.suppressedAmountTotal()),
 				diagnostics.redistributionNotes(),
+				riskWarnings == null ? List.of() : riskWarnings,
 				kbEnabled,
 				kbComplete,
 				missingIsins
 		);
+	}
+
+	private List<String> buildRiskWarnings(SavingPlanSnapshot savingPlanSnapshot,
+								   LayerTargetRiskThresholds riskThresholds,
+								   Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer,
+								   KbDiagnostics kbDiagnostics) {
+		if (savingPlanSnapshot == null || savingPlanSnapshot.plans() == null || savingPlanSnapshot.plans().isEmpty()) {
+			return List.of();
+		}
+		if (kbDiagnostics == null || !kbDiagnostics.complete()) {
+			return List.of();
+		}
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
+		Set<String> isins = new LinkedHashSet<>();
+		for (AssessorEngine.SavingPlanItem plan : savingPlanSnapshot.plans()) {
+			if (plan == null || plan.isin() == null) {
+				continue;
+			}
+			isins.add(normalizeIsin(plan.isin()));
+		}
+		if (isins.isEmpty()) {
+			return List.of();
+		}
+		Map<String, Integer> scores = instrumentAssessmentService.assessScores(isins, thresholds, thresholdsByLayer);
+		if (scores.isEmpty()) {
+			return List.of();
+		}
+		Map<String, InstrumentMeta> meta = savingPlanSnapshot.instrumentMeta();
+		List<String> warnings = new ArrayList<>();
+		for (String isin : isins) {
+			Integer score = scores.get(isin);
+			Integer layer = null;
+			if (meta != null) {
+				InstrumentMeta instrumentMeta = meta.get(isin);
+				if (instrumentMeta != null) {
+					layer = instrumentMeta.layer();
+				}
+			}
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, thresholds, layer);
+			double cutoff = layerThresholds.getHighMin();
+			if (score == null || score < cutoff) {
+				continue;
+			}
+			String name = isin;
+			if (meta != null) {
+				InstrumentMeta instrumentMeta = meta.get(isin);
+				if (instrumentMeta != null) {
+					name = instrumentMeta.name() == null || instrumentMeta.name().isBlank()
+							? isin
+							: instrumentMeta.name();
+					layer = instrumentMeta.layer();
+				}
+			}
+			if (layer == null) {
+				warnings.add(String.format("Existing saving plan instrument %s (%s) exceeds acceptable risk for the profile (score %d >= %d).",
+						name, isin, score, (int) Math.ceil(cutoff)));
+			} else {
+				warnings.add(String.format("Existing saving plan instrument %s (%s) in Layer %d exceeds acceptable risk for the profile (score %d >= %d).",
+						name, isin, layer, score, (int) Math.ceil(cutoff)));
+			}
+		}
+		return warnings;
 	}
 
 	private KbDiagnostics buildKbDiagnostics(Set<String> isins) {
@@ -1605,6 +1765,8 @@ public class AssessorService {
 			LayerTargetConfigResponseDto config,
 			Map<String, Integer> existingInstrumentLayers,
 			KbDiagnostics kbDiagnostics,
+			LayerTargetRiskThresholds riskThresholds,
+			Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer,
 			AssessorGapDetectionPolicy gapDetectionPolicy) {
 		if (result == null || savingPlanSnapshot == null) {
 			return AssessorInstrumentSuggestionService.SuggestionResult.empty();
@@ -1649,7 +1811,9 @@ public class AssessorService {
 				minInstrument,
 				maxSavingPlans,
 				excludedSnapshotIsins,
-				gapDetectionPolicy
+				gapDetectionPolicy,
+				riskThresholds,
+				riskThresholdsByLayer
 		));
 	}
 
@@ -1702,14 +1866,16 @@ public class AssessorService {
 	}
 
 	private SavingPlanAllocation buildSavingPlanAllocation(AssessorEngine.AssessorEngineResult result,
-														   SavingPlanSnapshot savingPlanSnapshot,
-														   BigDecimal savingPlanDelta,
-														   Integer minimumSavingPlanSize,
-														   Integer minimumRebalancingAmount,
-														   LayerTargetConfigResponseDto config,
-														   Map<String, Integer> existingInstrumentLayers,
-														   KbDiagnostics kbDiagnostics,
-														   AssessorGapDetectionPolicy gapDetectionPolicy) {
+			SavingPlanSnapshot savingPlanSnapshot,
+			BigDecimal savingPlanDelta,
+			Integer minimumSavingPlanSize,
+			Integer minimumRebalancingAmount,
+			LayerTargetConfigResponseDto config,
+			Map<String, Integer> existingInstrumentLayers,
+			KbDiagnostics kbDiagnostics,
+			LayerTargetRiskThresholds riskThresholds,
+			Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer,
+			AssessorGapDetectionPolicy gapDetectionPolicy) {
 		if (result == null || savingPlanSnapshot == null) {
 			return null;
 		}
@@ -1751,16 +1917,18 @@ public class AssessorService {
 			Map<Integer, BigDecimal> positiveBudgets = filterPositiveBudgets(deltas);
 			if (!positiveBudgets.isEmpty()) {
 				savingPlanSuggestionResult = instrumentSuggestionService.suggest(new AssessorInstrumentSuggestionService.SuggestionRequest(
-						savingPlanSnapshot.plans(),
-						existingCoverageIsins,
-						positiveBudgets,
-						Map.of(),
-						minSaving,
-						minRebalance,
-						minInstrument,
-						maxSavingPlans,
-						Set.of(),
-						gapDetectionPolicy
+					savingPlanSnapshot.plans(),
+					existingCoverageIsins,
+					positiveBudgets,
+					Map.of(),
+					minSaving,
+					minRebalance,
+					minInstrument,
+					maxSavingPlans,
+					Set.of(),
+					gapDetectionPolicy,
+					riskThresholds,
+					riskThresholdsByLayer
 				));
 			} else {
 				savingPlanSuggestionResult = AssessorInstrumentSuggestionService.SuggestionResult.empty();
@@ -1774,17 +1942,17 @@ public class AssessorService {
 				boolean hasPlans = planCounts.getOrDefault(layer, 0) > 0;
 				BigDecimal used = newInstrumentTotals.getOrDefault(layer, BigDecimal.ZERO);
 				BigDecimal remainder = budget.subtract(used);
-				if (hasPlans && remainder.signum() > 0) {
-					if (used.signum() > 0) {
-						allocationNotes.add(String.format(
-								"Layer %d remaining budget %s EUR was allocated to existing saving plans (KB-weighted) after new plan gates/gaps.",
-								layer, toAmount(remainder)));
-					} else {
-						allocationNotes.add(String.format(
-								"Layer %d budget %s EUR was allocated to existing saving plans (KB-weighted) because no eligible new saving plans were proposed.",
-								layer, toAmount(remainder)));
+					if (hasPlans && remainder.signum() > 0) {
+						if (used.signum() > 0) {
+							allocationNotes.add(String.format(
+									"Layer %d remaining budget %s EUR was allocated to existing saving plans (KB- and score-weighted) after new plan gates/gaps.",
+									layer, toAmount(remainder)));
+						} else {
+							allocationNotes.add(String.format(
+									"Layer %d budget %s EUR was allocated to existing saving plans (KB- and score-weighted) because no eligible new saving plans were proposed.",
+									layer, toAmount(remainder)));
+						}
 					}
-				}
 				if (hasPlans) {
 					continue;
 				}
@@ -1817,7 +1985,28 @@ public class AssessorService {
 						existingCoverageIsins,
 						gapDetectionPolicy
 				));
-		Map<AssessorEngine.PlanKey, BigDecimal> planWeights = buildPlanWeights(savingPlanSnapshot.plans(), weightsByLayer);
+		Set<String> planIsins = new LinkedHashSet<>();
+		for (AssessorEngine.SavingPlanItem plan : savingPlanSnapshot.plans()) {
+			if (plan == null || plan.isin() == null) {
+				continue;
+			}
+			String isin = normalizeIsin(plan.isin());
+			if (isin != null) {
+				planIsins.add(isin);
+			}
+		}
+		Map<String, Integer> assessmentScores = instrumentAssessmentService.assessScores(
+				planIsins,
+				riskThresholds,
+				riskThresholdsByLayer
+		);
+		Map<AssessorEngine.PlanKey, BigDecimal> planWeights = buildPlanWeights(
+				savingPlanSnapshot.plans(),
+				weightsByLayer,
+				assessmentScores,
+				riskThresholds,
+				riskThresholdsByLayer
+		);
 		List<AssessorEngine.SavingPlanSuggestion> weightedSuggestions = buildWeightedSavingPlanSuggestions(
 				savingPlanSnapshot.plans(),
 				effectiveTargets,
@@ -2009,11 +2198,17 @@ public class AssessorService {
 	}
 
 	private Map<AssessorEngine.PlanKey, BigDecimal> buildPlanWeights(List<AssessorEngine.SavingPlanItem> plans,
-																	 Map<Integer, Map<String, BigDecimal>> weightsByLayer) {
+										 Map<Integer, Map<String, BigDecimal>> weightsByLayer,
+										 Map<String, Integer> assessmentScores,
+										 LayerTargetRiskThresholds riskThresholds,
+										 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		Map<AssessorEngine.PlanKey, BigDecimal> weights = new LinkedHashMap<>();
 		if (plans == null) {
 			return weights;
 		}
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
 		for (AssessorEngine.SavingPlanItem plan : plans) {
 			if (plan == null) {
 				continue;
@@ -2027,9 +2222,29 @@ public class AssessorService {
 			if (weight == null || weight.signum() <= 0) {
 				weight = BigDecimal.ONE;
 			}
+			Integer score = assessmentScores == null ? null : assessmentScores.get(isin);
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, thresholds, plan.layer());
+			double scoreCutoff = layerThresholds.getHighMin();
+			double factor = score == null ? 1.0 : scoreWeightFactor(score, scoreCutoff);
+			weight = weight.multiply(BigDecimal.valueOf(factor));
 			weights.put(new AssessorEngine.PlanKey(isin, plan.depotId()), weight);
 		}
 		return weights;
+	}
+
+	private double scoreWeightFactor(int score, double scoreCutoff) {
+		if (scoreCutoff <= 0) {
+			return 1.0;
+		}
+		double normalized = (scoreCutoff - (double) score + 1.0) / scoreCutoff;
+		if (normalized > 1.0) {
+			return 1.0;
+		}
+		if (normalized < MIN_SCORE_WEIGHT_FACTOR) {
+			return MIN_SCORE_WEIGHT_FACTOR;
+		}
+		return normalized;
 	}
 
 	private List<AssessorEngine.SavingPlanSuggestion> buildWeightedSavingPlanSuggestions(
@@ -2121,6 +2336,19 @@ public class AssessorService {
 			return BigDecimal.ZERO;
 		}
 		return value;
+	}
+
+	private int normalizeProjectionHorizonMonths(Integer projectionHorizonMonths) {
+		if (projectionHorizonMonths == null) {
+			return 12;
+		}
+		if (projectionHorizonMonths < 1) {
+			return 1;
+		}
+		if (projectionHorizonMonths > 120) {
+			return 120;
+		}
+		return projectionHorizonMonths;
 	}
 
 	private String determinePlanType(BigDecimal oldAmount, BigDecimal newAmount) {

@@ -13,11 +13,16 @@ public record InstrumentDossierExtractionPayload(
 		@JsonProperty("instrument_type") String instrumentType,
 		@JsonProperty("asset_class") String assetClass,
 		@JsonProperty("sub_class") String subClass,
+		@JsonProperty("gics_sector") String gicsSector,
+		@JsonProperty("gics_industry_group") String gicsIndustryGroup,
+		@JsonProperty("gics_industry") String gicsIndustry,
+		@JsonProperty("gics_sub_industry") String gicsSubIndustry,
 		@JsonProperty("layer") Integer layer,
 		@JsonProperty("layer_notes") String layerNotes,
 		@JsonProperty("etf") EtfPayload etf,
 		@JsonProperty("risk") RiskPayload risk,
 		@JsonProperty("regions") List<RegionExposurePayload> regions,
+		@JsonProperty("sectors") List<SectorExposurePayload> sectors,
 		@JsonProperty("top_holdings") List<HoldingPayload> topHoldings,
 		@JsonProperty("financials") FinancialsPayload financials,
 		@JsonProperty("valuation") ValuationPayload valuation,
@@ -26,20 +31,26 @@ public record InstrumentDossierExtractionPayload(
 		@JsonProperty("warnings") List<WarningPayload> warnings
 ) {
 	public InstrumentDossierExtractionPayload(String isin,
-											  String name,
-											  String instrumentType,
-											  String assetClass,
-											  String subClass,
-											  Integer layer,
-											  String layerNotes,
-											  EtfPayload etf,
-											  RiskPayload risk,
-											  List<RegionExposurePayload> regions,
-											  List<HoldingPayload> topHoldings,
-											  List<SourcePayload> sources,
-											  List<MissingFieldPayload> missingFields,
-											  List<WarningPayload> warnings) {
-		this(isin, name, instrumentType, assetClass, subClass, layer, layerNotes, etf, risk, regions, topHoldings,
+								  String name,
+								  String instrumentType,
+								  String assetClass,
+								  String subClass,
+								  String gicsSector,
+								  String gicsIndustryGroup,
+								  String gicsIndustry,
+								  String gicsSubIndustry,
+								  Integer layer,
+								  String layerNotes,
+								  EtfPayload etf,
+								  RiskPayload risk,
+								  List<RegionExposurePayload> regions,
+								  List<SectorExposurePayload> sectors,
+								  List<HoldingPayload> topHoldings,
+								  List<SourcePayload> sources,
+								  List<MissingFieldPayload> missingFields,
+								  List<WarningPayload> warnings) {
+		this(isin, name, instrumentType, assetClass, subClass, gicsSector, gicsIndustryGroup, gicsIndustry, gicsSubIndustry,
+				layer, layerNotes, etf, risk, regions, sectors, topHoldings,
 				null, null, sources, missingFields, warnings);
 	}
 
@@ -52,7 +63,8 @@ public record InstrumentDossierExtractionPayload(
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record RiskPayload(
-			@JsonProperty("summary_risk_indicator") SummaryRiskIndicatorPayload summaryRiskIndicator
+			@JsonProperty("summary_risk_indicator") SummaryRiskIndicatorPayload summaryRiskIndicator,
+			@JsonProperty("section_present") Boolean sectionPresent
 	) {
 	}
 
@@ -64,6 +76,13 @@ public record InstrumentDossierExtractionPayload(
 
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record RegionExposurePayload(
+			@JsonProperty("name") String name,
+			@JsonProperty("weight_pct") BigDecimal weightPct
+	) {
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	public record SectorExposurePayload(
 			@JsonProperty("name") String name,
 			@JsonProperty("weight_pct") BigDecimal weightPct
 	) {

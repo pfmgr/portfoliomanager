@@ -2,6 +2,8 @@ package my.portfoliomanager.app.service;
 
 import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
+import my.portfoliomanager.app.service.util.RiskThresholdsUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -29,6 +31,8 @@ public class AssessorInstrumentSuggestionService {
 	private static final int MAX_SUGGESTIONS_PER_LAYER = 3;
 	private static final double EXISTING_BONUS = 0.2;
 	private static final double GAP_WEIGHT_SUB_CLASS = 1.0;
+	private static final double GAP_WEIGHT_SECTOR = 0.7;
+	private static final double GAP_WEIGHT_SECTOR_SECONDARY = 0.3;
 	private static final double GAP_WEIGHT_THEME = 0.6;
 	private static final double GAP_WEIGHT_THEME_SECONDARY = 0.2;
 	private static final double GAP_WEIGHT_LOCALE = 1.0;
@@ -38,6 +42,7 @@ public class AssessorInstrumentSuggestionService {
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 0.01;
 	private static final double DATA_QUALITY_WARNING_WEIGHT = 0.05;
 	private static final double MAX_DATA_QUALITY_PENALTY = 0.25;
+	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final double ETF_HOLDINGS_YIELD_WEIGHT = 0.65;
 	private static final double ETF_CURRENT_YIELD_WEIGHT = 0.20;
 	private static final double ETF_PB_WEIGHT = 0.10;
@@ -92,11 +97,14 @@ public class AssessorInstrumentSuggestionService {
 
 	private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 	private final ObjectMapper objectMapper;
+	private final AssessorInstrumentAssessmentService assessmentService;
 
 	public AssessorInstrumentSuggestionService(NamedParameterJdbcTemplate namedParameterJdbcTemplate,
-											   ObjectMapper objectMapper) {
+										   ObjectMapper objectMapper,
+										   AssessorInstrumentAssessmentService assessmentService) {
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
 		this.objectMapper = objectMapper;
+		this.assessmentService = assessmentService;
 	}
 
 	public SuggestionResult suggest(SuggestionRequest request) {
@@ -111,6 +119,9 @@ public class AssessorInstrumentSuggestionService {
 		if (savingPlanBudgets.isEmpty() && oneTimeBudgets.isEmpty()) {
 			return SuggestionResult.empty();
 		}
+		LayerTargetRiskThresholds riskThresholds = RiskThresholdsUtil.normalize(request.riskThresholds());
+		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer =
+				RiskThresholdsUtil.normalizeByLayer(request.riskThresholdsByLayer(), riskThresholds);
 		AssessorGapDetectionPolicy gapPolicy = request.gapDetectionPolicy() == null
 				? AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
 				: request.gapDetectionPolicy();
@@ -146,6 +157,7 @@ public class AssessorInstrumentSuggestionService {
 		if (!fallbackCandidates.isEmpty()) {
 			candidateProfiles.putAll(fallbackCandidates);
 		}
+		candidateProfiles = filterCandidatesByRisk(candidateProfiles, riskThresholds, riskThresholdsByLayer);
 		Map<Integer, List<InstrumentProfile>> candidatesByLayer = groupByLayer(candidateProfiles.values());
 		Map<Integer, LayerCoverage> candidateCoverage = buildCoverageByLayer(candidatesByLayer);
 		Set<String> preferredSavingPlanIsins = new HashSet<>(coverageIsins);
@@ -200,12 +212,12 @@ public class AssessorInstrumentSuggestionService {
 				if (maxSuggestions > 0 && !preferOneTime) {
 					List<NewInstrumentSuggestion> suggestions = savingPlanMissing.isEmpty()
 							? selectSuggestionsWithoutGaps(savingPlanCandidates,
-							existingByLayer.getOrDefault(layer, List.of()),
-							budget, savingPlanMinimumAmount, maxSuggestions, preferredSavingPlanIsins)
-							: selectSuggestions(savingPlanCandidates,
-							existingByLayer.getOrDefault(layer, List.of()),
-							savingPlanMissing,
-							budget, savingPlanMinimumAmount, maxSuggestions, preferredSavingPlanIsins);
+						existingByLayer.getOrDefault(layer, List.of()),
+						budget, savingPlanMinimumAmount, maxSuggestions, preferredSavingPlanIsins, riskThresholds, riskThresholdsByLayer)
+						: selectSuggestions(savingPlanCandidates,
+				existingByLayer.getOrDefault(layer, List.of()),
+				savingPlanMissing,
+						budget, savingPlanMinimumAmount, maxSuggestions, preferredSavingPlanIsins, riskThresholds, riskThresholdsByLayer);
 					savingPlanSuggestions.addAll(suggestions);
 				}
 			}
@@ -229,16 +241,17 @@ public class AssessorInstrumentSuggestionService {
 				if (maxSuggestions > 0) {
 					List<NewInstrumentSuggestion> suggestions = oneTimeMissing.isEmpty()
 							? selectSuggestionsWithoutGaps(oneTimeCandidates,
-							existingByLayer.getOrDefault(layer, List.of()),
-							budget, request.minimumInstrumentAmount(), maxSuggestions, preferredOneTimeIsins)
-							: selectSuggestions(oneTimeCandidates,
-							existingByLayer.getOrDefault(layer, List.of()),
-							oneTimeMissing,
-							budget, request.minimumInstrumentAmount(), maxSuggestions, preferredOneTimeIsins);
+						existingByLayer.getOrDefault(layer, List.of()),
+						budget, request.minimumInstrumentAmount(), maxSuggestions, preferredOneTimeIsins, riskThresholds, riskThresholdsByLayer)
+						: selectSuggestions(oneTimeCandidates,
+				existingByLayer.getOrDefault(layer, List.of()),
+				oneTimeMissing,
+						budget, request.minimumInstrumentAmount(), maxSuggestions, preferredOneTimeIsins, riskThresholds, riskThresholdsByLayer);
 					if (suggestions.isEmpty() && !oneTimeMissing.isEmpty()) {
 						suggestions = selectSuggestionsWithoutGaps(oneTimeCandidates,
-								existingByLayer.getOrDefault(layer, List.of()),
-								budget, request.minimumInstrumentAmount(), maxSuggestions, preferredOneTimeIsins);
+							existingByLayer.getOrDefault(layer, List.of()),
+							budget, request.minimumInstrumentAmount(), maxSuggestions, preferredOneTimeIsins, riskThresholds,
+							riskThresholdsByLayer);
 					}
 					oneTimeSuggestions.addAll(suggestions);
 				}
@@ -394,12 +407,14 @@ public class AssessorInstrumentSuggestionService {
 	}
 
 	private List<NewInstrumentSuggestion> selectSuggestions(List<InstrumentProfile> candidates,
-															List<InstrumentProfile> existingProfiles,
-															MissingCategories missing,
-															BigDecimal budget,
-															int minimumAmount,
-															int maxSuggestions,
-															Set<String> preferredIsins) {
+													List<InstrumentProfile> existingProfiles,
+													MissingCategories missing,
+													BigDecimal budget,
+													int minimumAmount,
+													int maxSuggestions,
+													Set<String> preferredIsins,
+													LayerTargetRiskThresholds riskThresholds,
+													Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		if (candidates == null || candidates.isEmpty() || maxSuggestions <= 0) {
 			return List.of();
 		}
@@ -442,7 +457,8 @@ public class AssessorInstrumentSuggestionService {
 		if (selected.isEmpty()) {
 			return List.of();
 		}
-		Map<String, BigDecimal> allocations = allocateSuggestionAmounts(selected, budget, minimumAmount);
+		Map<String, BigDecimal> allocations = allocateSuggestionAmounts(selected, budget, minimumAmount, riskThresholds,
+				riskThresholdsByLayer);
 		List<NewInstrumentSuggestion> suggestions = new ArrayList<>();
 		for (SelectedSuggestion suggestion : selected) {
 			BigDecimal amount = allocations.get(suggestion.profile().isin());
@@ -460,11 +476,13 @@ public class AssessorInstrumentSuggestionService {
 	}
 
 	private List<NewInstrumentSuggestion> selectSuggestionsWithoutGaps(List<InstrumentProfile> candidates,
-																	   List<InstrumentProfile> existingProfiles,
-																	   BigDecimal budget,
-																	   int minimumAmount,
-																	   int maxSuggestions,
-																	   Set<String> preferredIsins) {
+													   List<InstrumentProfile> existingProfiles,
+													   BigDecimal budget,
+													   int minimumAmount,
+													   int maxSuggestions,
+													   Set<String> preferredIsins,
+													   LayerTargetRiskThresholds riskThresholds,
+													   Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		if (candidates == null || candidates.isEmpty() || maxSuggestions <= 0) {
 			return List.of();
 		}
@@ -487,7 +505,8 @@ public class AssessorInstrumentSuggestionService {
 		if (selected.isEmpty()) {
 			return List.of();
 		}
-		Map<String, BigDecimal> allocations = allocateSuggestionAmounts(selected, budget, minimumAmount);
+		Map<String, BigDecimal> allocations = allocateSuggestionAmounts(selected, budget, minimumAmount, riskThresholds,
+				riskThresholdsByLayer);
 		List<NewInstrumentSuggestion> suggestions = new ArrayList<>();
 		for (SelectedSuggestion suggestion : selected) {
 			BigDecimal amount = allocations.get(suggestion.profile().isin());
@@ -519,8 +538,10 @@ public class AssessorInstrumentSuggestionService {
 	}
 
 	private Map<String, BigDecimal> allocateSuggestionAmounts(List<SelectedSuggestion> selected,
-															  BigDecimal budget,
-															  int minimumAmount) {
+													BigDecimal budget,
+													int minimumAmount,
+													LayerTargetRiskThresholds riskThresholds,
+													Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		if (selected == null || selected.isEmpty() || budget == null || budget.signum() <= 0 || minimumAmount <= 0) {
 			return Map.of();
 		}
@@ -531,7 +552,32 @@ public class AssessorInstrumentSuggestionService {
 		if (total.compareTo(minTotal) < 0) {
 			return Map.of();
 		}
+		Map<String, BigDecimal> scoreWeights = buildAssessmentScoreWeights(selected, riskThresholds, riskThresholdsByLayer);
+		if (scoreWeights.isEmpty()) {
+			return allocateEvenly(selected, min, total);
+		}
+		Map<String, BigDecimal> allocations = new LinkedHashMap<>();
+		for (SelectedSuggestion suggestion : selected) {
+			allocations.put(suggestion.profile().isin(), min);
+		}
 		BigDecimal remaining = total.subtract(minTotal);
+		if (remaining.signum() <= 0) {
+			return allocations;
+		}
+		Map<String, BigDecimal> extras = allocateWeightedExtra(selected, remaining, scoreWeights);
+		for (SelectedSuggestion suggestion : selected) {
+			String isin = suggestion.profile().isin();
+			BigDecimal extra = extras.getOrDefault(isin, BigDecimal.ZERO);
+			allocations.put(isin, allocations.get(isin).add(extra));
+		}
+		return allocations;
+	}
+
+	private Map<String, BigDecimal> allocateEvenly(List<SelectedSuggestion> selected,
+											BigDecimal min,
+											BigDecimal total) {
+		int count = selected.size();
+		BigDecimal remaining = total.subtract(min.multiply(BigDecimal.valueOf(count)));
 		BigDecimal perExtra = remaining.divide(BigDecimal.valueOf(count), 0, RoundingMode.FLOOR);
 		BigDecimal base = min.add(perExtra);
 		Map<String, BigDecimal> allocations = new LinkedHashMap<>();
@@ -554,6 +600,108 @@ public class AssessorInstrumentSuggestionService {
 			}
 		}
 		return allocations;
+	}
+
+	private Map<String, BigDecimal> allocateWeightedExtra(List<SelectedSuggestion> selected,
+													BigDecimal remaining,
+													Map<String, BigDecimal> weights) {
+		Map<String, BigDecimal> raw = new LinkedHashMap<>();
+		for (SelectedSuggestion suggestion : selected) {
+			String isin = suggestion.profile().isin();
+			BigDecimal weight = weights.getOrDefault(isin, BigDecimal.ZERO);
+			raw.put(isin, remaining.multiply(weight));
+		}
+		Map<String, BigDecimal> rounded = new LinkedHashMap<>();
+		Map<String, BigDecimal> remainders = new LinkedHashMap<>();
+		BigDecimal sum = BigDecimal.ZERO;
+		for (Map.Entry<String, BigDecimal> entry : raw.entrySet()) {
+			BigDecimal value = entry.getValue() == null ? BigDecimal.ZERO : entry.getValue();
+			BigDecimal floor = value.setScale(0, RoundingMode.FLOOR);
+			BigDecimal fraction = value.subtract(floor);
+			rounded.put(entry.getKey(), floor);
+			remainders.put(entry.getKey(), fraction);
+			sum = sum.add(floor);
+		}
+		int steps = remaining.subtract(sum).intValue();
+		if (steps > 0 && !remainders.isEmpty()) {
+			List<Map.Entry<String, BigDecimal>> order = new ArrayList<>(remainders.entrySet());
+			order.sort((left, right) -> {
+				int cmp = right.getValue().compareTo(left.getValue());
+				if (cmp != 0) {
+					return cmp;
+				}
+				return left.getKey().compareTo(right.getKey());
+			});
+			int index = 0;
+			while (steps > 0) {
+				Map.Entry<String, BigDecimal> entry = order.get(index % order.size());
+				String isin = entry.getKey();
+				rounded.put(isin, rounded.get(isin).add(BigDecimal.ONE));
+				steps -= 1;
+				index += 1;
+			}
+		}
+		return rounded;
+	}
+
+	private Map<String, BigDecimal> buildAssessmentScoreWeights(List<SelectedSuggestion> selected,
+													LayerTargetRiskThresholds riskThresholds,
+													Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+		if (selected == null || selected.isEmpty() || assessmentService == null) {
+			return Map.of();
+		}
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		Map<Integer, LayerTargetRiskThresholds> normalizedByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
+		Set<String> isins = new LinkedHashSet<>();
+		for (SelectedSuggestion suggestion : selected) {
+			if (suggestion != null && suggestion.profile() != null && suggestion.profile().isin() != null) {
+				isins.add(suggestion.profile().isin());
+			}
+		}
+		if (isins.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, Integer> scores = assessmentService.assessScores(isins, thresholds, normalizedByLayer);
+		if (scores.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, BigDecimal> weights = new LinkedHashMap<>();
+		BigDecimal total = BigDecimal.ZERO;
+		for (SelectedSuggestion suggestion : selected) {
+			String isin = suggestion.profile().isin();
+			Integer score = scores.get(isin);
+			Integer layer = suggestion.profile() == null ? null : suggestion.profile().layer();
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
+			double cutoff = layerThresholds.getHighMin();
+			double factor = score == null ? 1.0 : scoreWeightFactor(score, cutoff);
+			BigDecimal weight = BigDecimal.valueOf(Math.max(0.0, factor));
+			weights.put(isin, weight);
+			total = total.add(weight);
+		}
+		if (total.signum() <= 0) {
+			return Map.of();
+		}
+		Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+		for (Map.Entry<String, BigDecimal> entry : weights.entrySet()) {
+			normalized.put(entry.getKey(), entry.getValue().divide(total, 8, RoundingMode.HALF_UP));
+		}
+		return normalized;
+	}
+
+	private double scoreWeightFactor(int score, double scoreCutoff) {
+		if (scoreCutoff <= 0) {
+			return 1.0;
+		}
+		double normalized = (scoreCutoff - (double) score + 1.0) / scoreCutoff;
+		if (normalized > 1.0) {
+			return 1.0;
+		}
+		if (normalized < MIN_SCORE_WEIGHT_FACTOR) {
+			return MIN_SCORE_WEIGHT_FACTOR;
+		}
+		return normalized;
 	}
 
 	private InstrumentProfile selectCandidateForGap(List<InstrumentProfile> candidates,
@@ -643,6 +791,15 @@ public class AssessorInstrumentSuggestionService {
 		if (holdingOverlap >= 0) {
 			components += 1;
 			sum += holdingOverlap;
+		}
+
+		double sectorOverlap = averageWeightedOverlap(candidate.sectorWeights(), existing, InstrumentProfile::sectorWeights);
+		if (sectorOverlap < 0) {
+			sectorOverlap = averageOverlap(candidate.sectors(), existing, InstrumentProfile::sectors);
+		}
+		if (sectorOverlap >= 0) {
+			components += 1;
+			sum += sectorOverlap;
 		}
 
 		if (components == 0) {
@@ -989,6 +1146,7 @@ public class AssessorInstrumentSuggestionService {
 		}
 		return switch (gap.type()) {
 			case SUB_CLASS -> "Fills missing sub-class: " + gap.value() + ".";
+			case SECTOR -> "Adds missing sector exposure: " + gap.value() + ".";
 			case THEME -> "Adds missing theme exposure: " + gap.value() + ".";
 			case LOCALISATION -> "Adds regional exposure to " + gap.value() + ".";
 			case DISTRIBUTION -> "Adds " + gap.value() + " share class not present in this layer.";
@@ -1114,8 +1272,9 @@ public class AssessorInstrumentSuggestionService {
 			Set<String> locales = extractLocales(name, subClass, layerNotes, Set.of());
 			boolean singleStock = isSingleStock(instrumentType, subClass, layerNotes);
 			InstrumentProfile profile = new InstrumentProfile(isin, name, layer, instrumentType, assetClass, subClass,
-					layerNotes, null, null, Set.of(), Set.of(), Map.of(), Map.of(), distribution, themes, locales, singleStock,
-					null, null, null, null, null, null, null, null, null, null, null, null, 0, 0);
+					layerNotes, null, null, Set.of(), Set.of(), Map.of(), Map.of(), null, Set.of(), Map.of(),
+					distribution, themes, locales, singleStock, null, null, null, null, null, null, null, null,
+					null, null, null, null, 0, 0);
 			profiles.put(isin, profile);
 		});
 		return profiles;
@@ -1148,6 +1307,9 @@ public class AssessorInstrumentSuggestionService {
 			Map<String, BigDecimal> holdingWeights = normalizeHoldingWeights(payload.topHoldings());
 			Set<String> regions = normalizeRegionNames(payload.regions());
 			Set<String> holdings = normalizeHoldingNames(payload.topHoldings());
+			String gicsSector = normalizeLabel(payload.gicsSector());
+			Set<String> sectors = normalizeSectorNames(payload.sectors(), payload.gicsSector());
+			Map<String, BigDecimal> sectorWeights = normalizeSectorWeights(payload.sectors(), payload.gicsSector());
 			BigDecimal earningsYieldLongterm = extractLongtermEarningsYield(payload);
 			BigDecimal earningsYieldHoldings = extractHoldingsEarningsYield(payload);
 			BigDecimal earningsYieldCurrent = extractCurrentEarningsYield(payload);
@@ -1167,9 +1329,10 @@ public class AssessorInstrumentSuggestionService {
 			int missingFieldCount = payload.missingFields() == null ? 0 : payload.missingFields().size();
 			int warningCount = payload.warnings() == null ? 0 : payload.warnings().size();
 			return new InstrumentProfile(isin, name, layer, instrumentType, assetClass, subClass, layerNotes, ter,
-					benchmark, regions, holdings, regionWeights, holdingWeights, distribution, themes, locales, singleStock,
-					earningsYieldLongterm, earningsYieldHoldings, earningsYieldCurrent, dividendYield, priceToBook, evToEbitda,
-					ebitdaEur, netIncomeEur, revenueEur, peMethod, peHorizon, negEarningsHandling, missingFieldCount, warningCount);
+					benchmark, regions, holdings, regionWeights, holdingWeights, gicsSector, sectors, sectorWeights,
+					distribution, themes, locales, singleStock, earningsYieldLongterm, earningsYieldHoldings,
+					earningsYieldCurrent, dividendYield, priceToBook, evToEbitda, ebitdaEur, netIncomeEur, revenueEur,
+					peMethod, peHorizon, negEarningsHandling, missingFieldCount, warningCount);
 		} catch (Exception ex) {
 			logger.debug("Failed to parse KB extraction payload for {}: {}", isin, ex.getMessage());
 			return null;
@@ -1503,6 +1666,39 @@ public class AssessorInstrumentSuggestionService {
 		return grouped;
 	}
 
+	private Map<String, InstrumentProfile> filterCandidatesByRisk(Map<String, InstrumentProfile> candidates,
+													LayerTargetRiskThresholds riskThresholds,
+													Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+		if (candidates == null || candidates.isEmpty()) {
+			return Map.of();
+		}
+		LayerTargetRiskThresholds thresholds = RiskThresholdsUtil.normalize(riskThresholds);
+		Map<Integer, LayerTargetRiskThresholds> normalizedByLayer =
+				RiskThresholdsUtil.normalizeByLayer(riskThresholdsByLayer, thresholds);
+		Map<String, Integer> scores = assessmentService == null
+				? Map.of()
+				: assessmentService.assessScores(candidates.keySet(), thresholds, normalizedByLayer);
+		if (scores.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, InstrumentProfile> filtered = new LinkedHashMap<>();
+		for (Map.Entry<String, InstrumentProfile> entry : candidates.entrySet()) {
+			if (entry.getKey() == null || entry.getValue() == null) {
+				continue;
+			}
+			Integer score = scores.get(entry.getKey());
+			InstrumentProfile profile = entry.getValue();
+			Integer layer = profile == null ? null : profile.layer();
+			LayerTargetRiskThresholds layerThresholds =
+					RiskThresholdsUtil.resolveForLayer(normalizedByLayer, thresholds, layer);
+			double cutoff = layerThresholds.getHighMin();
+			if (score != null && score < cutoff) {
+				filtered.put(entry.getKey(), entry.getValue());
+			}
+		}
+		return filtered;
+	}
+
 	private Set<String> normalizeRegionNames(List<InstrumentDossierExtractionPayload.RegionExposurePayload> regions) {
 		if (regions == null || regions.isEmpty()) {
 			return Set.of();
@@ -1562,6 +1758,51 @@ public class AssessorInstrumentSuggestionService {
 			BigDecimal weight = normalizeWeightPct(holding.weightPct());
 			if (weight != null) {
 				normalized.put(name, weight);
+			}
+		}
+		return normalized;
+	}
+
+	private Set<String> normalizeSectorNames(List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+									 String gicsSector) {
+		Set<String> normalized = new LinkedHashSet<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				String name = normalizeLabel(sector == null ? null : sector.name());
+				if (name != null) {
+					normalized.add(name);
+				}
+			}
+		}
+		if (normalized.isEmpty()) {
+			String fallback = normalizeLabel(gicsSector);
+			if (fallback != null) {
+				normalized.add(fallback);
+			}
+		}
+		return normalized.isEmpty() ? Set.of() : normalized;
+	}
+
+	private Map<String, BigDecimal> normalizeSectorWeights(
+			List<InstrumentDossierExtractionPayload.SectorExposurePayload> sectors,
+			String gicsSector) {
+		Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+		if (sectors != null) {
+			for (InstrumentDossierExtractionPayload.SectorExposurePayload sector : sectors) {
+				String name = normalizeLabel(sector == null ? null : sector.name());
+				if (name == null) {
+					continue;
+				}
+				BigDecimal weight = normalizeWeightPct(sector.weightPct());
+				if (weight != null) {
+					normalized.put(name, weight);
+				}
+			}
+		}
+		if (normalized.isEmpty()) {
+			String fallback = normalizeLabel(gicsSector);
+			if (fallback != null) {
+				normalized.put(fallback, BigDecimal.ONE);
 			}
 		}
 		return normalized;
@@ -1702,7 +1943,56 @@ public class AssessorInstrumentSuggestionService {
 									int minimumInstrumentAmount,
 									Map<Integer, Integer> maxSavingPlansPerLayer,
 									Set<String> excludedSnapshotIsins,
+									AssessorGapDetectionPolicy gapDetectionPolicy,
+									LayerTargetRiskThresholds riskThresholds,
+									Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+		public SuggestionRequest(List<AssessorEngine.SavingPlanItem> savingPlans,
+									Set<String> existingInstrumentIsins,
+									Map<Integer, BigDecimal> savingPlanBudgets,
+									Map<Integer, BigDecimal> oneTimeBudgets,
+									int minimumSavingPlanSize,
+									int minimumRebalancingAmount,
+									int minimumInstrumentAmount,
+									Map<Integer, Integer> maxSavingPlansPerLayer,
+									Set<String> excludedSnapshotIsins,
+									AssessorGapDetectionPolicy gapDetectionPolicy,
+									LayerTargetRiskThresholds riskThresholds) {
+			this(savingPlans,
+				existingInstrumentIsins,
+				savingPlanBudgets,
+				oneTimeBudgets,
+				minimumSavingPlanSize,
+				minimumRebalancingAmount,
+				minimumInstrumentAmount,
+				maxSavingPlansPerLayer,
+				excludedSnapshotIsins,
+				gapDetectionPolicy,
+				riskThresholds,
+				Map.of());
+		}
+		public SuggestionRequest(List<AssessorEngine.SavingPlanItem> savingPlans,
+									Set<String> existingInstrumentIsins,
+									Map<Integer, BigDecimal> savingPlanBudgets,
+									Map<Integer, BigDecimal> oneTimeBudgets,
+									int minimumSavingPlanSize,
+									int minimumRebalancingAmount,
+									int minimumInstrumentAmount,
+									Map<Integer, Integer> maxSavingPlansPerLayer,
+									Set<String> excludedSnapshotIsins,
 									AssessorGapDetectionPolicy gapDetectionPolicy) {
+			this(savingPlans,
+				existingInstrumentIsins,
+				savingPlanBudgets,
+				oneTimeBudgets,
+				minimumSavingPlanSize,
+				minimumRebalancingAmount,
+				minimumInstrumentAmount,
+				maxSavingPlansPerLayer,
+				excludedSnapshotIsins,
+				gapDetectionPolicy,
+				new LayerTargetRiskThresholds(0.0, 100.0),
+				Map.of());
+		}
 	}
 
 	record SavingPlanWeightRequest(List<AssessorEngine.SavingPlanItem> savingPlans,
@@ -1728,23 +2018,26 @@ public class AssessorInstrumentSuggestionService {
 	}
 
 	private record InstrumentProfile(String isin,
-									 String name,
-									 Integer layer,
-									 String instrumentType,
-	 String assetClass,
-	 String subClass,
-	 String layerNotes,
-	 BigDecimal ongoingChargesPct,
-	 String benchmarkIndex,
-	 Set<String> regions,
-	 Set<String> holdings,
-	 Map<String, BigDecimal> regionWeights,
-	 Map<String, BigDecimal> holdingWeights,
-	 String distribution,
-	 Set<String> themes,
-	 Set<String> locales,
-	 boolean singleStock,
-	 BigDecimal earningsYieldLongterm,
+										 String name,
+										 Integer layer,
+										 String instrumentType,
+		String assetClass,
+		String subClass,
+		String layerNotes,
+		BigDecimal ongoingChargesPct,
+		String benchmarkIndex,
+		Set<String> regions,
+		Set<String> holdings,
+		Map<String, BigDecimal> regionWeights,
+		Map<String, BigDecimal> holdingWeights,
+		String gicsSector,
+		Set<String> sectors,
+		Map<String, BigDecimal> sectorWeights,
+		String distribution,
+		Set<String> themes,
+		Set<String> locales,
+		boolean singleStock,
+		BigDecimal earningsYieldLongterm,
 	 BigDecimal earningsYieldHoldings,
 	 BigDecimal earningsYieldCurrent,
 	 BigDecimal dividendYield,
@@ -1768,12 +2061,14 @@ public class AssessorInstrumentSuggestionService {
 				case THEME -> themes != null && themes.contains(value);
 				case LOCALISATION -> locales != null && locales.contains(value);
 				case DISTRIBUTION -> distribution != null && distribution.equalsIgnoreCase(value);
+				case SECTOR -> sectors != null && sectors.contains(value);
 			};
 		}
 	}
 
 	private enum GapType {
 		SUB_CLASS,
+		SECTOR,
 		THEME,
 		LOCALISATION,
 		DISTRIBUTION
@@ -1783,35 +2078,43 @@ public class AssessorInstrumentSuggestionService {
 	}
 
 	private record MissingCategories(Set<String> subClasses,
-									 Set<String> themes,
-									 Set<String> locales,
-									 Set<String> distributions) {
+								 Set<String> sectors,
+								 Set<String> themes,
+								 Set<String> locales,
+								 Set<String> distributions) {
 		static MissingCategories from(LayerCoverage existing, LayerCoverage candidates) {
 			Set<String> missingSub = diff(candidates.subClasses, existing.subClasses);
+			Set<String> missingSectors = diff(candidates.sectors, existing.sectors);
 			Set<String> missingThemes = diff(candidates.themes, existing.themes);
 			Set<String> missingLocales = diff(candidates.locales, existing.locales);
 			Set<String> missingDist = diff(candidates.distributions, existing.distributions);
-			return new MissingCategories(missingSub, missingThemes, missingLocales, missingDist);
+			return new MissingCategories(missingSub, missingSectors, missingThemes, missingLocales, missingDist);
 		}
 
 		static MissingCategories empty() {
-			return new MissingCategories(Set.of(), Set.of(), Set.of(), Set.of());
+			return new MissingCategories(Set.of(), Set.of(), Set.of(), Set.of(), Set.of());
 		}
 
 		MissingCategories forLayer(int layer) {
 			if (layer == 3) {
 				return this;
 			}
-			return new MissingCategories(subClasses, Set.of(), locales, distributions);
+			if (layer == 1 || layer == 5) {
+				return new MissingCategories(subClasses, Set.of(), Set.of(), locales, distributions);
+			}
+			return new MissingCategories(subClasses, sectors, Set.of(), locales, distributions);
 		}
 
 		boolean isEmpty() {
-			return subClasses.isEmpty() && themes.isEmpty() && locales.isEmpty() && distributions.isEmpty();
+			return subClasses.isEmpty() && sectors.isEmpty() && themes.isEmpty()
+					&& locales.isEmpty() && distributions.isEmpty();
 		}
 
 		double severityScore(int layer) {
 			double themeWeight = layer == 3 ? GAP_WEIGHT_THEME : GAP_WEIGHT_THEME_SECONDARY;
+			double sectorWeight = (layer == 3 || layer == 4) ? GAP_WEIGHT_SECTOR : GAP_WEIGHT_SECTOR_SECONDARY;
 			return (subClasses.size() * GAP_WEIGHT_SUB_CLASS)
+					+ (sectors.size() * sectorWeight)
 					+ (themes.size() * themeWeight)
 					+ (locales.size() * GAP_WEIGHT_LOCALE)
 					+ (distributions.size() * GAP_WEIGHT_DISTRIBUTION);
@@ -1825,6 +2128,19 @@ public class AssessorInstrumentSuggestionService {
 			String sub = normalize(profile.subClass());
 			if (sub != null && subClasses.contains(sub)) {
 				score += GAP_WEIGHT_SUB_CLASS;
+			}
+			double sectorWeight = layer != null && (layer == 3 || layer == 4)
+					? GAP_WEIGHT_SECTOR
+					: GAP_WEIGHT_SECTOR_SECONDARY;
+			if (sectorWeight > 0 && profile.sectors() != null) {
+				double sectorScore = 0.0;
+				for (String sector : profile.sectors()) {
+					if (!sectors.contains(sector)) {
+						continue;
+					}
+					sectorScore += sectorWeight * resolveSectorWeight(profile, sector);
+				}
+				score += Math.min(1.0, sectorScore);
 			}
 			double themeWeight = layer != null && layer == 3 ? GAP_WEIGHT_THEME : GAP_WEIGHT_THEME_SECONDARY;
 			if (themeWeight > 0 && profile.themes() != null) {
@@ -1861,6 +2177,12 @@ public class AssessorInstrumentSuggestionService {
 			if (sub != null) {
 				subRemaining.remove(sub);
 			}
+			Set<String> sectorRemaining = new LinkedHashSet<>(sectors);
+			if (profile.sectors() != null) {
+				for (String sector : profile.sectors()) {
+					sectorRemaining.remove(sector);
+				}
+			}
 			Set<String> themeRemaining = new LinkedHashSet<>(themes);
 			if (layer != null && layer == 3 && profile.themes() != null) {
 				for (String theme : profile.themes()) {
@@ -1878,12 +2200,13 @@ public class AssessorInstrumentSuggestionService {
 			if (dist != null) {
 				distRemaining.remove(dist);
 			}
-			return new MissingCategories(subRemaining, themeRemaining, localeRemaining, distRemaining);
+			return new MissingCategories(subRemaining, sectorRemaining, themeRemaining, localeRemaining, distRemaining);
 		}
 
 		List<CoverageGap> toGapList() {
 			List<CoverageGap> gaps = new ArrayList<>();
 			subClasses.forEach(value -> gaps.add(new CoverageGap(GapType.SUB_CLASS, value)));
+			sectors.forEach(value -> gaps.add(new CoverageGap(GapType.SECTOR, value)));
 			themes.forEach(value -> gaps.add(new CoverageGap(GapType.THEME, value)));
 			locales.forEach(value -> gaps.add(new CoverageGap(GapType.LOCALISATION, value)));
 			distributions.forEach(value -> gaps.add(new CoverageGap(GapType.DISTRIBUTION, value)));
@@ -1897,6 +2220,14 @@ public class AssessorInstrumentSuggestionService {
 			int count = 0;
 			if (profile.subClass() != null && subClasses.contains(profile.subClass().toLowerCase(Locale.ROOT))) {
 				count += 1;
+			}
+			if (profile.sectors() != null) {
+				for (String sector : profile.sectors()) {
+					if (sectors.contains(sector)) {
+						count += 1;
+						break;
+					}
+				}
 			}
 			if (profile.themes() != null) {
 				for (String theme : profile.themes()) {
@@ -1928,6 +2259,13 @@ public class AssessorInstrumentSuggestionService {
 			String sub = normalize(profile.subClass());
 			if (sub != null && subClasses.contains(sub)) {
 				covered.add(new CoverageGap(GapType.SUB_CLASS, sub));
+			}
+			if (profile.sectors() != null) {
+				for (String sector : profile.sectors()) {
+					if (sectors.contains(sector)) {
+						covered.add(new CoverageGap(GapType.SECTOR, sector));
+					}
+				}
 			}
 			if (profile.themes() != null && profile.layer() != null && profile.layer() == 3) {
 				for (String theme : profile.themes()) {
@@ -1987,10 +2325,26 @@ public class AssessorInstrumentSuggestionService {
 			}
 			return Math.min(value, 1.0);
 		}
+
+		private static double resolveSectorWeight(InstrumentProfile profile, String sector) {
+			if (profile == null || sector == null || profile.sectorWeights() == null) {
+				return 1.0;
+			}
+			BigDecimal weight = profile.sectorWeights().get(sector);
+			if (weight == null || weight.signum() <= 0) {
+				return 1.0;
+			}
+			double value = weight.doubleValue();
+			if (value <= 0.0) {
+				return 1.0;
+			}
+			return Math.min(value, 1.0);
+		}
 	}
 
 	private static class LayerCoverage {
 		private final Set<String> subClasses = new LinkedHashSet<>();
+		private final Set<String> sectors = new LinkedHashSet<>();
 		private final Set<String> themes = new LinkedHashSet<>();
 		private final Set<String> locales = new LinkedHashSet<>();
 		private final Set<String> distributions = new LinkedHashSet<>();
@@ -2002,6 +2356,13 @@ public class AssessorInstrumentSuggestionService {
 			String sub = normalizeLabel(profile.subClass());
 			if (sub != null) {
 				subClasses.add(sub);
+			}
+			if (profile.sectors() != null) {
+				for (String sector : profile.sectors()) {
+					if (sector != null && !sector.isBlank()) {
+						sectors.add(sector);
+					}
+				}
 			}
 			if (profile.themes() != null) {
 				for (String theme : profile.themes()) {

@@ -49,7 +49,7 @@ public class KnowledgeBaseRefreshScheduler {
 	private void runOnce() {
 		try {
 			KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
-			if (config.enabled() && availabilityService.isAvailable()) {
+			if (config.enabled() && availabilityService.isLlmAvailable()) {
 				if (!actionService.hasRunningType(KnowledgeBaseLlmActionType.REFRESH)) {
 					actionService.startRefreshBatch(
 							new KnowledgeBaseRefreshBatchRequestDto(null, null, false, null),

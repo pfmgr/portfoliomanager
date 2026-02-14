@@ -379,7 +379,7 @@ test('rebalancer displays savings plan rebalancing', async ({ page }) => {
   await page.goto('/rebalancer')
   await expect(page.getByRole('heading', { name: 'Savings plan Rebalancing' })).toBeVisible()
   await expect(page.getByText('Monthly by Layer')).toBeVisible()
-  await expect(page.getByText('Rebalancing Proposal (Savings plan weights)')).toBeVisible()
+  await expect(page.getByText('Rebalancing Proposal (Savings plan amounts, EUR)')).toBeVisible()
   await expect(page.getByText('Proposal source')).toBeVisible()
   await expect(page.getByText('Valuation glossary', { exact: true })).toBeVisible()
 })

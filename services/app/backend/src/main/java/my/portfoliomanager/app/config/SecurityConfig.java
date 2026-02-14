@@ -9,7 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -17,6 +16,8 @@ import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -24,10 +25,15 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.OctetSequenceKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
 
 @Configuration
 public class SecurityConfig {
@@ -82,7 +88,7 @@ public class SecurityConfig {
 	}
 
 	@Bean
-	public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+	public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationConverter jwtAuthenticationConverter) throws Exception {
 		http
 			.csrf(csrf -> csrf.disable())
 			.sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -92,10 +98,74 @@ public class SecurityConfig {
 				.requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api/**").authenticated()
 				.anyRequest().denyAll()
 			)
-			.httpBasic(Customizer.withDefaults())
-			.oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()));
+			.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter)));
 
 		return http.build();
+	}
+
+	@Bean
+	public JwtAuthenticationConverter jwtAuthenticationConverter() {
+		JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+		converter.setJwtGrantedAuthoritiesConverter(jwt -> {
+			List<GrantedAuthority> authorities = new ArrayList<>();
+			Object roles = jwt.getClaim("roles");
+			addRoles(authorities, roles);
+			Object scope = jwt.getClaim("scope");
+			addScopes(authorities, scope);
+			return authorities;
+		});
+		return converter;
+	}
+
+	private void addRoles(List<GrantedAuthority> authorities, Object rolesClaim) {
+		if (rolesClaim == null) {
+			return;
+		}
+		if (rolesClaim instanceof String rolesString) {
+			for (String role : rolesString.split("[,\\s]+")) {
+				addRole(authorities, role);
+			}
+			return;
+		}
+		if (rolesClaim instanceof Collection<?> rolesCollection) {
+			for (Object role : rolesCollection) {
+				addRole(authorities, role == null ? null : role.toString());
+			}
+		}
+	}
+
+	private void addRole(List<GrantedAuthority> authorities, String role) {
+		if (role == null || role.isBlank()) {
+			return;
+		}
+		String normalized = role.trim().toUpperCase(Locale.ROOT);
+		String prefixed = normalized.startsWith("ROLE_") ? normalized : "ROLE_" + normalized;
+		authorities.add(new SimpleGrantedAuthority(prefixed));
+	}
+
+	private void addScopes(List<GrantedAuthority> authorities, Object scopeClaim) {
+		if (scopeClaim == null) {
+			return;
+		}
+		if (scopeClaim instanceof String scopeString) {
+			for (String scope : scopeString.split("\\s+")) {
+				addScope(authorities, scope);
+			}
+			return;
+		}
+		if (scopeClaim instanceof Collection<?> scopeCollection) {
+			for (Object scope : scopeCollection) {
+				addScope(authorities, scope == null ? null : scope.toString());
+			}
+		}
+	}
+
+	private void addScope(List<GrantedAuthority> authorities, String scope) {
+		if (scope == null || scope.isBlank()) {
+			return;
+		}
+		String normalized = scope.trim();
+		authorities.add(new SimpleGrantedAuthority("SCOPE_" + normalized));
 	}
 
 	private byte[] resolveJwtSecret() {

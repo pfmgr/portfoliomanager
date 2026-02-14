@@ -2,6 +2,7 @@ package my.portfoliomanager.app.service;
 
 import tools.jackson.databind.ObjectMapper;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 class AssessorInstrumentSuggestionServiceTest {
 	private static final String JWT_SECRET = UUID.randomUUID().toString();
+	private static final LayerTargetRiskThresholds DEFAULT_THRESHOLDS = new LayerTargetRiskThresholds(0.0, 100.0);
 
 	@Autowired
 	private AssessorInstrumentSuggestionService suggestionService;
@@ -97,7 +99,8 @@ class AssessorInstrumentSuggestionServiceTest {
 						25,
 						Map.of(1, 2),
 						Set.of(),
-						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS,
+						DEFAULT_THRESHOLDS
 				)
 		);
 
@@ -145,7 +148,8 @@ class AssessorInstrumentSuggestionServiceTest {
 						25,
 						Map.of(1, 2),
 						Set.of(),
-						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS,
+						DEFAULT_THRESHOLDS
 				)
 		);
 
@@ -195,7 +199,8 @@ class AssessorInstrumentSuggestionServiceTest {
 						25,
 						Map.of(1, 2),
 						Set.of(),
-						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS,
+						DEFAULT_THRESHOLDS
 				)
 		);
 
@@ -927,11 +932,16 @@ class AssessorInstrumentSuggestionServiceTest {
 				"ETF",
 				"Equity",
 				subClass,
+				null,
+				null,
+				null,
+				null,
 				layer,
 				notes,
 				new InstrumentDossierExtractionPayload.EtfPayload(ter, benchmark),
 				null,
 				regions,
+				null,
 				holdings,
 				null,
 				null,
@@ -955,11 +965,16 @@ class AssessorInstrumentSuggestionServiceTest {
 				"ETF",
 				"Equity",
 				subClass,
+				null,
+				null,
+				null,
+				null,
 				layer,
 				notes,
 				new InstrumentDossierExtractionPayload.EtfPayload(ter, benchmark),
 				null,
 				regions,
+				null,
 				holdings,
 				null,
 				valuation,
@@ -994,14 +1009,17 @@ class AssessorInstrumentSuggestionServiceTest {
 				"ETF",
 				"Equity",
 				subClass,
+				null,
+				null,
+				null,
+				null,
 				layer,
 				notes,
 				new InstrumentDossierExtractionPayload.EtfPayload(ter, benchmark),
 				null,
 				regions,
+				null,
 				holdings,
-				null,
-				null,
 				null,
 				missing,
 				warningList
@@ -1021,14 +1039,17 @@ class AssessorInstrumentSuggestionServiceTest {
 				"Equity share",
 				"Equity",
 				subClass,
+				null,
+				null,
+				null,
+				null,
 				layer,
 				notes,
 				null,
 				null,
 				regions,
+				null,
 				holdings,
-				null,
-				null,
 				null,
 				null,
 				null

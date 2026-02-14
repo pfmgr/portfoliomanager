@@ -3,6 +3,7 @@ package my.portfoliomanager.app.service;
 import my.portfoliomanager.app.dto.InstrumentProposalDto;
 import my.portfoliomanager.app.dto.InstrumentProposalGatingDto;
 import my.portfoliomanager.app.dto.SavingPlanProposalLayerDto;
+import my.portfoliomanager.app.model.LayerTargetRiskThresholds;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.util.Map;
 import java.util.List;
 import java.util.UUID;
 
@@ -80,7 +82,9 @@ class AdvisorServiceInstrumentTotalsTest {
 						Mockito.anyMap(),
 						ArgumentMatchers.<Integer>any(),
 						ArgumentMatchers.<Integer>any(),
-						Mockito.anyBoolean()))
+						Mockito.anyBoolean(),
+						ArgumentMatchers.<LayerTargetRiskThresholds>any(),
+						ArgumentMatchers.<Map<Integer, LayerTargetRiskThresholds>>any()))
 				.thenReturn(result);
 	}
 

@@ -30,28 +30,28 @@ public class KnowledgeBaseLlmActionController {
 	@GetMapping
 	@Operation(summary = "List LLM actions")
 	public List<KnowledgeBaseLlmActionDto> listActions() {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return actionService.listActions();
 	}
 
 	@GetMapping("/{actionId}")
 	@Operation(summary = "Get LLM action")
 	public KnowledgeBaseLlmActionDto getAction(@PathVariable("actionId") String actionId) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return actionService.getAction(actionId);
 	}
 
 	@PostMapping("/{actionId}/cancel")
 	@Operation(summary = "Cancel LLM action")
 	public KnowledgeBaseLlmActionDto cancelAction(@PathVariable("actionId") String actionId) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return actionService.cancel(actionId);
 	}
 
 	@DeleteMapping("/{actionId}")
 	@Operation(summary = "Dismiss LLM action")
 	public void dismissAction(@PathVariable("actionId") String actionId) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		actionService.dismiss(actionId);
 	}
 }

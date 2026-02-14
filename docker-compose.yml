@@ -48,6 +48,8 @@ services:
       LLM_PROVIDER_BASE_URL: ${LLM_PROVIDER_BASE_URL:-https://api.openai.com/v1}
       KB_ENABLED: ${KB_ENABLED:-true}
       KB_LLM_ENABLED: ${KB_LLM_ENABLED:-false}
+      APP_KB_ENABLED: ${KB_ENABLED:-true}
+      APP_KB_LLM_ENABLED: ${KB_LLM_ENABLED:-false}
     depends_on:
       - db_portfolio
     ports:

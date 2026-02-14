@@ -1,4 +1,4 @@
 package my.portfoliomanager.app.dto;
 
-public record LayerTargetRiskThresholdsDto(Integer lowMax, Integer highMin) {
+public record LayerTargetRiskThresholdsDto(Double lowMax, Double highMin) {
 }

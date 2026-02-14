@@ -11,10 +11,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
@@ -24,7 +26,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -79,6 +81,10 @@ class RulesetApiIntegrationTest {
 		jdbcTemplate.update("insert into snapshot_positions (snapshot_id, isin, name, value_eur, currency) values (10, 'DE000A', 'Test ETF', 1000.00, 'EUR')");
 	}
 
+	private RequestPostProcessor adminJwt() {
+		return jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+	}
+
 	@AfterEach
 	void tearDown() {
 		databaseCleaner.clean();
@@ -107,7 +113,7 @@ class RulesetApiIntegrationTest {
 		String body = "{\"contentJson\": " + quoteJson(rulesetJson) + "}";
 
 		mockMvc.perform(post("/api/rulesets/default/simulate")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isOk())
@@ -140,7 +146,7 @@ class RulesetApiIntegrationTest {
 		String body = "{\"contentJson\": " + quoteJson(rulesetJson) + "}";
 
 		mockMvc.perform(post("/api/rulesets/default/simulate")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isOk())
@@ -152,7 +158,7 @@ class RulesetApiIntegrationTest {
 		String body = "{\"contentJson\": \"{\\\"schema_version\\\":99}\"}";
 
 		mockMvc.perform(post("/api/rulesets/default/validate")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isOk())
@@ -181,7 +187,7 @@ class RulesetApiIntegrationTest {
 		String body = "{\"contentJson\": " + quoteJson(rulesetJson) + ", \"dryRun\": true, \"isins\": [\"DE000A\"]}";
 
 		mockMvc.perform(post("/api/rulesets/default/apply")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isOk())
@@ -221,7 +227,7 @@ class RulesetApiIntegrationTest {
 		String body = "{\"contentJson\": " + quoteJson(rulesetJson) + ", \"dryRun\": false, \"isins\": [\"DE000A\"]}";
 
 		mockMvc.perform(post("/api/rulesets/default/apply")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isOk())
@@ -261,14 +267,14 @@ class RulesetApiIntegrationTest {
 		jdbcTemplate.update("delete from rulesets");
 
 		mockMvc.perform(post("/api/rulesets/default/simulate")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isBadRequest());
 	}
 
 	@Test
 	void getRulesetNotFoundReturnsBadRequest() throws Exception {
 		mockMvc.perform(get("/api/rulesets/missing")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isBadRequest());
 	}
 
@@ -277,7 +283,7 @@ class RulesetApiIntegrationTest {
 		String body = "{}";
 
 		mockMvc.perform(post("/api/rulesets/default/validate")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isBadRequest())
@@ -289,7 +295,7 @@ class RulesetApiIntegrationTest {
 		jdbcTemplate.update("insert into rulesets (id, name, version, content_yaml, active, created_at, updated_at) values (2, 'default', 1, 'schema_version: 1', true, now(), now())");
 
 		mockMvc.perform(get("/api/rulesets")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$[0].name").value("default"));
 	}
@@ -299,7 +305,7 @@ class RulesetApiIntegrationTest {
 		jdbcTemplate.update("insert into rulesets (id, name, version, content_yaml, active, created_at, updated_at) values (3, 'default', 2, 'schema_version: 1', false, now(), now())");
 
 		mockMvc.perform(get("/api/rulesets/default")
-						.with(httpBasic("admin", "admin")))
+						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.version").value(2));
 	}
@@ -317,7 +323,7 @@ class RulesetApiIntegrationTest {
 		String body = "{\"contentJson\": " + quoteJson(rulesetJson) + ", \"activate\": true}";
 
 		mockMvc.perform(put("/api/rulesets/default")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isCreated())
@@ -329,7 +335,7 @@ class RulesetApiIntegrationTest {
 		String body = "{\"contentJson\": \"{\\\"schema_version\\\":\\\"bad\\\"}\", \"activate\": true}";
 
 		mockMvc.perform(put("/api/rulesets/default")
-						.with(httpBasic("admin", "admin"))
+						.with(adminJwt())
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isBadRequest());

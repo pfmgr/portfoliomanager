@@ -2,6 +2,9 @@
 package my.portfoliomanager.app.service;
 
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -11,6 +14,83 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class KnowledgeBaseQualityGateServiceTest {
 	private final KnowledgeBaseQualityGateService service = new KnowledgeBaseQualityGateService();
+	private final ObjectMapper objectMapper = new ObjectMapper();
+
+	@Test
+	void evaluateDossier_acceptsBoldIsinHeaderAndBulletSections() {
+		String content = "# **DE000DK2CDS0 - Sample**\n"
+				+ "## Quick profile (table)\n"
+				+ "instrument_type: ETF\n"
+				+ "## Classification\n"
+				+ "- Risk\n"
+				+ "## Costs & structure\n"
+				+ "- Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## Sources\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"DE000DK2CDS0",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain(
+				"missing_isin_header",
+				"missing_section:risk",
+				"missing_section:exposures"
+		);
+	}
+
+	@Test
+	void evaluateDossier_acceptsLayerNotesAndReferencesHeading() {
+		String content = "# IE00BC7GZW19 - Sample\n"
+				+ "## Quick profile\n"
+				+ "instrument_type: ETF\n"
+				+ "## Layer notes\n"
+				+ "## Risk\n"
+				+ "## Costs and structure\n"
+				+ "## Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## References\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"IE00BC7GZW19",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain(
+				"missing_section:classification",
+				"missing_section:sources"
+		);
+	}
+
+	@Test
+	void evaluateDossier_acceptsAnchorDataSourcesHeading() {
+		String content = "# DE000A1ML7J1 - Sample\n"
+				+ "## Quick profile\n"
+				+ "instrument_type: Equity\n"
+				+ "## Classification\n"
+				+ "## Risk\n"
+				+ "## Costs & structure\n"
+				+ "## Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## Anchor data sources (for context and traceability)\n"
+				+ "1) https://example.com\n";
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"DE000A1ML7J1",
+				content,
+				buildCitations(),
+				null
+		);
+
+		assertThat(result.reasons()).doesNotContain("missing_section:sources");
+	}
 
 	@Test
 	void evaluateExtractionEvidence_fundProfile_requiresFundFieldsAndHoldings() {
@@ -109,6 +189,112 @@ class KnowledgeBaseQualityGateServiceTest {
 				"pe_ttm_holdings",
 				"market_cap",
 				"holdings_asof"
+		);
+	}
+
+	@Test
+	void evaluateExtractionEvidence_equityScaledNumbersMatch() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE0007030009",
+				"Equity",
+				null,
+				null,
+				financials(
+						new BigDecimal("11000000000"),
+						new BigDecimal("840000000"),
+						new BigDecimal("8.10")
+				),
+				valuation(
+						new BigDecimal("1628.00"),
+						new BigDecimal("88.98"),
+						new BigDecimal("14.51"),
+						new BigDecimal("74740000000"),
+						new BigDecimal("1920000000"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						List.of(
+							epsHistory(2024, new BigDecimal("16.51")),
+							epsHistory(2023, new BigDecimal("12.32"))
+						)
+				)
+		);
+		String dossierContent = "revenue: 11.00 B EUR (TTM)\n"
+				+ "net_income: 840.00 M EUR (TTM)\n"
+				+ "ebitda: 1.92 B EUR (TTM)\n"
+				+ "price: 1628.00 EUR\n"
+				+ "pe_current: 88.98\n"
+				+ "pb_current: 14.51\n"
+				+ "dividend_per_share: 8.10 EUR\n"
+				+ "eps_history:\n"
+				+ "- 2024: 16.51 EUR\n"
+				+ "- 2023: 12.32 EUR\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain(
+				"revenue",
+				"net_income",
+				"ebitda"
+		);
+	}
+
+	@Test
+	void evaluateExtractionEvidence_equityScaledNumbersWithCurrencyTokenMatch() {
+		InstrumentDossierExtractionPayload payload = payload(
+				"DE0007236101",
+				"Equity",
+				null,
+				null,
+				financials(
+						new BigDecimal("78914000000"),
+						new BigDecimal("8992000000"),
+						new BigDecimal("5.20")
+				),
+				valuation(
+						new BigDecimal("241.10"),
+						new BigDecimal("26.13"),
+						new BigDecimal("3.21"),
+						new BigDecimal("199710000000"),
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						null,
+						List.of(
+								epsHistory(2024, new BigDecimal("11.15")),
+								epsHistory(2023, new BigDecimal("10.77"))
+						)
+				)
+		);
+		String dossierContent = "revenue: 78,914.0 EUR million (FY)\n"
+				+ "net_income: 8,992.0 EUR million (FY)\n"
+				+ "price: 241.10 EUR\n"
+				+ "pe_current: 26.13\n"
+				+ "pb_current: 3.21\n"
+				+ "dividend_per_share: 5.20 EUR\n"
+				+ "eps_history:\n"
+				+ "- 2024: 11.15 EUR\n"
+				+ "- 2023: 10.77 EUR\n";
+
+		KnowledgeBaseQualityGateService.EvidenceResult result =
+				service.evaluateExtractionEvidence(dossierContent, payload, null);
+
+		assertThat(result.missingEvidence()).doesNotContain(
+				"revenue",
+				"net_income"
 		);
 	}
 
@@ -295,6 +481,18 @@ class KnowledgeBaseQualityGateServiceTest {
 		return payloadWithLayer(isin, instrumentType, null, etf, risk, financials, valuation);
 	}
 
+	private ArrayNode buildCitations() {
+		ArrayNode citations = objectMapper.createArrayNode();
+		ObjectNode entry = objectMapper.createObjectNode();
+		entry.put("id", "1");
+		entry.put("title", "Example");
+		entry.put("url", "https://example.com");
+		entry.put("publisher", "Example");
+		entry.put("accessed_at", "2026-02-08");
+		citations.add(entry);
+		return citations;
+	}
+
 	private InstrumentDossierExtractionPayload payloadWithLayer(
 			String isin,
 			String instrumentType,
@@ -310,10 +508,15 @@ class KnowledgeBaseQualityGateServiceTest {
 				instrumentType,
 				null,
 				null,
+				null,
+				null,
+				null,
+				null,
 				layer,
 				null,
 				etf,
 				risk,
+				null,
 				null,
 				null,
 				financials,
@@ -428,7 +631,8 @@ class KnowledgeBaseQualityGateServiceTest {
 
 	private InstrumentDossierExtractionPayload.RiskPayload risk(int sri) {
 		return new InstrumentDossierExtractionPayload.RiskPayload(
-				new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(sri)
+				new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(sri),
+				null
 		);
 	}
 

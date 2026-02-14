@@ -9,6 +9,7 @@ public record AssessorDiagnosticsDto(
 		@JsonProperty("suppressed_deltas_count") int suppressedDeltasCount,
 		@JsonProperty("suppressed_amount_total") Double suppressedAmountTotal,
 		@JsonProperty("redistribution_notes") List<String> redistributionNotes,
+		@JsonProperty("risk_warnings") List<String> riskWarnings,
 		@JsonProperty("kb_enabled") boolean kbEnabled,
 		@JsonProperty("kb_complete") boolean kbComplete,
 		@JsonProperty("missing_kb_isins") List<String> missingKbIsins

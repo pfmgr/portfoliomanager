@@ -221,6 +221,7 @@ class KnowledgeBaseServiceTest {
 				current.bulkRequirePrimarySource(),
 				current.alternativesMinSimilarityScore(),
 				current.extractionEvidenceRequired(),
+				current.qualityGateRetryLimit(),
 				current.qualityGateProfiles()
 		);
 		configService.updateConfig(updated);
@@ -284,7 +285,12 @@ class KnowledgeBaseServiceTest {
 				null,
 				null,
 				null,
+				null,
+				null,
 				List.of(),
+				null,
+				List.of(),
+				null,
 				List.of(),
 				List.of()
 		);
