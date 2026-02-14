@@ -39,7 +39,7 @@ public class KnowledgeBaseRunController {
 											@RequestParam(required = false) String status,
 											@RequestParam(defaultValue = "0") int page,
 											@RequestParam(defaultValue = "50") int size) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		KnowledgeBaseRunStatus statusFilter = null;
 		if (status != null && !status.isBlank()) {
 			statusFilter = KnowledgeBaseRunStatus.valueOf(status.trim().toUpperCase());
