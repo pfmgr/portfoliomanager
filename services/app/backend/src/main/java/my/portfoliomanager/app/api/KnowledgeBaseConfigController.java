@@ -28,14 +28,14 @@ public class KnowledgeBaseConfigController {
 	@GetMapping
 	@Operation(summary = "Get knowledge base config")
 	public KnowledgeBaseConfigDto getConfig() {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return configService.getConfig();
 	}
 
 	@PutMapping
 	@Operation(summary = "Update knowledge base config")
 	public KnowledgeBaseConfigDto updateConfig(@Valid @RequestBody KnowledgeBaseConfigDto request) {
-		availabilityService.assertAvailable();
+		availabilityService.assertEnabled();
 		return configService.updateConfig(request);
 	}
 }
