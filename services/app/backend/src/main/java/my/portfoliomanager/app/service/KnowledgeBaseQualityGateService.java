@@ -10,8 +10,10 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -27,7 +29,9 @@ public class KnowledgeBaseQualityGateService {
 			new SectionRequirement("costs_structure", Pattern.compile(
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
 							"(costs\\s*&\\s*structure|costs\\s*and\\s*structure|costs\\s*structure|" +
-							"fees\\s*&\\s*structure|fees\\s*and\\s*structure|fees\\s*structure)\\b")),
+							"fees\\s*&\\s*structure|fees\\s*and\\s*structure|fees\\s*structure|" +
+							"ter\\s*&\\s*fees?|fees?\\s*&\\s*ter|" +
+							"prospectus\\s*(?:/|and)\\s*key\\s*information|prospectus\\s*key\\s*information)\\b")),
 			new SectionRequirement("exposures", Pattern.compile(
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*(exposures?|holdings|top\\s*holdings|portfolio)\\b")),
 			new SectionRequirement("valuation_profitability", Pattern.compile(
@@ -35,8 +39,32 @@ public class KnowledgeBaseQualityGateService {
 							"(valuation\\s*&\\s*profitability|valuation\\s*and\\s*profitability|valuation|profitability)\\b")),
 			new SectionRequirement("sources", Pattern.compile(
 					"(?im)^\\s*(?:#{1,6}\\s*|[-*+]\\s+)?\\**\\s*" +
-					"(sources?|references?|quellen|citations?|bibliography|data\\s*sources?|anchor\\s*data\\s*sources?)\\b"))
+					"(sources?|sourcing|source\\s*list|source\\s*links?|references?|quellen|citations?|bibliography|data\\s*sources?|anchor\\s*data\\s*sources?)\\b"))
 	);
+	private static final List<String> NATURAL_SRI_LABELS = List.of(
+			"sri",
+			"srri",
+			"summary risk",
+			"risk indicator",
+			"risk level",
+			"risk category",
+			"risk class",
+			"synthetic risk indicator",
+			"synthetic risk"
+	);
+	private static final List<String> STRUCTURED_SRI_LABELS = List.of(
+			"risk_indicator",
+			"summary_risk_indicator",
+			"risk.summary_risk_indicator"
+	);
+	private static final List<String> LEGACY_SRI_COMPAT_MARKERS = List.of(
+			"## sourcing",
+			"## prospectus / key information",
+			"## prospectus and key information",
+			"## holdings & exposure",
+			"## layer notes"
+	);
+	private static final int SRI_VALUE_LOOKAHEAD_LINES = 3;
 	private static final List<String> SECONDARY_DOMAINS = List.of(
 			"justetf.com",
 			"etf.com",
@@ -55,6 +83,16 @@ public class KnowledgeBaseQualityGateService {
 			"issuer",
 			"exchange",
 			"regulator"
+	);
+	private static final List<String> STRONG_PRIMARY_HINTS = List.of(
+			"factsheet",
+			"fact sheet",
+			"kid",
+			"kiid",
+			"priips",
+			"prospectus",
+			"key information document",
+			"key investor information"
 	);
 	private static final String PROFILE_FUND = "FUND";
 	private static final String PROFILE_EQUITY = "EQUITY";
@@ -131,7 +169,7 @@ public class KnowledgeBaseQualityGateService {
 		}
 		List<CitationInfo> parsed = parseCitations(citations);
 		int minCitations = config == null ? 0 : config.bulkMinCitations();
-		if (parsed.size() < Math.max(1, minCitations)) {
+		if (!hasSufficientCitations(parsed, minCitations, isin)) {
 			reasons.add("insufficient_citations");
 		}
 		boolean fundLike = isFundLikeContent(trimmed);
@@ -254,12 +292,27 @@ public class KnowledgeBaseQualityGateService {
 	}
 
 	private void checkTextEvidence(String normalizedContent, String field, String value, List<String> missing) {
+		checkTextEvidence(normalizedContent, field, value, missing, false);
+	}
+
+	private void checkTextEvidence(String normalizedContent,
+							String field,
+							String value,
+							List<String> missing,
+							boolean allowCompact) {
 		if (value == null || value.isBlank()) {
 			return;
 		}
 		String normalizedValue = normalizeText(value);
 		if (!normalizedValue.isBlank() && normalizedContent.contains(normalizedValue)) {
 			return;
+		}
+		if (allowCompact) {
+			String compactValue = compactNormalizedText(normalizedValue);
+			String compactContent = compactNormalizedText(normalizedContent);
+			if (!compactValue.isBlank() && compactContent.contains(compactValue)) {
+				return;
+			}
 		}
 		missing.add(field);
 	}
@@ -268,12 +321,106 @@ public class KnowledgeBaseQualityGateService {
 		if (sri == null) {
 			return;
 		}
-		String lower = content.toLowerCase(Locale.ROOT);
 		String token = sri.toString();
-		boolean has = (lower.contains("sri") || lower.contains("summary risk")) && lower.contains(token);
-		if (!has) {
-			missing.add("sri");
+		String[] lines = content.split("\\R");
+		for (int i = 0; i < lines.length; i++) {
+			String lower = lines[i].toLowerCase(Locale.ROOT);
+			if (!containsAnyLabel(lower, NATURAL_SRI_LABELS)) {
+				continue;
+			}
+			if (matchesCanonicalSriValueLine(lower, token)) {
+				return;
+			}
 		}
+		if (!isLegacySriCompatibilityMode(content)) {
+			missing.add("sri");
+			return;
+		}
+		for (int i = 0; i < lines.length; i++) {
+			String lower = lines[i].toLowerCase(Locale.ROOT);
+			if (!containsAnyLabel(lower, STRUCTURED_SRI_LABELS)) {
+				continue;
+			}
+			if (matchesStructuredSriValueLine(lower, token)) {
+				return;
+			}
+			if (matchesNestedSriValue(lines, i, token)) {
+				return;
+			}
+		}
+		missing.add("sri");
+	}
+
+	private boolean isLegacySriCompatibilityMode(String content) {
+		if (content == null || content.isBlank()) {
+			return false;
+		}
+		String lower = content.toLowerCase(Locale.ROOT);
+		for (String marker : LEGACY_SRI_COMPAT_MARKERS) {
+			if (marker != null && !marker.isBlank() && lower.contains(marker)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean containsAnyLabel(String text, List<String> labels) {
+		if (text == null || text.isBlank() || labels == null || labels.isEmpty()) {
+			return false;
+		}
+		for (String label : labels) {
+			if (label != null && !label.isBlank() && text.contains(label)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean matchesCanonicalSriValueLine(String line, String token) {
+		if (line == null || line.isBlank() || token == null || token.isBlank()) {
+			return false;
+		}
+		String pattern = "\\b(?:sri|srri|summary\\s*risk|risk\\s*indicator|risk\\s*level|risk\\s*category|risk\\s*class|"
+				+ "synthetic\\s*risk(?:\\s*indicator)?)\\b[^\\n:=]*[:=]\\s*"
+				+ "(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+		return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(line).find();
+	}
+
+	private boolean matchesStructuredSriValueLine(String line, String token) {
+		if (line == null || line.isBlank() || token == null || token.isBlank()) {
+			return false;
+		}
+		String pattern = "\\b(?:risk_indicator(?:\\.value)?|summary_risk_indicator(?:\\.value)?|"
+				+ "risk\\.summary_risk_indicator\\.value)\\b[^\\n:=]*[:=]\\s*(?:\\{\\s*)?(?:\"?value\"?\\s*[:=]\\s*)?"
+				+ "(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+		return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(line).find();
+	}
+
+	private boolean matchesNestedSriValue(String[] lines, int startIndex, String token) {
+		if (lines == null || token == null || token.isBlank()) {
+			return false;
+		}
+		String startLine = lines[startIndex] == null ? "" : lines[startIndex].toLowerCase(Locale.ROOT);
+		if (!containsAnyLabel(startLine, STRUCTURED_SRI_LABELS)) {
+			return false;
+		}
+		String trimmedStart = startLine.trim();
+		if (!startLine.contains("{") && !trimmedStart.endsWith(":")) {
+			return false;
+		}
+		String pattern = "\\b\"?value\"?\\b\\s*[:=]\\s*(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+		Pattern valuePattern = Pattern.compile("^\\s*[-*+]?\\s*" + pattern + "\\b", Pattern.CASE_INSENSITIVE);
+		int endExclusive = Math.min(lines.length, startIndex + SRI_VALUE_LOOKAHEAD_LINES + 1);
+		for (int i = startIndex + 1; i < endExclusive; i++) {
+			String candidate = lines[i];
+			if (candidate == null || candidate.isBlank()) {
+				continue;
+			}
+			if (valuePattern.matcher(candidate).find()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void checkNumericEvidence(String content,
@@ -426,8 +573,8 @@ public class KnowledgeBaseQualityGateService {
 				: payload.risk().summaryRiskIndicator().value();
 		for (String key : normalizeEvidenceKeys(evidenceKeys)) {
 			switch (key) {
-				case "benchmark_index" -> checkTextEvidence(normalizedContent, "benchmark_index",
-							etf == null ? null : etf.benchmarkIndex(), missingEvidence);
+			case "benchmark_index" -> checkTextEvidence(normalizedContent, "benchmark_index",
+						etf == null ? null : etf.benchmarkIndex(), missingEvidence, true);
 				case "ongoing_charges_pct" -> checkNumericEvidence(dossierContent, "ongoing_charges_pct",
 							etf == null ? null : etf.ongoingChargesPct(),
 							List.of("ter", "ongoing charges", "ongoing charge", "total expense ratio",
@@ -998,14 +1145,138 @@ public class KnowledgeBaseQualityGateService {
 		if (citations == null || !citations.isArray()) {
 			return List.of();
 		}
-		List<CitationInfo> parsed = new ArrayList<>();
+		Map<String, CitationInfo> unique = new LinkedHashMap<>();
 		for (JsonNode node : citations) {
 			String url = node == null ? null : textOrNull(node, "url");
 			String publisher = node == null ? null : textOrNull(node, "publisher");
 			String title = node == null ? null : textOrNull(node, "title");
-			parsed.add(new CitationInfo(url, publisher, title));
+			CitationInfo info = new CitationInfo(url, publisher, title);
+			String dedupeKey = dedupeKey(info);
+			if (!unique.containsKey(dedupeKey)) {
+				unique.put(dedupeKey, info);
+			}
 		}
-		return parsed;
+		return List.copyOf(unique.values());
+	}
+
+	private boolean hasSufficientCitations(List<CitationInfo> citations, int minCitations, String isin) {
+		int required = Math.max(1, minCitations);
+		int count = citations == null ? 0 : citations.size();
+		if (count >= required) {
+			return true;
+		}
+		return required == 2 && count == 1 && hasStrongPrimarySource(citations, isin);
+	}
+
+	private boolean hasStrongPrimarySource(List<CitationInfo> citations, String isin) {
+		if (citations == null || citations.isEmpty()) {
+			return false;
+		}
+		for (CitationInfo info : citations) {
+			if (isStrongPrimarySource(info, isin)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean isStrongPrimarySource(CitationInfo info, String isin) {
+		if (info == null) {
+			return false;
+		}
+		String host = extractHost(info.url());
+		if (host == null || isSecondaryDomain(host)) {
+			return false;
+		}
+		String combined = safe(info.publisher()) + " " + safe(info.title()) + " " + safe(info.url());
+		if (!containsAnyPrimaryHint(combined, STRONG_PRIMARY_HINTS)
+				&& !containsAnyPrimaryHint(combined, List.of("issuer"))) {
+			return false;
+		}
+		if (isin == null || isin.isBlank()) {
+			return true;
+		}
+		return combined.toUpperCase(Locale.ROOT).contains(isin.trim().toUpperCase(Locale.ROOT));
+	}
+
+	private boolean isSecondaryDomain(String host) {
+		if (host == null || host.isBlank()) {
+			return false;
+		}
+		String normalized = host.toLowerCase(Locale.ROOT);
+		for (String secondary : SECONDARY_DOMAINS) {
+			if (normalized.equals(secondary) || normalized.endsWith("." + secondary)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean containsAnyPrimaryHint(String value, List<String> hints) {
+		if (value == null || value.isBlank() || hints == null || hints.isEmpty()) {
+			return false;
+		}
+		String normalized = " " + normalizeText(value) + " ";
+		for (String hint : hints) {
+			String normalizedHint = normalizeText(hint);
+			if (!normalizedHint.isBlank() && normalized.contains(" " + normalizedHint + " ")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private String dedupeKey(CitationInfo info) {
+		if (info == null) {
+			return "";
+		}
+		String canonicalUrl = canonicalizeUrl(info.url());
+		if (canonicalUrl != null && !canonicalUrl.isBlank()) {
+			return canonicalUrl;
+		}
+		return (safe(info.title()).trim().toLowerCase(Locale.ROOT)
+				+ "|"
+				+ safe(info.publisher()).trim().toLowerCase(Locale.ROOT));
+	}
+
+	private String canonicalizeUrl(String rawUrl) {
+		if (rawUrl == null || rawUrl.isBlank()) {
+			return null;
+		}
+		String trimmed = rawUrl.trim();
+		try {
+			URI uri = URI.create(trimmed);
+			if (uri.getHost() == null) {
+				uri = URI.create("https://" + trimmed);
+			}
+			String host = uri.getHost();
+			if (host == null || host.isBlank()) {
+				return trimmed.toLowerCase(Locale.ROOT);
+			}
+			host = host.toLowerCase(Locale.ROOT);
+			if (host.startsWith("www.")) {
+				host = host.substring(4);
+			}
+			String scheme = uri.getScheme() == null ? "https" : uri.getScheme().toLowerCase(Locale.ROOT);
+			String path = uri.getPath();
+			if (path == null || path.isBlank()) {
+				path = "/";
+			}
+			path = path.replaceAll("/{2,}", "/");
+			if (path.length() > 1 && path.endsWith("/")) {
+				path = path.substring(0, path.length() - 1);
+			}
+			StringBuilder canonical = new StringBuilder(scheme)
+					.append("://")
+					.append(host)
+					.append(path);
+			if (uri.getRawQuery() != null && !uri.getRawQuery().isBlank()) {
+				canonical.append("?").append(uri.getRawQuery());
+			}
+			return canonical.toString();
+		} catch (Exception ex) {
+			return trimmed.toLowerCase(Locale.ROOT);
+		}
 	}
 
 	private boolean hasPrimarySource(List<CitationInfo> citations) {
@@ -1025,13 +1296,8 @@ public class KnowledgeBaseQualityGateService {
 
 	private boolean looksPrimary(CitationInfo info) {
 		String host = extractHost(info.url());
-		if (host != null) {
-			String normalized = host.toLowerCase(Locale.ROOT);
-			for (String secondary : SECONDARY_DOMAINS) {
-				if (normalized.equals(secondary) || normalized.endsWith("." + secondary)) {
-					return false;
-				}
-			}
+		if (host != null && isSecondaryDomain(host)) {
+			return false;
 		}
 		String combined = (safe(info.publisher()) + " " + safe(info.title()) + " " + safe(info.url())).toLowerCase(Locale.ROOT);
 		for (String hint : PRIMARY_HINTS) {
@@ -1074,6 +1340,13 @@ public class KnowledgeBaseQualityGateService {
 		String normalized = value.toLowerCase(Locale.ROOT);
 		normalized = normalized.replaceAll("[^a-z0-9]+", " ").trim();
 		return normalized.replaceAll("\\s+", " ");
+	}
+
+	private String compactNormalizedText(String normalizedValue) {
+		if (normalizedValue == null || normalizedValue.isBlank()) {
+			return "";
+		}
+		return normalizedValue.replace(" ", "");
 	}
 
 	private String safe(String value) {

@@ -72,6 +72,9 @@ class KnowledgeBaseServiceTest {
 	@Autowired
 	private KnowledgeBaseConfigService configService;
 
+	@Autowired
+	private KnowledgeBaseQualityGateService qualityGateService;
+
 	private KnowledgeBaseConfigDto baselineConfig;
 
 	@DynamicPropertySource
@@ -171,6 +174,26 @@ class KnowledgeBaseServiceTest {
 	}
 
 	@Test
+	void createDossier_stripsMarkersAndAddsIsinHeader() {
+		String content = "---BEGIN DOSSIER MARKDOWN---\n"
+				+ "DE0000000001 - Sample Dossier\n"
+				+ "\n## Quick profile (table)\n"
+				+ "\n---END DOSSIER MARKDOWN---";
+		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				content,
+				DossierOrigin.USER,
+				DossierStatus.DRAFT,
+				objectMapper.createArrayNode()
+		);
+		var dossier = knowledgeBaseService.createDossier(request, "tester");
+		InstrumentDossier saved = dossierRepository.findById(dossier.dossierId()).orElseThrow();
+		assertThat(saved.getContentMd()).doesNotContain("BEGIN DOSSIER MARKDOWN");
+		assertThat(saved.getContentMd()).startsWith("# DE0000000001 - Sample Dossier");
+	}
+
+	@Test
 	void applyExtraction_doesNotOverwriteExistingValues_whenOverwriteDisabled() throws Exception {
 		InstrumentOverride override = new InstrumentOverride();
 		override.setIsin("DE0000000001");
@@ -234,6 +257,33 @@ class KnowledgeBaseServiceTest {
 
 		InstrumentOverride changed = overrideRepository.findById("DE0000000001").orElseThrow();
 		assertThat(changed.getAssetClass()).isEqualTo("Bonds");
+	}
+
+	@Test
+	void runExtraction_keepsPriceStableWhenContextContainsBWord() throws Exception {
+		InstrumentDossier dossier = createDossier(
+				"# DE0000000001 - Test\n"
+						+ "instrument_type: ETF\n"
+						+ "layer: 2\n"
+						+ "price: 227.50 EUR (as of 2026-02-13, Bourse Hamburg listing)"
+		);
+
+		var extraction = knowledgeBaseService.runExtraction(dossier.getDossierId());
+
+		assertThat(extraction.status()).isEqualTo(DossierExtractionStatus.PENDING_REVIEW);
+		InstrumentDossierExtractionPayload payload = objectMapper.treeToValue(
+				extraction.extractedJson(),
+				InstrumentDossierExtractionPayload.class
+		);
+		assertThat(payload.valuation()).isNotNull();
+		assertThat(payload.valuation().price()).isEqualByComparingTo("227.50");
+
+		KnowledgeBaseQualityGateService.EvidenceResult evidence = qualityGateService.evaluateExtractionEvidence(
+				dossier.getContentMd(),
+				payload,
+				configService.getSnapshot()
+		);
+		assertThat(evidence.missingEvidence()).doesNotContain("price");
 	}
 
 	private InstrumentDossier createDossier(String content) {

@@ -32,6 +32,7 @@ import static my.portfoliomanager.app.service.util.ISINUtil.normalizeIsins;
 public class KnowledgeBaseService {
     private static final Logger logger = LoggerFactory.getLogger(KnowledgeBaseService.class);
     private static final Pattern ISIN_RE = Pattern.compile("^[A-Z]{2}[A-Z0-9]{9}[0-9]$");
+    private static final Pattern DOSSIER_MARKER_RE = Pattern.compile("(?i)^---\\s*(BEGIN|END)\\s+DOSSIER\\s+MARKDOWN\\s*---$");
     private static final int MAX_LIMIT = 1000;
     private static final String EDIT_SOURCE = "KB_EXTRACTION";
     private final InstrumentRepository instrumentRepository;
@@ -1069,7 +1070,48 @@ public class KnowledgeBaseService {
 		if (sanitized.isBlank()) {
 			throw new IllegalArgumentException("Content must be provided");
 		}
-		return sanitized.trim();
+		String cleaned = stripDossierMarkers(sanitized);
+		String trimmed = cleaned.trim();
+		return ensureIsinHeader(trimmed);
+	}
+
+	private String stripDossierMarkers(String content) {
+		if (content == null || content.isBlank()) {
+			return content == null ? "" : content;
+		}
+		String[] lines = content.split("\\R", -1);
+		StringBuilder builder = new StringBuilder();
+		for (String line : lines) {
+			if (line != null && DOSSIER_MARKER_RE.matcher(line.trim()).matches()) {
+				continue;
+			}
+			builder.append(line == null ? "" : line).append('\n');
+		}
+		return builder.toString();
+	}
+
+	private String ensureIsinHeader(String content) {
+		if (content == null || content.isBlank()) {
+			return content == null ? "" : content;
+		}
+		String[] lines = content.split("\\R", -1);
+		int index = 0;
+		while (index < lines.length && lines[index].isBlank()) {
+			index++;
+		}
+		if (index >= lines.length) {
+			return content;
+		}
+		String line = lines[index].trim();
+		if (!line.startsWith("#")) {
+			String[] tokens = line.split("\\s+", 2);
+			String token = tokens.length == 0 ? "" : tokens[0].toUpperCase(Locale.ROOT);
+			if (ISIN_RE.matcher(token).matches()) {
+				lines[index] = "# " + line;
+				return String.join("\n", lines);
+			}
+		}
+		return content;
 	}
 
 	private Map<String, String> resolveNameHints(List<String> isins) {
@@ -1375,10 +1417,17 @@ public class KnowledgeBaseService {
                 	## Redundancy hints (qualitative; do not claim precise correlations without data)
                 	## Sources (numbered list)
                 
-                	Additional requirements:
-                    - Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.   
-                    - When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
-				- For exposures, provide region and sector weights (percent) and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
+				Additional requirements:
+				- Expected Layer definition: 1=Global-Core, 2=Core-Plus, 3=Themes, 4=Single stock.   
+				- When suggesting a layer, justify it using index breadth, concentration, thematic focus, and region/sector tilt.
+				- Always include every required section heading. If a section has no verified data, still include the heading and write "unknown" for the relevant fields.
+				- Use canonical section headings. Legacy aliases (e.g., "Sourcing", "Prospectus / Key Information", "Holdings & exposure") may be tolerated by validators for old dossiers but must not be emitted in new output.
+				- Do not include wrapper markers like "---BEGIN DOSSIER MARKDOWN---" or "---END DOSSIER MARKDOWN---" in contentMd.
+				- Keep index/benchmark names exactly as stated in sources (e.g., MSCI, S&P, FTSE, STOXX, iBoxx); do not insert or remove spaces inside acronyms.
+				- In the ## Risk section, write SRI exactly as "SRI: <1-7>" when a numeric value is verified, otherwise write "SRI: unknown".
+				- Do not use SFDR article labels (e.g., "Article 8" or "Article 9") as numeric SRI values.
+				- Do not output JSON-like risk keys in Markdown (e.g., risk_indicator, summary_risk_indicator, risk.summary_risk_indicator.value).
+			- For exposures, provide region and sector weights (percent) and top-holding weights (percent) and include as-of dates for exposures/holdings when available; if holdings lists are long, provide top-10 weights.
 				- Use GICS sector names for sector exposures whenever possible. For ETFs/funds, include a sector allocation table (GICS sectors with weights) using issuer factsheets or index providers (MSCI, S&P, FTSE Russell, Qontigo). If issuer/index data is missing, use reputable ETF databases (justETF/ETFdb).
 				- For single stocks/REITs, if no sector weights are available, include a single sector exposure with the GICS sector at 100%%.
 				- If possible, include the Synthetic Risk Indicator (SRI) from the PRIIPs KID.
@@ -1393,9 +1442,10 @@ public class KnowledgeBaseService {
                     - To qualify as Layer 2 = Core-Plus, an Instrument must be an ETF or fund that diversifies across industries and themes but tilts into specific regions, continents or countries. Umbrella ETFs, Multi Asset-ETFs and/or Bond-ETFs diversified over specific regions/countries/continents are allowed in this layer, too.
                     - If the choice between Layer 1 and 2 is unclear, choose layer 2.
                     - Layer 3 = Themes are ETFs and fonds covering specific themes or industries and/or not matching into layer 1 or 2. Also Multi-Asset ETfs and Umbrella fonds are allowed if they cover only specific themes or industries.
-                    - If the ETF is thematic/sector/industry/commodity focused (e.g., defense, energy, lithium/batteries, clean tech, semiconductors, robotics/AI, healthcare subsectors, commodities), it must be Layer 3. Do not classify such ETFs as Layer 2 even if they are globally diversified.
+                    - If the ETF is thematic/sector/industry/commodity focused (e.g., defense, energy, lithium/batteries, clean tech, semiconductors, robotics/AI, healthcare subsectors, commodities, real estate/property/REIT), it must be Layer 3. Do not classify such ETFs as Layer 2 even if they are globally diversified.
+                    - Real-estate-focused ETFs/funds (including Real Estate, Property, and REIT index ETFs/funds) must always be classified as Layer 3 Themes, even when diversified across regions such as Europe or globally.
                     - If there is any doubt between Layer 2 and Layer 3 for a thematic ETF, choose Layer 3.
-                    - Practical check: if the instrument name, benchmark, or description contains a theme/sector/industry keyword (Defense, Energy, Battery, Lithium, Semiconductor, Robotics, AI, Clean, Water, Gold, Oil, Commodity, Cloud, Cyber, Biotech, Healthcare subsector), force Layer 3.
+                    - Practical check: if the instrument name, benchmark, or description contains a theme/sector/industry keyword (Defense, Energy, Battery, Lithium, Semiconductor, Robotics, AI, Clean, Water, Gold, Oil, Commodity, Cloud, Cyber, Biotech, Healthcare subsector, Real Estate, Property, REIT, Immobilien), force Layer 3.
                     - For single stocks, collect the raw inputs needed for long-term P/E:
                       EBITDA (currency + TTM/FY label), share price (currency + as-of date), and annual EPS history for the last 3-7 fiscal years (include year, period end, EPS value, and whether EPS is adjusted or reported).
                       If EPS history is incomplete or only a single year is available, still report what you have and explain the gap; do not fabricate long-term P/E.

@@ -8,6 +8,7 @@ import tools.jackson.databind.cfg.DateTimeFeature;
 import tools.jackson.databind.json.JsonMapper;
 import javax.sql.DataSource;
 import org.postgresql.util.PGobject;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -29,6 +30,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -320,7 +322,13 @@ public class BackupService {
 				ColumnInfo info = columnInfos.get(column.toLowerCase(Locale.ROOT));
 				params.addValue(column, prepareValue(row.get(column), info));
 			}
-			namedParameterJdbcTemplate.update(sql, params);
+			try {
+				namedParameterJdbcTemplate.update(sql, params);
+			} catch (DataAccessException ex) {
+				String message = "Backup import failed for table '" + tableName + "' (" + buildRowContext(row)
+						+ "): " + extractRootCauseMessage(ex);
+				throw new IllegalArgumentException(message, ex);
+			}
 		}
 		if (needsSupersedesUpdate && !supersedesUpdates.isEmpty()) {
 			applySupersedesUpdates(supersedesUpdates);
@@ -330,6 +338,40 @@ public class BackupService {
 
 	private boolean isValidIdentifier(String name) {
 		return name != null && name.matches("[A-Za-z_][A-Za-z0-9_]*");
+	}
+
+	private String buildRowContext(Map<String, Object> row) {
+		if (row == null || row.isEmpty()) {
+			return "row=unknown";
+		}
+		Object isin = row.get("isin");
+		Object depotId = row.get("depot_id");
+		Object snapshotId = row.get("snapshot_id");
+		List<String> parts = new ArrayList<>();
+		if (isin != null) {
+			parts.add("isin=" + isin);
+		}
+		if (depotId != null) {
+			parts.add("depot_id=" + depotId);
+		}
+		if (snapshotId != null) {
+			parts.add("snapshot_id=" + snapshotId);
+		}
+		if (!parts.isEmpty()) {
+			return String.join(", ", parts);
+		}
+		return "columns=" + String.join(",", row.keySet().stream().sorted().toList());
+	}
+
+	private String extractRootCauseMessage(Throwable throwable) {
+		Throwable current = throwable;
+		while (current != null && current.getCause() != null && current.getCause() != current) {
+			current = current.getCause();
+		}
+		if (current == null || current.getMessage() == null || current.getMessage().isBlank()) {
+			return "Unknown database error";
+		}
+		return current.getMessage();
 	}
 
 	private List<Map<String, Object>> deserializeRows(byte[] jsonData) throws IOException {
@@ -456,18 +498,59 @@ public class BackupService {
 		if (value instanceof java.sql.Date) {
 			return value;
 		}
+		if (value instanceof OffsetDateTime offsetDateTime) {
+			return java.sql.Date.valueOf(offsetDateTime.toLocalDate());
+		}
+		if (value instanceof Instant instant) {
+			return java.sql.Date.valueOf(instant.atOffset(ZoneOffset.UTC).toLocalDate());
+		}
+		if (value instanceof Number number) {
+			Object converted = prepareDateFromEpoch(number.longValue());
+			if (converted != null) {
+				return converted;
+			}
+		}
 		if (value instanceof String str) {
+			String trimmed = str.trim();
+			if (trimmed.isEmpty()) {
+				return value;
+			}
 			try {
-				return java.sql.Date.valueOf(LocalDate.parse(str));
+				return java.sql.Date.valueOf(LocalDate.parse(trimmed));
 			} catch (DateTimeParseException ex) {
 				try {
-					return java.sql.Date.valueOf(LocalDateTime.parse(str).toLocalDate());
+					return java.sql.Date.valueOf(LocalDateTime.parse(trimmed).toLocalDate());
 				} catch (DateTimeParseException ex2) {
-					return value;
+					try {
+						return java.sql.Date.valueOf(OffsetDateTime.parse(trimmed).toLocalDate());
+					} catch (DateTimeParseException ex3) {
+						try {
+							return java.sql.Date.valueOf(Instant.parse(trimmed).atOffset(ZoneOffset.UTC).toLocalDate());
+						} catch (DateTimeParseException ex4) {
+							try {
+								long epoch = Long.parseLong(trimmed);
+								Object converted = prepareDateFromEpoch(epoch);
+								return converted == null ? value : converted;
+							} catch (NumberFormatException ex5) {
+								return value;
+							}
+						}
+					}
 				}
 			}
 		}
 		return value;
+	}
+
+	private Object prepareDateFromEpoch(long epochValue) {
+		long abs = Math.abs(epochValue);
+		if (abs < 1_000_000_000L) {
+			return null;
+		}
+		Instant instant = abs >= 1_000_000_000_000L
+				? Instant.ofEpochMilli(epochValue)
+				: Instant.ofEpochSecond(epochValue);
+		return java.sql.Date.valueOf(instant.atOffset(ZoneOffset.UTC).toLocalDate());
 	}
 
 	private Object prepareTimestampValue(Object value) {

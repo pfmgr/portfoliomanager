@@ -372,6 +372,175 @@ class KnowledgeBaseLlmServiceTest {
 		var draft = client.extractMetadata("Research date: 2026-01-24");
 
 		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(3);
+		List<String> warningMessages = new java.util.ArrayList<>();
+		draft.extractionJson().path("warnings")
+				.forEach(node -> warningMessages.add(node.path("message").asText()));
+		assertThat(warningMessages)
+				.anyMatch(message -> message.contains("Layer forced to 3 (Themes) by extraction postprocessor"));
+	}
+
+	@Test
+	void extractMetadata_doesNotForceLayer3ForRealEstateBenchmarkWhenTypeIsNonEtf() {
+		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt) {
+				throw new UnsupportedOperationException("Use schema-based call");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt,
+												 String schemaNameArg,
+												 Map<String, Object> schema) {
+				return new KnowledgeBaseLlmResponse("""
+						{
+						  "isin": "DE000A0Q4R44",
+						  "name": "iShares Europe Real Estate",
+						"instrument_type": "Equity",
+						"asset_class": "Equity",
+						"sub_class": "Regional Equity",
+						"gics_sector": null,
+						"gics_industry_group": null,
+						"gics_industry": null,
+						"gics_sub_industry": null,
+						"layer": 2,
+						"layer_notes": "Core-Plus; Europe exposure",
+						  "etf": {
+						    "ongoing_charges_pct": 0.46,
+						    "benchmark_index": "STOXX Europe 600 Real Estate"
+						  },
+						  "risk": null,
+						"regions": null,
+						"sectors": null,
+						"top_holdings": null,
+						  "financials": null,
+						  "valuation": null,
+						  "missing_fields": [],
+						  "warnings": []
+						}
+						""", "test-model");
+			}
+		};
+		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
+		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
+
+		var draft = client.extractMetadata("Research date: 2026-01-24");
+
+		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(2);
+		assertThat(draft.extractionJson().get("layer_notes").asText()).doesNotContain("benchmark_index");
+	}
+
+	@Test
+	void extractMetadata_doesNotForceLayer3ForSectorBenchmarkWhenTypeIsNonEtf() {
+		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt) {
+				throw new UnsupportedOperationException("Use schema-based call");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt,
+											 String schemaNameArg,
+											 Map<String, Object> schema) {
+				return new KnowledgeBaseLlmResponse("""
+						{
+						  "isin": "DE000A0Q4R44",
+						  "name": "iShares Europe Technology",
+						"instrument_type": "Equity",
+						"asset_class": "Equity",
+						"sub_class": "Regional Equity",
+						"gics_sector": null,
+						"gics_industry_group": null,
+						"gics_industry": null,
+						"gics_sub_industry": null,
+						"layer": 2,
+						"layer_notes": "Core-Plus; Europe exposure",
+						  "etf": {
+						    "ongoing_charges_pct": 0.46,
+						    "benchmark_index": "STOXX Europe 600 Technology Sector"
+						  },
+						  "risk": null,
+						"regions": null,
+						"sectors": null,
+						"top_holdings": null,
+						  "financials": null,
+						  "valuation": null,
+						  "missing_fields": [],
+						  "warnings": []
+						}
+						""", "test-model");
+			}
+		};
+		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
+		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
+
+		var draft = client.extractMetadata("Research date: 2026-01-24");
+
+		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(2);
+		assertThat(draft.extractionJson().get("layer_notes").asText()).doesNotContain("keyword=sector");
+	}
+
+	@Test
+	void extractMetadata_doesNotTreatFundamentalAsFundHint() {
+		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt) {
+				throw new UnsupportedOperationException("Use schema-based call");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt,
+											 String schemaNameArg,
+											 Map<String, Object> schema) {
+				return new KnowledgeBaseLlmResponse("""
+						{
+						  "isin": "DE000A0Q4R44",
+						  "name": "Europe Fundamental Real Estate Equity",
+						"instrument_type": "Equity",
+						"asset_class": "Equity",
+						"sub_class": "Fundamental Equity",
+						"gics_sector": null,
+						"gics_industry_group": null,
+						"gics_industry": null,
+						"gics_sub_industry": null,
+						"layer": 2,
+						"layer_notes": "Core-Plus; Europe exposure",
+						  "etf": null,
+						  "risk": null,
+						"regions": null,
+						"sectors": null,
+						"top_holdings": null,
+						  "financials": null,
+						  "valuation": null,
+						  "missing_fields": [],
+						  "warnings": []
+						}
+						""", "test-model");
+			}
+		};
+		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
+		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
+
+		var draft = client.extractMetadata("Research date: 2026-01-24");
+
+		assertThat(draft.extractionJson().get("layer").asInt()).isEqualTo(2);
 	}
 
 	@Test
@@ -571,6 +740,125 @@ class KnowledgeBaseLlmServiceTest {
 		assertThat(contentMd).contains("- holdings_coverage_weight_pct: unknown");
 		assertThat(contentMd).contains("- holdings_asof: unknown");
 		assertThat(contentMd).contains("- holdings_weight_method: unknown");
+	}
+
+	@Test
+	void generateDossier_promptEnforcesCanonicalHeadingsAndSriFormat() {
+		AtomicReference<String> promptCapture = new AtomicReference<>();
+		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
+				throw new UnsupportedOperationException("Use schema-based call");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt,
+															List<String> allowedDomains,
+															String schemaNameArg,
+															Map<String, Object> schema) {
+				promptCapture.set(prompt);
+				return new KnowledgeBaseLlmResponse("""
+						{
+						  "contentMd": "# DE0000000004 — Test\\n\\n## Quick profile (table)\\n- ISIN: DE0000000004\\n\\n## Classification (instrument type, asset class, subclass, suggested layer)\\n- Instrument type: ETF\\n\\n## Risk (SRI and notes)\\n- SRI: unknown\\n\\n## Costs & structure (TER, replication, domicile, distribution, currency if relevant)\\n- TER: unknown\\n\\n## Exposures (regions, sectors, top holdings/top-10, benchmark/index)\\n- Regions: unknown\\n\\n## Valuation & profitability\\n- price: unknown\\n\\n## Redundancy hints (qualitative; do not claim precise correlations without data)\\n- None\\n\\n## Sources\\n1. Example\\n",
+						  "displayName": "Test",
+						  "citations": [
+						    {
+						      "id": "1",
+						      "title": "Source",
+						      "url": "https://example.com",
+						      "publisher": "Example",
+						      "accessed_at": "2024-01-01"
+						    }
+						  ]
+						}
+						""", "test-model");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt) {
+				throw new UnsupportedOperationException();
+			}
+		};
+		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
+		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
+
+		client.generateDossier("DE0000000004", null, List.of("example.com"), 15000);
+
+		assertThat(promptCapture.get()).contains("Legacy aliases (e.g., \"Sourcing\", \"Prospectus / Key Information\", \"Holdings & exposure\")");
+		assertThat(promptCapture.get()).contains("must not be emitted in new output.");
+		assertThat(promptCapture.get()).contains("In the ## Risk section, write SRI exactly as \"SRI: <1-7>\" when a numeric value is verified, otherwise write \"SRI: unknown\".");
+		assertThat(promptCapture.get()).contains("Do not use SFDR article labels (e.g., \"Article 8\" or \"Article 9\") as numeric SRI values.");
+		assertThat(promptCapture.get()).contains("Do not output JSON-like risk keys in Markdown");
+		assertThat(promptCapture.get()).contains("Real-estate-focused ETFs/funds (including Real Estate, Property, and REIT index ETFs/funds) must always be classified as Layer 3 Themes");
+	}
+
+	@Test
+	void patchDossierMissingFields_promptEnforcesCanonicalHeadingsAndSriFormat() {
+		AtomicReference<String> promptCapture = new AtomicReference<>();
+		KnowledgeBaseLlmProvider provider = new KnowledgeBaseLlmProvider() {
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
+				throw new UnsupportedOperationException("Use schema-based call");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runWebSearch(String prompt,
+															List<String> allowedDomains,
+															String schemaNameArg,
+															Map<String, Object> schema) {
+				promptCapture.set(prompt);
+				return new KnowledgeBaseLlmResponse("""
+						{
+						  "contentMd": "# DE0000000005 — Test\\n\\n## Quick profile (table)\\n- ISIN: DE0000000005\\n\\n## Classification (instrument type, asset class, subclass, suggested layer)\\n- Instrument type: ETF\\n\\n## Risk (SRI and notes)\\n- SRI: unknown\\n\\n## Costs & structure (TER, replication, domicile, distribution, currency if relevant)\\n- TER: unknown\\n\\n## Exposures (regions, sectors, top holdings/top-10, benchmark/index)\\n- Regions: unknown\\n\\n## Valuation & profitability\\n- price: unknown\\n\\n## Redundancy hints (qualitative; do not claim precise correlations without data)\\n- None\\n\\n## Sources\\n1. Example\\n",
+						  "displayName": "Test",
+						  "citations": [
+						    {
+						      "id": "1",
+						      "title": "Source",
+						      "url": "https://example.com",
+						      "publisher": "Example",
+						      "accessed_at": "2024-01-01"
+						    }
+						  ]
+						}
+						""", "test-model");
+			}
+
+			@Override
+			public KnowledgeBaseLlmResponse runJsonPrompt(String prompt) {
+				throw new UnsupportedOperationException();
+			}
+		};
+		KnowledgeBaseConfigService configService = mock(KnowledgeBaseConfigService.class);
+		when(configService.getSnapshot()).thenReturn(defaultSnapshot());
+		KnowledgeBaseLlmClient client = new KnowledgeBaseLlmService(provider, configService, new ObjectMapper(), null);
+
+		ObjectMapper mapper = new ObjectMapper();
+		var citations = mapper.createArrayNode();
+		citations.addObject()
+				.put("id", "1")
+				.put("title", "Source")
+				.put("url", "https://example.com")
+				.put("publisher", "Example")
+				.put("accessed_at", "2024-01-01");
+
+		client.patchDossierMissingFields(
+				"DE0000000005",
+				"# DE0000000005 — Test\n\n## Risk (SRI and notes)\n- SRI: unknown\n",
+				citations,
+				List.of("sri"),
+				"Retry mode: true",
+				List.of("example.com"),
+				15000
+		);
+
+		assertThat(promptCapture.get()).contains("Keep canonical section headings unchanged.");
+		assertThat(promptCapture.get()).contains("Legacy aliases (e.g., \"Sourcing\", \"Prospectus / Key Information\", \"Holdings & exposure\")");
+		assertThat(promptCapture.get()).contains("must not be emitted.");
+		assertThat(promptCapture.get()).contains("In the ## Risk section, write SRI exactly as \"SRI: <1-7>\" when a numeric value is verified, otherwise write \"SRI: unknown\".");
+		assertThat(promptCapture.get()).contains("Do not use SFDR article labels (e.g., \"Article 8\" or \"Article 9\") as numeric SRI values.");
+		assertThat(promptCapture.get()).contains("Do not output JSON-like risk keys in Markdown");
 	}
 
 	private KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot defaultSnapshot() {

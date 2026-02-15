@@ -7,6 +7,10 @@ spring:
     hikari:
       maximum-pool-size: 4
       minimum-idle: 1
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 25MB
 app:
   kb:
     refresh-scheduler-enabled: false
