@@ -15,8 +15,10 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    container:
+      image: gradle:9.3-jdk21
     env:
-      DB_URL: jdbc:postgresql://localhost:5432/mydatabase
+      DB_URL: jdbc:postgresql://postgres:5432/mydatabase
       DB_USER: myuser
       DB_PASSWORD: secret
       GRADLE_USER_HOME: ${{ github.workspace }}/services/app/backend/.gradle_home
@@ -40,17 +42,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-          cache: gradle
-
       - name: Run backend tests
         working-directory: services/app/backend
-        run: ./gradlew test --no-daemon
+        run: gradle test --no-daemon
 
       - name: Build backend
         working-directory: services/app/backend
-        run: ./gradlew build -x test --no-daemon
+        run: gradle build -x test --no-daemon
