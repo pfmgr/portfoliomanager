@@ -16,7 +16,7 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     container:
-      image: gradle:9.3-jdk25
+      image: gradle:9.3-jdk21
     env:
       DB_URL: jdbc:postgresql://postgres:5432/mydatabase
       DB_USER: myuser

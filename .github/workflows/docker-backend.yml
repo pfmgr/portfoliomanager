@@ -7,7 +7,7 @@
 # Um eine neuere Version zu erhalten, musst du den SHA aktualisieren.
 # Du kannst auch auf ein Tag oder einen Branch verweisen, aber die Aktion kann sich ohne Vorwarnung ändern.
 
-name: Publish Backend Docker image
+name: Backend Docker image
 
 on:
   pull_request:
