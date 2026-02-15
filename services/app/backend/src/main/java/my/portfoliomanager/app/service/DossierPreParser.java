@@ -18,7 +18,9 @@ public class DossierPreParser {
 	private static final Pattern EPS_HISTORY_ENTRY = Pattern.compile("^\\s*[-*+]\\s*(\\d{4})\\s*:\\s*(.+)$");
 	private static final Pattern DATE_PATTERN = Pattern.compile("\\b(20\\d{2}-\\d{2}-\\d{2})\\b");
 	private static final Pattern CURRENCY_PATTERN = Pattern.compile("\\b([A-Z]{3})\\b");
-	private static final Pattern SCALE_PATTERN = Pattern.compile("(?i)([-+]?[0-9.,]+)\\s*(b|bn|billion|m|mn|million|k|thousand)\\b");
+	private static final Pattern DECIMAL_WITH_OPTIONAL_SCALE_PATTERN = Pattern.compile(
+			"(?iu)([-+]?(?:\\d{1,3}(?:[.,\\s]\\d{3})+|\\d+)(?:[.,]\\d+)?)\\s*(?:([A-Z]{3})\\s*)?(b|bn|billion|m|mn|million|k|thousand)?(?!\\p{L})"
+	);
 
 	public InstrumentDossierExtractionPayload parse(InstrumentDossier dossier) {
 		String content = dossier == null ? null : dossier.getContentMd();
@@ -429,33 +431,146 @@ public class DossierPreParser {
 		if (raw == null || raw.isBlank()) {
 			return null;
 		}
-		String value = raw.replace(",", "");
-		Matcher matcher = Pattern.compile("[-+]?[0-9]*\\.?[0-9]+", Pattern.CASE_INSENSITIVE).matcher(value);
-		if (!matcher.find()) {
-			return null;
-		}
-		try {
-			BigDecimal number = new BigDecimal(matcher.group());
-			BigDecimal scale = detectScale(raw);
+		Matcher matcher = DECIMAL_WITH_OPTIONAL_SCALE_PATTERN.matcher(raw);
+		while (matcher.find()) {
+			BigDecimal number = parseLocalizedNumber(matcher.group(1));
+			if (number == null) {
+				continue;
+			}
+			BigDecimal scale = detectScale(matcher.group(3));
 			if (scale != null) {
 				number = number.multiply(scale);
 			}
 			return number;
+		}
+		return null;
+	}
+
+	private BigDecimal parseLocalizedNumber(String token) {
+		if (token == null || token.isBlank()) {
+			return null;
+		}
+		String cleaned = token.trim()
+				.replace("\u00A0", "")
+				.replace("\u202F", "")
+				.replace(" ", "")
+				.replace("'", "");
+		if (cleaned.isBlank() || "+".equals(cleaned) || "-".equals(cleaned)) {
+			return null;
+		}
+
+		int commaCount = countChar(cleaned, ',');
+		int dotCount = countChar(cleaned, '.');
+		String normalized;
+		if (commaCount > 0 && dotCount > 0) {
+			int lastComma = cleaned.lastIndexOf(',');
+			int lastDot = cleaned.lastIndexOf('.');
+			char decimalSeparator = lastComma > lastDot ? ',' : '.';
+			char groupingSeparator = decimalSeparator == ',' ? '.' : ',';
+			normalized = cleaned.replace(String.valueOf(groupingSeparator), "");
+			if (decimalSeparator == ',') {
+				normalized = normalized.replace(',', '.');
+			}
+		} else if (commaCount > 0) {
+			normalized = normalizeSingleSeparator(cleaned, ',');
+		} else if (dotCount > 0) {
+			normalized = normalizeSingleSeparator(cleaned, '.');
+		} else {
+			normalized = cleaned;
+		}
+
+		if (normalized == null || !normalized.matches("[-+]?\\d+(?:\\.\\d+)?")) {
+			return null;
+		}
+		try {
+			return new BigDecimal(normalized);
 		} catch (NumberFormatException ex) {
 			return null;
 		}
 	}
 
-	private BigDecimal detectScale(String raw) {
-		if (raw == null) {
+	private String normalizeSingleSeparator(String raw, char separator) {
+		if (raw == null || raw.isBlank()) {
 			return null;
 		}
-		Matcher matcher = SCALE_PATTERN.matcher(raw);
-		if (!matcher.find()) {
+		String sign = "";
+		String unsigned = raw;
+		if (unsigned.startsWith("+") || unsigned.startsWith("-")) {
+			sign = unsigned.substring(0, 1);
+			unsigned = unsigned.substring(1);
+		}
+		if (unsigned.isBlank()) {
 			return null;
 		}
-		String suffix = matcher.group(2).toLowerCase(Locale.ROOT);
-		return switch (suffix) {
+		int first = unsigned.indexOf(separator);
+		if (first < 0) {
+			return raw;
+		}
+		int last = unsigned.lastIndexOf(separator);
+		String separatorToken = String.valueOf(separator);
+		if (first != last) {
+			if (looksLikeGroupedThousands(unsigned, separator)) {
+				return sign + unsigned.replace(separatorToken, "");
+			}
+			String integerPart = unsigned.substring(0, last).replace(separatorToken, "");
+			String fractionalPart = unsigned.substring(last + 1);
+			if (fractionalPart.isBlank()) {
+				return null;
+			}
+			return sign + integerPart + "." + fractionalPart;
+		}
+
+		String integerPart = unsigned.substring(0, first);
+		String fractionalPart = unsigned.substring(first + 1);
+		if (fractionalPart.isBlank()) {
+			return null;
+		}
+		if (fractionalPart.length() == 3
+				&& integerPart.length() >= 1
+				&& integerPart.length() <= 3
+				&& !"0".equals(integerPart)) {
+			return sign + integerPart + fractionalPart;
+		}
+		return sign + integerPart + "." + fractionalPart;
+	}
+
+	private boolean looksLikeGroupedThousands(String raw, char separator) {
+		if (raw == null || raw.isBlank()) {
+			return false;
+		}
+		String[] groups = raw.split(Pattern.quote(String.valueOf(separator)), -1);
+		if (groups.length < 2) {
+			return false;
+		}
+		if (!groups[0].matches("\\d{1,3}")) {
+			return false;
+		}
+		for (int i = 1; i < groups.length; i++) {
+			if (!groups[i].matches("\\d{3}")) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private int countChar(String value, char c) {
+		if (value == null || value.isBlank()) {
+			return 0;
+		}
+		int count = 0;
+		for (int i = 0; i < value.length(); i++) {
+			if (value.charAt(i) == c) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	private BigDecimal detectScale(String suffix) {
+		if (suffix == null || suffix.isBlank()) {
+			return null;
+		}
+		return switch (suffix.toLowerCase(Locale.ROOT)) {
 			case "b", "bn", "billion" -> new BigDecimal("1000000000");
 			case "m", "mn", "million" -> new BigDecimal("1000000");
 			case "k", "thousand" -> new BigDecimal("1000");

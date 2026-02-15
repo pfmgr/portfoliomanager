@@ -10,8 +10,10 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -81,6 +83,16 @@ public class KnowledgeBaseQualityGateService {
 			"issuer",
 			"exchange",
 			"regulator"
+	);
+	private static final List<String> STRONG_PRIMARY_HINTS = List.of(
+			"factsheet",
+			"fact sheet",
+			"kid",
+			"kiid",
+			"priips",
+			"prospectus",
+			"key information document",
+			"key investor information"
 	);
 	private static final String PROFILE_FUND = "FUND";
 	private static final String PROFILE_EQUITY = "EQUITY";
@@ -157,7 +169,7 @@ public class KnowledgeBaseQualityGateService {
 		}
 		List<CitationInfo> parsed = parseCitations(citations);
 		int minCitations = config == null ? 0 : config.bulkMinCitations();
-		if (parsed.size() < Math.max(1, minCitations)) {
+		if (!hasSufficientCitations(parsed, minCitations, isin)) {
 			reasons.add("insufficient_citations");
 		}
 		boolean fundLike = isFundLikeContent(trimmed);
@@ -1133,14 +1145,138 @@ public class KnowledgeBaseQualityGateService {
 		if (citations == null || !citations.isArray()) {
 			return List.of();
 		}
-		List<CitationInfo> parsed = new ArrayList<>();
+		Map<String, CitationInfo> unique = new LinkedHashMap<>();
 		for (JsonNode node : citations) {
 			String url = node == null ? null : textOrNull(node, "url");
 			String publisher = node == null ? null : textOrNull(node, "publisher");
 			String title = node == null ? null : textOrNull(node, "title");
-			parsed.add(new CitationInfo(url, publisher, title));
+			CitationInfo info = new CitationInfo(url, publisher, title);
+			String dedupeKey = dedupeKey(info);
+			if (!unique.containsKey(dedupeKey)) {
+				unique.put(dedupeKey, info);
+			}
 		}
-		return parsed;
+		return List.copyOf(unique.values());
+	}
+
+	private boolean hasSufficientCitations(List<CitationInfo> citations, int minCitations, String isin) {
+		int required = Math.max(1, minCitations);
+		int count = citations == null ? 0 : citations.size();
+		if (count >= required) {
+			return true;
+		}
+		return required == 2 && count == 1 && hasStrongPrimarySource(citations, isin);
+	}
+
+	private boolean hasStrongPrimarySource(List<CitationInfo> citations, String isin) {
+		if (citations == null || citations.isEmpty()) {
+			return false;
+		}
+		for (CitationInfo info : citations) {
+			if (isStrongPrimarySource(info, isin)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean isStrongPrimarySource(CitationInfo info, String isin) {
+		if (info == null) {
+			return false;
+		}
+		String host = extractHost(info.url());
+		if (host == null || isSecondaryDomain(host)) {
+			return false;
+		}
+		String combined = safe(info.publisher()) + " " + safe(info.title()) + " " + safe(info.url());
+		if (!containsAnyPrimaryHint(combined, STRONG_PRIMARY_HINTS)
+				&& !containsAnyPrimaryHint(combined, List.of("issuer"))) {
+			return false;
+		}
+		if (isin == null || isin.isBlank()) {
+			return true;
+		}
+		return combined.toUpperCase(Locale.ROOT).contains(isin.trim().toUpperCase(Locale.ROOT));
+	}
+
+	private boolean isSecondaryDomain(String host) {
+		if (host == null || host.isBlank()) {
+			return false;
+		}
+		String normalized = host.toLowerCase(Locale.ROOT);
+		for (String secondary : SECONDARY_DOMAINS) {
+			if (normalized.equals(secondary) || normalized.endsWith("." + secondary)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean containsAnyPrimaryHint(String value, List<String> hints) {
+		if (value == null || value.isBlank() || hints == null || hints.isEmpty()) {
+			return false;
+		}
+		String normalized = " " + normalizeText(value) + " ";
+		for (String hint : hints) {
+			String normalizedHint = normalizeText(hint);
+			if (!normalizedHint.isBlank() && normalized.contains(" " + normalizedHint + " ")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private String dedupeKey(CitationInfo info) {
+		if (info == null) {
+			return "";
+		}
+		String canonicalUrl = canonicalizeUrl(info.url());
+		if (canonicalUrl != null && !canonicalUrl.isBlank()) {
+			return canonicalUrl;
+		}
+		return (safe(info.title()).trim().toLowerCase(Locale.ROOT)
+				+ "|"
+				+ safe(info.publisher()).trim().toLowerCase(Locale.ROOT));
+	}
+
+	private String canonicalizeUrl(String rawUrl) {
+		if (rawUrl == null || rawUrl.isBlank()) {
+			return null;
+		}
+		String trimmed = rawUrl.trim();
+		try {
+			URI uri = URI.create(trimmed);
+			if (uri.getHost() == null) {
+				uri = URI.create("https://" + trimmed);
+			}
+			String host = uri.getHost();
+			if (host == null || host.isBlank()) {
+				return trimmed.toLowerCase(Locale.ROOT);
+			}
+			host = host.toLowerCase(Locale.ROOT);
+			if (host.startsWith("www.")) {
+				host = host.substring(4);
+			}
+			String scheme = uri.getScheme() == null ? "https" : uri.getScheme().toLowerCase(Locale.ROOT);
+			String path = uri.getPath();
+			if (path == null || path.isBlank()) {
+				path = "/";
+			}
+			path = path.replaceAll("/{2,}", "/");
+			if (path.length() > 1 && path.endsWith("/")) {
+				path = path.substring(0, path.length() - 1);
+			}
+			StringBuilder canonical = new StringBuilder(scheme)
+					.append("://")
+					.append(host)
+					.append(path);
+			if (uri.getRawQuery() != null && !uri.getRawQuery().isBlank()) {
+				canonical.append("?").append(uri.getRawQuery());
+			}
+			return canonical.toString();
+		} catch (Exception ex) {
+			return trimmed.toLowerCase(Locale.ROOT);
+		}
 	}
 
 	private boolean hasPrimarySource(List<CitationInfo> citations) {
@@ -1160,13 +1296,8 @@ public class KnowledgeBaseQualityGateService {
 
 	private boolean looksPrimary(CitationInfo info) {
 		String host = extractHost(info.url());
-		if (host != null) {
-			String normalized = host.toLowerCase(Locale.ROOT);
-			for (String secondary : SECONDARY_DOMAINS) {
-				if (normalized.equals(secondary) || normalized.endsWith("." + secondary)) {
-					return false;
-				}
-			}
+		if (host != null && isSecondaryDomain(host)) {
+			return false;
 		}
 		String combined = (safe(info.publisher()) + " " + safe(info.title()) + " " + safe(info.url())).toLowerCase(Locale.ROOT);
 		for (String hint : PRIMARY_HINTS) {

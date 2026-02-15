@@ -140,6 +140,82 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
+	void evaluateDossier_allowsSingleStrongPrimaryCitationWhenMinTwoConfigured() {
+		String content = completeFundDossier("IE00BK5BQT80");
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"Vanguard Factsheet",
+						"https://www.vanguard.com/investment-products/etfs/fund-factsheet/IE00BK5BQT80",
+						"Vanguard",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"IE00BK5BQT80",
+				content,
+				citations,
+				configSnapshot(2, true)
+		);
+
+		assertThat(result.reasons()).doesNotContain("insufficient_citations", "missing_primary_source");
+	}
+
+	@Test
+	void evaluateDossier_keepsMinCitationRuleForSingleSecondarySource() {
+		String content = completeFundDossier("IE00BK5BQT80");
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BQT80",
+						"justETF",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"IE00BK5BQT80",
+				content,
+				citations,
+				configSnapshot(2, true)
+		);
+
+		assertThat(result.reasons()).contains("insufficient_citations", "missing_primary_source");
+	}
+
+	@Test
+	void evaluateDossier_deduplicatesCitationUrlsBeforeCounting() {
+		String content = completeFundDossier("IE00BK5BQT80");
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BQT80",
+						"justETF",
+						"2026-02-13"
+				),
+				citation(
+						"2",
+						"justETF profile duplicate",
+						"https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BQT80#top",
+						"justETF",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.DossierQualityResult result = service.evaluateDossier(
+				"IE00BK5BQT80",
+				content,
+				citations,
+				configSnapshot(2, true)
+		);
+
+		assertThat(result.reasons()).contains("insufficient_citations");
+	}
+
+	@Test
 	void evaluateExtractionEvidence_fundProfile_requiresFundFieldsAndHoldings() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"IE00B4L5Y983",
@@ -863,15 +939,73 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	private ArrayNode buildCitations() {
+		return citations(citation("1", "Example", "https://example.com", "Example", "2026-02-08"));
+	}
+
+	private ArrayNode citations(ObjectNode... entries) {
 		ArrayNode citations = objectMapper.createArrayNode();
-		ObjectNode entry = objectMapper.createObjectNode();
-		entry.put("id", "1");
-		entry.put("title", "Example");
-		entry.put("url", "https://example.com");
-		entry.put("publisher", "Example");
-		entry.put("accessed_at", "2026-02-08");
-		citations.add(entry);
+		if (entries == null) {
+			return citations;
+		}
+		for (ObjectNode entry : entries) {
+			if (entry != null) {
+				citations.add(entry);
+			}
+		}
 		return citations;
+	}
+
+	private ObjectNode citation(String id, String title, String url, String publisher, String accessedAt) {
+		ObjectNode entry = objectMapper.createObjectNode();
+		entry.put("id", id);
+		entry.put("title", title);
+		entry.put("url", url);
+		entry.put("publisher", publisher);
+		entry.put("accessed_at", accessedAt);
+		return entry;
+	}
+
+	private String completeFundDossier(String isin) {
+		return "# " + isin + " - Sample\n"
+				+ "## Quick profile\n"
+				+ "instrument_type: ETF\n"
+				+ "## Classification\n"
+				+ "## Risk\n"
+				+ "## Costs & structure\n"
+				+ "## Exposures\n"
+				+ "## Valuation & profitability\n"
+				+ "## Sources\n";
+	}
+
+	private KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot configSnapshot(int minCitations,
+																		boolean requirePrimarySource) {
+		return new KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot(
+				true,
+				30,
+				false,
+				false,
+				false,
+				10,
+				120000,
+				2,
+				5,
+				300,
+				100,
+				3,
+				2,
+				30,
+				15000,
+				7,
+				30,
+				"low",
+				List.of("example.com"),
+				minCitations,
+				requirePrimarySource,
+				0.6,
+				true,
+				2,
+				null
+		);
 	}
 
 	private InstrumentDossierExtractionPayload payloadWithLayer(

@@ -149,6 +149,100 @@ class KnowledgeBaseMaintenanceServiceTest {
 		assertThat(editRepository.findAll()).isNotEmpty();
 	}
 
+	@Test
+	void bulkResearch_autoApprove_allowsSingleStrongPrimaryCitation() {
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, is_deleted) values ('IE00BK5BQT80', 'Vanguard ETF', 'tr', 2, false)");
+
+		KnowledgeBaseConfigDto current = configService.getConfig();
+		KnowledgeBaseConfigDto updated = new KnowledgeBaseConfigDto(
+				current.enabled(),
+				current.refreshIntervalDays(),
+				current.autoApprove(),
+				current.applyExtractionsToOverrides(),
+				current.overwriteExistingOverrides(),
+				current.batchSizeInstruments(),
+				current.batchMaxInputChars(),
+				current.maxParallelBulkBatches(),
+				current.maxBatchesPerRun(),
+				current.pollIntervalSeconds(),
+				current.maxInstrumentsPerRun(),
+				current.maxRetriesPerInstrument(),
+				current.baseBackoffSeconds(),
+				current.maxBackoffSeconds(),
+				current.dossierMaxChars(),
+				current.kbRefreshMinDaysBetweenRunsPerInstrument(),
+				current.runTimeoutMinutes(),
+				current.websearchReasoningEffort(),
+				current.websearchAllowedDomains(),
+				2,
+				true,
+				current.alternativesMinSimilarityScore(),
+				current.extractionEvidenceRequired(),
+				current.qualityGateRetryLimit(),
+				current.qualityGateProfiles()
+		);
+		configService.updateConfig(updated);
+
+		KnowledgeBaseBulkResearchResponseDto result = maintenanceService.bulkResearch(
+				List.of("IE00BK5BQT80"),
+				true,
+				false,
+				"tester"
+		);
+
+		assertThat(result.failed()).isZero();
+		var dossier = dossierRepository.findFirstByIsinOrderByVersionDesc("IE00BK5BQT80").orElseThrow();
+		assertThat(dossier.getStatus()).isEqualTo(DossierStatus.APPROVED);
+		assertThat(dossier.isAutoApproved()).isTrue();
+	}
+
+	@Test
+	void bulkResearch_autoApprove_blocksSingleSecondaryCitation() {
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, is_deleted) values ('IE00SEC00001', 'Secondary ETF', 'tr', 2, false)");
+
+		KnowledgeBaseConfigDto current = configService.getConfig();
+		KnowledgeBaseConfigDto updated = new KnowledgeBaseConfigDto(
+				current.enabled(),
+				current.refreshIntervalDays(),
+				current.autoApprove(),
+				current.applyExtractionsToOverrides(),
+				current.overwriteExistingOverrides(),
+				current.batchSizeInstruments(),
+				current.batchMaxInputChars(),
+				current.maxParallelBulkBatches(),
+				current.maxBatchesPerRun(),
+				current.pollIntervalSeconds(),
+				current.maxInstrumentsPerRun(),
+				current.maxRetriesPerInstrument(),
+				current.baseBackoffSeconds(),
+				current.maxBackoffSeconds(),
+				current.dossierMaxChars(),
+				current.kbRefreshMinDaysBetweenRunsPerInstrument(),
+				current.runTimeoutMinutes(),
+				current.websearchReasoningEffort(),
+				current.websearchAllowedDomains(),
+				2,
+				true,
+				current.alternativesMinSimilarityScore(),
+				current.extractionEvidenceRequired(),
+				current.qualityGateRetryLimit(),
+				current.qualityGateProfiles()
+		);
+		configService.updateConfig(updated);
+
+		KnowledgeBaseBulkResearchResponseDto result = maintenanceService.bulkResearch(
+				List.of("IE00SEC00001"),
+				true,
+				false,
+				"tester"
+		);
+
+		assertThat(result.failed()).isZero();
+		var dossier = dossierRepository.findFirstByIsinOrderByVersionDesc("IE00SEC00001").orElseThrow();
+		assertThat(dossier.getStatus()).isEqualTo(DossierStatus.PENDING_REVIEW);
+		assertThat(dossier.isAutoApproved()).isFalse();
+	}
+
 	@Configuration
 	static class TestConfig {
 		@Bean
@@ -157,22 +251,38 @@ class KnowledgeBaseMaintenanceServiceTest {
 			return new KnowledgeBaseLlmClient() {
 				@Override
 				public KnowledgeBaseLlmDossierDraft generateDossier(String isin,
-											 String context,
-											 List<String> allowedDomains,
-											 int maxChars) {
+										 String context,
+										 List<String> allowedDomains,
+										 int maxChars) {
 					ArrayNode citations = objectMapper.createArrayNode();
-					citations.add(objectMapper.createObjectNode()
-							.put("id", "1")
-							.put("title", "Issuer Factsheet")
-							.put("url", "https://issuer.example.com/factsheet")
-							.put("publisher", "Issuer")
-							.put("accessed_at", "2024-01-01"));
-					citations.add(objectMapper.createObjectNode()
-							.put("id", "2")
-							.put("title", "KID")
-							.put("url", "https://issuer.example.com/kid")
-							.put("publisher", "Issuer")
-							.put("accessed_at", "2024-01-01"));
+					if ("IE00BK5BQT80".equalsIgnoreCase(isin)) {
+						citations.add(objectMapper.createObjectNode()
+								.put("id", "1")
+								.put("title", "Vanguard Factsheet")
+								.put("url", "https://www.vanguard.com/fund-factsheet/IE00BK5BQT80")
+								.put("publisher", "Vanguard")
+								.put("accessed_at", "2026-02-13"));
+					} else if ("IE00SEC00001".equalsIgnoreCase(isin)) {
+						citations.add(objectMapper.createObjectNode()
+								.put("id", "1")
+								.put("title", "justETF profile")
+								.put("url", "https://www.justetf.com/en/etf-profile.html?isin=IE00SEC00001")
+								.put("publisher", "justETF")
+								.put("accessed_at", "2026-02-13"));
+					} else {
+						citations.add(objectMapper.createObjectNode()
+								.put("id", "1")
+								.put("title", "Issuer Factsheet")
+								.put("url", "https://issuer.example.com/factsheet")
+								.put("publisher", "Issuer")
+								.put("accessed_at", "2024-01-01"));
+						citations.add(objectMapper.createObjectNode()
+								.put("id", "2")
+								.put("title", "KID")
+								.put("url", "https://issuer.example.com/kid")
+								.put("publisher", "Issuer")
+								.put("accessed_at", "2024-01-01"));
+					}
 					String content = "# " + isin + " — Test Instrument\n" +
 							"## Quick profile\n" +
 							"name: Test Instrument\n" +
