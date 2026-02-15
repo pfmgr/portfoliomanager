@@ -3,6 +3,9 @@ package my.portfoliomanager.app.api;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
+import my.portfoliomanager.app.domain.DossierOrigin;
+import my.portfoliomanager.app.domain.DossierStatus;
+import my.portfoliomanager.app.dto.InstrumentDossierCreateRequest;
 import my.portfoliomanager.app.dto.KnowledgeBaseBulkResearchRequestDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseLlmActionStatus;
@@ -191,6 +194,87 @@ class KnowledgeBaseApiIntegrationTest {
 				.getResponse()
 				.getContentAsString();
 		assertThat(response).contains("\"items\"");
+	}
+
+	@Test
+	void dossiersSearchAndSortWorkAcrossAllPages() throws Exception {
+		createDossier("DE9988800001", "PrefixSearchToken Growth A");
+		createDossier("DE9988800002", "PrefixSearchToken Growth B");
+		createDossier("DE9988800003", "PrefixSearchToken Growth C");
+
+		String page0Response = mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("q", "prefixsearch")
+						.param("sortBy", "isin")
+						.param("sortDirection", "desc")
+						.param("size", "1")
+						.param("page", "0"))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		JsonNode page0 = objectMapper.readTree(page0Response);
+		assertThat(page0.at("/items/0/isin").asText()).isEqualTo("DE9988800003");
+		assertThat(page0.path("total").asInt()).isGreaterThanOrEqualTo(3);
+
+		String page1Response = mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("q", "prefixsearch")
+						.param("sortBy", "isin")
+						.param("sortDirection", "desc")
+						.param("size", "1")
+						.param("page", "1"))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		JsonNode page1 = objectMapper.readTree(page1Response);
+		assertThat(page1.at("/items/0/isin").asText()).isEqualTo("DE9988800002");
+
+		String containsResponse = mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("q", "growth b")
+						.param("sortBy", "isin")
+						.param("sortDirection", "asc")
+						.param("size", "10")
+						.param("page", "0"))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		JsonNode contains = objectMapper.readTree(containsResponse);
+		assertThat(contains.at("/items/0/isin").asText()).isEqualTo("DE9988800002");
+
+		String isinPrefixResponse = mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("q", "de998880000")
+						.param("sortBy", "isin")
+						.param("sortDirection", "asc")
+						.param("size", "10")
+						.param("page", "0"))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		JsonNode isinPrefix = objectMapper.readTree(isinPrefixResponse);
+		assertThat(isinPrefix.path("items").isArray()).isTrue();
+		assertThat(isinPrefix.path("items").size()).isGreaterThanOrEqualTo(3);
+	}
+
+	private void createDossier(String isin, String displayName) throws Exception {
+		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
+				isin,
+				displayName,
+				"# " + isin + "\n\nName: " + displayName,
+				DossierOrigin.USER,
+				DossierStatus.DRAFT,
+				objectMapper.createArrayNode()
+		);
+		mockMvc.perform(post("/api/kb/dossiers")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(objectMapper.writeValueAsString(request)))
+				.andExpect(status().isOk());
 	}
 
 	private KnowledgeBaseLlmActionDto awaitAction(String actionId) throws Exception {

@@ -45,6 +45,7 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  SELECT
 			    ie.isin,
 			    ie.name,
+			    d.display_name AS dossier_display_name,
 			    ie.layer AS effective_layer,
 			    d.dossier_id,
 			    d.status AS dossier_status,
@@ -60,6 +61,7 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  SELECT
 			    d.isin,
 			    COALESCE(o.name, i.name, d.display_name) AS name,
+			    d.display_name AS dossier_display_name,
 			    COALESCE(o.layer, c.layer, i.layer) AS effective_layer,
 			    d.dossier_id,
 			    d.status AS dossier_status,
@@ -106,7 +108,15 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  END AS extractionFreshness
 			FROM combined c
 			LEFT JOIN latest_extractions le ON le.isin = c.isin
-			WHERE (:query IS NULL OR :query = '' OR LOWER(c.isin) LIKE LOWER(CONCAT('%', :query, '%')) OR LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')))
+			WHERE (
+			  :queryContainsPattern IS NULL
+			  OR LOWER(c.isin) LIKE :queryPrefixPattern ESCAPE '\\'
+			  OR LOWER(c.name) LIKE :queryPrefixPattern ESCAPE '\\'
+			  OR LOWER(c.dossier_display_name) LIKE :queryPrefixPattern ESCAPE '\\'
+			  OR LOWER(c.isin) LIKE :queryContainsPattern ESCAPE '\\'
+			  OR LOWER(c.name) LIKE :queryContainsPattern ESCAPE '\\'
+			  OR LOWER(c.dossier_display_name) LIKE :queryContainsPattern ESCAPE '\\'
+			)
 			  AND (:status IS NULL OR c.dossier_status = :status)
 			  AND (:stale IS NULL OR (
 			    CASE
@@ -115,14 +125,32 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			      ELSE FALSE
 			    END
 			  ) = :stale)
-			ORDER BY c.isin
+			ORDER BY
+			  CASE
+			    WHEN :sortBy = 'status' THEN CASE WHEN c.dossier_status IS NULL THEN 1 ELSE 0 END
+			    ELSE 0
+			  END ASC,
+			  CASE
+			    WHEN :sortBy = 'updatedAt' THEN CASE WHEN c.dossier_updated_at IS NULL THEN 1 ELSE 0 END
+			    ELSE 0
+			  END ASC,
+			  CASE WHEN :sortBy = 'isin' AND :sortDirection = 'asc' THEN LOWER(c.isin) END ASC,
+			  CASE WHEN :sortBy = 'isin' AND :sortDirection = 'desc' THEN LOWER(c.isin) END DESC,
+			  CASE WHEN :sortBy = 'status' AND :sortDirection = 'asc' THEN c.dossier_status END ASC,
+			  CASE WHEN :sortBy = 'status' AND :sortDirection = 'desc' THEN c.dossier_status END DESC,
+			  CASE WHEN :sortBy = 'updatedAt' AND :sortDirection = 'asc' THEN c.dossier_updated_at END ASC,
+			  CASE WHEN :sortBy = 'updatedAt' AND :sortDirection = 'desc' THEN c.dossier_updated_at END DESC,
+			  LOWER(c.isin) ASC
 			LIMIT :limit OFFSET :offset
 			""", nativeQuery = true)
 	List<InstrumentDossierSearchProjection> searchDossiers(
-			@Param("query") String query,
+			@Param("queryContainsPattern") String queryContainsPattern,
+			@Param("queryPrefixPattern") String queryPrefixPattern,
 			@Param("status") String status,
 			@Param("stale") Boolean stale,
 			@Param("staleBefore") java.time.LocalDateTime staleBefore,
+			@Param("sortBy") String sortBy,
+			@Param("sortDirection") String sortDirection,
 			@Param("limit") int limit,
 			@Param("offset") int offset
 	);
@@ -143,6 +171,7 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  SELECT
 			    ie.isin,
 			    ie.name,
+			    d.display_name AS dossier_display_name,
 			    ie.layer AS effective_layer,
 			    d.dossier_id,
 			    d.status AS dossier_status,
@@ -155,6 +184,7 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  SELECT
 			    d.isin,
 			    COALESCE(o.name, i.name, d.display_name) AS name,
+			    d.display_name AS dossier_display_name,
 			    COALESCE(o.layer, c.layer, i.layer) AS effective_layer,
 			    d.dossier_id,
 			    d.status AS dossier_status,
@@ -172,6 +202,7 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  SELECT
 			    c.isin,
 			    c.name,
+			    c.dossier_display_name,
 			    c.dossier_status,
 			    CASE
 			      WHEN c.dossier_approved_at IS NULL THEN FALSE
@@ -182,11 +213,20 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			)
 			SELECT COUNT(*)
 			FROM filtered
-			WHERE (:query IS NULL OR :query = '' OR LOWER(isin) LIKE LOWER(CONCAT('%', :query, '%')) OR LOWER(name) LIKE LOWER(CONCAT('%', :query, '%')))
+			WHERE (
+			  :queryContainsPattern IS NULL
+			  OR LOWER(isin) LIKE :queryPrefixPattern ESCAPE '\\'
+			  OR LOWER(name) LIKE :queryPrefixPattern ESCAPE '\\'
+			  OR LOWER(dossier_display_name) LIKE :queryPrefixPattern ESCAPE '\\'
+			  OR LOWER(isin) LIKE :queryContainsPattern ESCAPE '\\'
+			  OR LOWER(name) LIKE :queryContainsPattern ESCAPE '\\'
+			  OR LOWER(dossier_display_name) LIKE :queryContainsPattern ESCAPE '\\'
+			)
 			  AND (:status IS NULL OR dossier_status = :status)
 			  AND (:stale IS NULL OR stale = :stale)
 			""", nativeQuery = true)
-	long countSearch(@Param("query") String query,
+	long countSearch(@Param("queryContainsPattern") String queryContainsPattern,
+					 @Param("queryPrefixPattern") String queryPrefixPattern,
 					 @Param("status") String status,
 					 @Param("stale") Boolean stale,
 					 @Param("staleBefore") java.time.LocalDateTime staleBefore);

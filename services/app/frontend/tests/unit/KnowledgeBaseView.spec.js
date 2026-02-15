@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import KnowledgeBaseView from '../../src/views/KnowledgeBaseView.vue'
 import { apiRequest } from '../../src/api'
 
@@ -10,6 +10,10 @@ vi.mock('../../src/api', () => ({
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('KnowledgeBaseView', () => {
+  beforeEach(() => {
+    apiRequest.mockReset()
+  })
+
   it('hydrates persisted sort state from storage', async () => {
     const store = new Map()
     const storage = {
@@ -96,6 +100,79 @@ describe('KnowledgeBaseView', () => {
 
     expect(wrapper.text()).toContain('Knowledge Base')
     expect(wrapper.text()).toContain('No dossiers found.')
+    wrapper.unmount()
+  })
+
+  it('loads dossiers with server-side sorting and resets page for sort and filters', async () => {
+    const dossierCalls = []
+    apiRequest.mockImplementation((path) => {
+      if (path.startsWith('/kb/config')) {
+        return Promise.resolve({ enabled: true })
+      }
+      if (path.startsWith('/kb/dossiers')) {
+        dossierCalls.push(path)
+        return Promise.resolve({
+          items: [
+            {
+              isin: 'DE0000000001',
+              name: 'Alpha',
+              hasDossier: true,
+              latestDossierStatus: 'DRAFT',
+              latestUpdatedAt: '2025-01-01T00:00:00',
+              latestDossierVersion: 1,
+              hasApprovedDossier: false,
+              hasApprovedExtraction: false,
+              stale: false,
+              extractionFreshness: 'NONE'
+            }
+          ],
+          total: 120
+        })
+      }
+      if (path.startsWith('/kb/runs')) {
+        return Promise.resolve({ items: [], total: 0 })
+      }
+      if (path.startsWith('/kb/llm-actions')) {
+        return Promise.resolve([])
+      }
+      return Promise.resolve({})
+    })
+
+    const wrapper = mount(KnowledgeBaseView)
+    await flushPromises()
+
+    expect(dossierCalls[0]).toContain('sortBy=updatedAt')
+    expect(dossierCalls[0]).toContain('sortDirection=desc')
+    expect(dossierCalls[0]).toContain('page=0')
+
+    const getNextButton = () => wrapper.findAll('button').find((button) => button.text() === 'Next')
+
+    const nextButton = getNextButton()
+    expect(nextButton).toBeTruthy()
+    await nextButton.trigger('click')
+    await flushPromises()
+    expect(dossierCalls.at(-1)).toContain('page=1')
+
+    const isinSortButton = wrapper.findAll('button.sort-button').find((button) => button.text().includes('ISIN'))
+    expect(isinSortButton).toBeTruthy()
+    await isinSortButton.trigger('click')
+    await flushPromises()
+    expect(dossierCalls.at(-1)).toContain('sortBy=isin')
+    expect(dossierCalls.at(-1)).toContain('sortDirection=asc')
+    expect(dossierCalls.at(-1)).toContain('page=0')
+
+    await getNextButton().trigger('click')
+    await flushPromises()
+    expect(dossierCalls.at(-1)).toContain('page=1')
+
+    const searchInput = wrapper.find('input[placeholder="ISIN or name"]')
+    await searchInput.setValue('alpha')
+    const filterForm = wrapper.find('form.kb-filter-form')
+    await filterForm.trigger('submit')
+    await flushPromises()
+    expect(dossierCalls.at(-1)).toContain('q=alpha')
+    expect(dossierCalls.at(-1)).toContain('page=0')
+
     wrapper.unmount()
   })
 })

@@ -132,7 +132,7 @@ class KnowledgeBaseRefreshServiceTest {
 		KnowledgeBaseRefreshItemDto result = service.refreshSingle("DE0000000001", null, true, "tester");
 
 		assertThat(result.status()).isEqualTo(KnowledgeBaseBulkResearchItemStatus.FAILED);
-		assertThat(result.error()).isEqualTo("forced refresh");
+		assertThat(result.error()).isEqualTo("Operation failed.");
 		org.mockito.Mockito.verify(runService, org.mockito.Mockito.never())
 				.findLatest("DE0000000001", KnowledgeBaseRunAction.REFRESH);
 	}
