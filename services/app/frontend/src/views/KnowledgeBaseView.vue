@@ -52,10 +52,10 @@
         :id="panelId('DOSSIERS')"
         :aria-labelledby="tabId('DOSSIERS')"
       >
-        <form class="form inline kb-filter-form" @submit.prevent="loadDossiers">
+        <form class="form inline kb-filter-form" @submit.prevent="applyDossierFilters">
           <label class="field">
             <span>Search</span>
-            <input v-model="dossierFilters.query" placeholder="ISIN or name" />
+            <input ref="dossierSearchInput" v-model="dossierFilters.query" placeholder="ISIN or name" maxlength="120" />
           </label>
           <label class="field">
             <span>Status</span>
@@ -74,7 +74,7 @@
           </label>
           <label class="field">
             <span>Page size</span>
-            <select v-model.number="dossierPage.size">
+            <select v-model.number="dossierPage.size" @change="applyDossierFilters">
               <option :value="25">25</option>
               <option :value="50">50</option>
               <option :value="100">100</option>
@@ -82,10 +82,16 @@
           </label>
           <button class="ghost" type="submit" :disabled="dossiersLoading">Refresh</button>
         </form>
+        <p class="hint">Search matches dossier ISIN and names by prefix or contains (max 120 characters).</p>
 
         <div class="actions">
           <span class="muted">Total: {{ dossierPage.total }}</span>
-          <span class="muted">Selected: {{ selectedIsinsCount }}</span>
+          <span class="muted">
+            Selected: {{ selectedIsinsCount }}
+            <template v-if="hiddenSelectedCount > 0">
+              ({{ selectedOnPageCount }} on page, {{ hiddenSelectedCount }} hidden)
+            </template>
+          </span>
           <button
             class="secondary"
             type="button"
@@ -114,6 +120,7 @@
 
         <p v-if="dossiersError" class="toast error">{{ dossiersError }}</p>
         <p v-if="dossiersMessage" class="toast success">{{ dossiersMessage }}</p>
+        <p class="sr-only" role="status" aria-live="polite">{{ dossierLiveMessage }}</p>
 
         <div class="kb-split" :class="{ 'kb-split-stacked': !hasDossierDetail }">
           <div class="kb-pane">
@@ -129,6 +136,9 @@
               ref="dossierTableWrap"
               class="table-wrap kb-table-wrap"
               :class="{ 'kb-table-wrap-scrollable': showDossierScrollHint }"
+              role="region"
+              aria-label="Knowledge base dossiers"
+              :aria-busy="dossiersLoading ? 'true' : 'false'"
               @scroll="updateDossierScrollHint"
             >
               <table class="table kb-dossier-table" :class="{ 'kb-dossier-table-scrollable': showDossierScrollHint }">
@@ -149,7 +159,7 @@
                         type="button"
                         class="sort-button"
                         :aria-label="sortButtonLabel('ISIN', dossierSort, 'isin')"
-                        @click="toggleSort(dossierSort, 'isin')"
+                        @click="toggleDossierSort('isin')"
                       >
                         ISIN <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(dossierSort, 'isin') }}</span>
                       </button>
@@ -160,7 +170,7 @@
                         type="button"
                         class="sort-button"
                         :aria-label="sortButtonLabel('Status', dossierSort, 'status')"
-                        @click="toggleSort(dossierSort, 'status')"
+                        @click="toggleDossierSort('status')"
                       >
                         Status <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(dossierSort, 'status') }}</span>
                       </button>
@@ -174,7 +184,7 @@
                         type="button"
                         class="sort-button"
                         :aria-label="sortButtonLabel('Updated', dossierSort, 'updatedAt')"
-                        @click="toggleSort(dossierSort, 'updatedAt', 'desc')"
+                        @click="toggleDossierSort('updatedAt', 'desc')"
                       >
                         Updated <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(dossierSort, 'updatedAt') }}</span>
                       </button>
@@ -245,7 +255,7 @@
             <div v-if="dossierDetail" class="kb-detail">
               <div class="kb-detail-head">
                 <div>
-                  <h3>Dossier detail</h3>
+                  <h3 ref="dossierDetailHeading" tabindex="-1">Dossier detail</h3>
                   <p class="hint">{{ dossierDetail.isin }} | {{ dossierDetail.displayName || 'Unknown' }}</p>
                 </div>
                 <button class="ghost" type="button" @click="closeDossier">Close</button>
@@ -317,7 +327,15 @@
                   <h4>Sources</h4>
                   <ul class="kb-citations">
                     <li v-for="(source, index) in dossierSources" :key="index">
-                      <a :href="source.url" target="_blank" rel="noreferrer">{{ source.title || source.url }}</a>
+                      <a
+                        v-if="isSafeCitationUrl(source.url)"
+                        :href="safeCitationUrl(source.url)"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {{ source.title || source.url }}
+                      </a>
+                      <span v-else>{{ source.title || source.url || '-' }}</span>
                       <span class="muted" v-if="source.publisher">{{ source.publisher }}</span>
                       <span class="muted" v-if="source.accessed_at || source.accessedAt">
                         ({{ source.accessed_at || source.accessedAt }})
@@ -735,7 +753,15 @@
                       <summary>{{ (item.citations || []).length }} sources</summary>
                       <ul class="kb-citations">
                         <li v-for="(source, idx) in item.citations" :key="idx">
-                          <a :href="source.url" target="_blank" rel="noreferrer">{{ source.title || source.url }}</a>
+                          <a
+                            v-if="isSafeCitationUrl(source.url)"
+                            :href="safeCitationUrl(source.url)"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {{ source.title || source.url }}
+                          </a>
+                          <span v-else>{{ source.title || source.url || '-' }}</span>
                           <span class="muted" v-if="source.publisher">{{ source.publisher }}</span>
                         </li>
                       </ul>
@@ -997,7 +1023,7 @@
         :aria-labelledby="tabId('RUNS')"
       >
         <h3>Runs</h3>
-        <form class="form inline kb-filter-form" @submit.prevent="loadRuns">
+        <form class="form inline kb-filter-form" @submit.prevent="applyRunsFilters">
           <label class="field">
             <span>ISIN</span>
             <input v-model="runsFilters.isin" placeholder="Filter by ISIN" />
@@ -1011,7 +1037,7 @@
           </label>
           <label class="field">
             <span>Page size</span>
-            <select v-model.number="runsPage.size">
+            <select v-model.number="runsPage.size" @change="applyRunsFilters">
               <option :value="25">25</option>
               <option :value="50">50</option>
               <option :value="100">100</option>
@@ -1019,6 +1045,7 @@
           </label>
           <button class="ghost" type="submit" :disabled="runsLoading">Refresh</button>
         </form>
+        <p class="hint">Run sorting applies to the currently loaded page.</p>
 
         <p v-if="runsError" class="toast error">{{ runsError }}</p>
 
@@ -1316,7 +1343,10 @@ const dossierDetail = ref(null)
 const dossierActionError = ref('')
 const editMode = ref(false)
 const dossierTableWrap = ref(null)
+const dossierDetailHeading = ref(null)
+const dossierSearchInput = ref(null)
 const showDossierScrollHint = ref(false)
+const dossierLiveMessage = ref('')
 const dossierForm = ref({
   displayName: '',
   contentMd: '',
@@ -1390,6 +1420,10 @@ const runsSort = reactive({ key: 'startedAt', direction: 'desc' })
 
 const canApplyOverrides = computed(() => configForm.value.applyExtractionsToOverrides)
 const selectedIsinsCount = computed(() => selectedIsins.value.size)
+const selectedOnPageCount = computed(
+  () => dossierItems.value.filter((item) => item?.isin && selectedIsins.value.has(item.isin)).length
+)
+const hiddenSelectedCount = computed(() => Math.max(0, selectedIsinsCount.value - selectedOnPageCount.value))
 const hasDossierDetail = computed(() => Boolean(dossierDetail.value))
 const isHintCompact = computed(() => dossierItems.value.length <= 3)
 const allSelectedOnPage = computed(() =>
@@ -1432,7 +1466,7 @@ const runsSorters = {
   status: (item) => item.status
 }
 
-const dossierRows = computed(() => sortItems(dossierItems.value, dossierSort, dossierSorters))
+const dossierRows = computed(() => dossierItems.value)
 const dossierVersionRows = computed(() =>
   sortItems(dossierDetail.value?.versions || [], versionSort, versionSorters)
 )
@@ -1914,31 +1948,83 @@ async function saveConfig() {
   }
 }
 
-async function loadDossiers() {
+async function loadDossiers(options = {}) {
+  const allowPageClamp = options.allowPageClamp !== false
   dossiersLoading.value = true
   dossiersError.value = ''
   dossiersMessage.value = ''
+  const requestedPage = dossierPage.value.page
+  const requestedSize = dossierPage.value.size
   const params = new URLSearchParams()
   if (dossierFilters.value.query) params.append('q', dossierFilters.value.query)
   if (dossierFilters.value.status) params.append('status', dossierFilters.value.status)
   if (dossierFilters.value.stale === 'true') params.append('stale', 'true')
   if (dossierFilters.value.stale === 'false') params.append('stale', 'false')
-  params.append('page', String(dossierPage.value.page))
-  params.append('size', String(dossierPage.value.size))
+  params.append('sortBy', dossierSort.key)
+  params.append('sortDirection', dossierSort.direction)
+  params.append('page', String(requestedPage))
+  params.append('size', String(requestedSize))
   try {
     const result = await apiRequest(`/kb/dossiers?${params.toString()}`)
     dossierItems.value = result.items || []
     dossierPage.value.total = result.total || 0
+    if (allowPageClamp) {
+      const maxPage =
+        dossierPage.value.total > 0 ? Math.max(0, Math.ceil(dossierPage.value.total / requestedSize) - 1) : 0
+      if (requestedPage > maxPage) {
+        dossierPage.value.page = maxPage
+        await loadDossiers({ allowPageClamp: false })
+        return
+      }
+    }
     syncSelectedDossier()
     await nextTick()
     updateDossierScrollHint()
+    announceDossier(buildDossierLiveMessage())
   } catch (err) {
     if (!handleKbError(err, 'Failed to load dossiers')) {
       dossiersError.value = err?.message || 'Failed to load dossiers'
     }
+    announceDossier('Failed to load dossiers.')
   } finally {
     dossiersLoading.value = false
   }
+}
+
+function applyDossierFilters() {
+  dossierPage.value.page = 0
+  loadDossiers()
+}
+
+function buildDossierLiveMessage() {
+  const total = dossierPage.value.total || 0
+  const page = dossierPage.value.page + 1
+  const pageCount = total > 0 ? Math.max(1, Math.ceil(total / dossierPage.value.size)) : 1
+  const sortedBy = dossierSort.key === 'updatedAt' ? 'updated time' : dossierSort.key
+  const direction = dossierSort.direction === 'asc' ? 'ascending' : 'descending'
+  if (total === 0) {
+    return `No dossiers found. Sorted by ${sortedBy}, ${direction}.`
+  }
+  const from = dossierPage.value.page * dossierPage.value.size + 1
+  const to = Math.min(total, from + dossierItems.value.length - 1)
+  return `Sorted by ${sortedBy}, ${direction}. Showing ${from} to ${to} of ${total}. Page ${page} of ${pageCount}.`
+}
+
+function announceDossier(message) {
+  dossierLiveMessage.value = ''
+  nextTick(() => {
+    dossierLiveMessage.value = message
+  })
+}
+
+async function focusDossierDetailHeading() {
+  await nextTick()
+  dossierDetailHeading.value?.focus()
+}
+
+async function focusDossierSearchInput() {
+  await nextTick()
+  dossierSearchInput.value?.focus()
 }
 
 async function loadDossierDetail(isin) {
@@ -1957,6 +2043,8 @@ async function loadDossierDetail(isin) {
       status: latest.status,
       citationsText: JSON.stringify(latest.citations || [], null, 2)
     }
+    announceDossier(`Dossier loaded for ${isin}.`)
+    await focusDossierDetailHeading()
   } catch (err) {
     dossierActionError.value = err?.message || 'Failed to load dossier detail'
   }
@@ -1968,6 +2056,8 @@ function syncSelectedDossier() {
   if (!match) {
     selectedIsin.value = ''
     dossierDetail.value = null
+    announceDossier('Selected dossier is no longer in the current results.')
+    focusDossierSearchInput()
   }
 }
 
@@ -1979,6 +2069,8 @@ function openDossier(item) {
     extractionError.value = ''
     editMode.value = true
     dossierDetail.value = buildEmptyDossierDetail(item)
+    announceDossier(`New dossier draft opened for ${item.isin}.`)
+    focusDossierDetailHeading()
     return
   }
   loadDossierDetail(item.isin)
@@ -1989,6 +2081,8 @@ function closeDossier() {
   dossierDetail.value = null
   dossierActionMessage.value = ''
   editMode.value = false
+  announceDossier('Dossier detail closed.')
+  focusDossierSearchInput()
 }
 
 async function saveDossier() {
@@ -2353,7 +2447,17 @@ async function deleteSelectedDossiers() {
   dossiersMessage.value = ''
   const isins = Array.from(selectedIsins.value)
   if (!isins.length) return
-  const confirmed = window.confirm('Do you really want to delete selected ISINs from Knowledge Base?')
+  const preview = isins.slice(0, 5).join(', ')
+  const moreCount = Math.max(0, isins.length - 5)
+  const hiddenHint =
+    hiddenSelectedCount.value > 0
+      ? `\n${hiddenSelectedCount.value} selected ISIN(s) are hidden by current filters or pagination.`
+      : ''
+  const confirmed = window.confirm(
+    `Do you really want to delete ${isins.length} selected ISIN(s) from Knowledge Base?\n${preview}${
+      moreCount > 0 ? `, and ${moreCount} more` : ''
+    }${hiddenHint}`
+  )
   if (!confirmed) return
   try {
     const result = await apiRequest('/kb/dossiers/delete', {
@@ -2382,6 +2486,12 @@ function nextDossierPage() {
 function prevDossierPage() {
   if (!hasPrevDossierPage.value) return
   dossierPage.value.page = Math.max(0, dossierPage.value.page - 1)
+  loadDossiers()
+}
+
+function toggleDossierSort(key, defaultDirection = 'asc') {
+  toggleSort(dossierSort, key, defaultDirection)
+  dossierPage.value.page = 0
   loadDossiers()
 }
 
@@ -2707,6 +2817,11 @@ async function runRefreshBatch() {
   }
 }
 
+function applyRunsFilters() {
+  runsPage.value.page = 0
+  loadRuns()
+}
+
 async function loadRuns() {
   runsLoading.value = true
   runsError.value = ''
@@ -3018,6 +3133,18 @@ function summarizeText(value, limit = 80) {
   const compact = value.trim().replace(/\s+/g, ' ')
   if (compact.length <= limit) return compact
   return `${compact.slice(0, limit - 3)}...`
+}
+
+function safeCitationUrl(value) {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (!/^https?:\/\//i.test(trimmed)) return ''
+  return trimmed
+}
+
+function isSafeCitationUrl(value) {
+  return Boolean(safeCitationUrl(value))
 }
 
 function isMissing(item) {

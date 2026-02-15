@@ -24,7 +24,7 @@ public class RestExceptionHandler {
 		logger.warn("Bad request on {}: {}", request.getRequestURI(), ex.getMessage());
 		ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
 		detail.setTitle("Bad Request");
-		detail.setDetail(ex.getMessage());
+		detail.setDetail("Invalid request.");
 		detail.setProperty("path", request.getRequestURI());
 		return detail;
 	}
@@ -44,7 +44,7 @@ public class RestExceptionHandler {
 		logger.warn("Multipart request failed on {}: {}", request.getRequestURI(), ex.getMessage());
 		ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
 		detail.setTitle("Invalid multipart request");
-		detail.setDetail(ex.getMessage() == null ? "Failed to read multipart request." : ex.getMessage());
+		detail.setDetail("Failed to read multipart request.");
 		detail.setProperty("path", request.getRequestURI());
 		return detail;
 	}
@@ -76,7 +76,7 @@ public class RestExceptionHandler {
 		logger.error("Unexpected error on {}", request.getRequestURI(), ex);
 		ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
 		detail.setTitle("Internal Server Error");
-		detail.setDetail(ex.getMessage() == null ? "Unexpected error" : ex.getMessage());
+		detail.setDetail("Unexpected error");
 		detail.setProperty("path", request.getRequestURI());
 		return detail;
 	}

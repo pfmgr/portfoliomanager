@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -34,6 +35,9 @@ public class KnowledgeBaseService {
     private static final Pattern ISIN_RE = Pattern.compile("^[A-Z]{2}[A-Z0-9]{9}[0-9]$");
     private static final Pattern DOSSIER_MARKER_RE = Pattern.compile("(?i)^---\\s*(BEGIN|END)\\s+DOSSIER\\s+MARKDOWN\\s*---$");
     private static final int MAX_LIMIT = 1000;
+    private static final int MAX_OFFSET = 10_000;
+    private static final int MAX_BULK_ISINS = 200;
+    private static final int MAX_QUERY_LENGTH = 120;
     private static final String EDIT_SOURCE = "KB_EXTRACTION";
     private final InstrumentRepository instrumentRepository;
     private final InstrumentDossierRepository dossierRepository;
@@ -89,19 +93,30 @@ public class KnowledgeBaseService {
                                                          DossierStatus status,
                                                          Boolean stale,
                                                          int limit,
-                                                         int offset) {
+                                                         int offset,
+                                                         String sortBy,
+                                                         String sortDirection) {
         int finalLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
         int finalOffset = Math.max(offset, 0);
+        if (finalOffset > MAX_OFFSET) {
+            throw new IllegalArgumentException("Requested page is too deep.");
+        }
         String normalizedQuery = normalizeQuery(query);
+        String queryContainsPattern = toContainsLikePattern(normalizedQuery);
+        String queryPrefixPattern = toPrefixLikePattern(normalizedQuery);
+        DossierSearchSort sort = normalizeDossierSearchSort(sortBy, sortDirection);
         KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
         LocalDateTime staleBefore = LocalDateTime.now().minusDays(config.refreshIntervalDays());
         String statusFilter = status == null ? null : status.name();
-        long total = dossierRepository.countSearch(normalizedQuery, statusFilter, stale, staleBefore);
+        long total = dossierRepository.countSearch(queryContainsPattern, queryPrefixPattern, statusFilter, stale, staleBefore);
         List<InstrumentDossierSearchProjection> rows = dossierRepository.searchDossiers(
-                normalizedQuery,
+                queryContainsPattern,
+                queryPrefixPattern,
                 statusFilter,
                 stale,
                 staleBefore,
+                sort.key(),
+                sort.direction(),
                 finalLimit,
                 finalOffset
         );
@@ -115,6 +130,7 @@ public class KnowledgeBaseService {
         if (normalized.isEmpty()) {
             throw new IllegalArgumentException("At least one ISIN is required");
         }
+        validateBulkIsinCount(normalized.size());
         dossierRepository.clearSupersedesByIsinIn(normalized);
         List<Long> dossierIds = dossierRepository.findIdsByIsinIn(normalized);
         int deletedExtractions = dossierIds.isEmpty() ? 0 : extractionRepository.deleteByDossierIdIn(dossierIds);
@@ -160,10 +176,10 @@ public class KnowledgeBaseService {
             if (message != null) {
                 String lower = message.toLowerCase(Locale.ROOT);
                 if (lower.contains("web_search") || lower.contains("web search") || lower.contains("tools")) {
-                    message = "LLM model/provider does not support web_search tools: " + message;
+                    throw new IllegalStateException("LLM model/provider does not support web_search tools.");
                 }
             }
-            throw new IllegalStateException("LLM websearch request failed: " + (message == null ? "Unknown error" : message));
+            throw new IllegalStateException("LLM websearch request failed.");
         }
         return new InstrumentDossierWebsearchResponseDto(
                 parsed.contentMd(),
@@ -212,6 +228,7 @@ public class KnowledgeBaseService {
 		if (normalized.isEmpty()) {
 			throw new IllegalArgumentException("At least one ISIN is required");
 		}
+		validateBulkIsinCount(normalized.size());
 		logger.info("Performing Buld Draft Creating for {} isins", normalized.size());
 		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
 		Map<String, String> nameHints = resolveNameHints(normalized);
@@ -239,19 +256,16 @@ public class KnowledgeBaseService {
             if (message != null) {
                 String lower = message.toLowerCase(Locale.ROOT);
                 if (lower.contains("web_search") || lower.contains("web search") || lower.contains("tools")) {
-                    message = "LLM model/provider does not support web_search tools: " + message;
+                    throw new IllegalStateException("LLM model/provider does not support web_search tools.");
                 }
             }
 
-            throw new IllegalStateException("LLM websearch request failed: " + (message == null ? "Unknown error" : message));
+            throw new IllegalStateException("LLM websearch request failed.");
         }
         if (suggestion == null) {
             throw new IllegalStateException("LLM returned no response");
         }
         if (suggestion.suggestion() == null || suggestion.suggestion().isBlank()) {
-            if (suggestion.rationale() != null && !suggestion.rationale().isBlank()) {
-                throw new IllegalStateException(suggestion.rationale());
-            }
             throw new IllegalStateException("LLM returned empty dossier drafts");
         }
         logger.info("LLM returned bulk result");
@@ -1049,6 +1063,7 @@ public class KnowledgeBaseService {
         if (!citations.isArray()) {
             throw new IllegalArgumentException("Citations must be a JSON array");
         }
+        validateCitationUrls(citations);
         return citations;
     }
 
@@ -1059,7 +1074,40 @@ public class KnowledgeBaseService {
         if (!citations.isArray()) {
             throw new IllegalArgumentException("Citations must be a JSON array");
         }
+        validateCitationUrls(citations);
         return citations;
+    }
+
+    private void validateCitationUrls(JsonNode citations) {
+        for (JsonNode citation : citations) {
+            if (citation == null || !citation.isObject()) {
+                continue;
+            }
+            JsonNode urlNode = citation.get("url");
+            if (urlNode == null || urlNode.isNull()) {
+                continue;
+            }
+            if (!urlNode.isTextual() || !isAllowedCitationUrl(urlNode.asText())) {
+                throw new IllegalArgumentException("Citation URL must use http or https.");
+            }
+        }
+    }
+
+    private boolean isAllowedCitationUrl(String rawUrl) {
+        if (rawUrl == null || rawUrl.isBlank()) {
+            return false;
+        }
+        try {
+            URI uri = URI.create(rawUrl.trim());
+            String scheme = uri.getScheme();
+            if (scheme == null) {
+                return false;
+            }
+            String normalized = scheme.toLowerCase(Locale.ROOT);
+            return "http".equals(normalized) || "https".equals(normalized);
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
     }
 
 	private String normalizeContent(String contentMd) {
@@ -1584,7 +1632,7 @@ public class KnowledgeBaseService {
         try {
             root = objectMapper.readTree(raw);
         } catch (Exception ex) {
-            logger.error("Error parsing response {}", raw, ex);
+            logger.error("Error parsing bulk websearch response ({} chars)", raw == null ? 0 : raw.length(), ex);
             throw new IllegalArgumentException("LLM output is not valid JSON", ex);
         }
         JsonNode items = root.isArray() ? root : root.get("items");
@@ -1689,7 +1737,60 @@ public class KnowledgeBaseService {
             return null;
         }
         String trimmed = query.trim();
+        if (trimmed.length() > MAX_QUERY_LENGTH) {
+            throw new IllegalArgumentException("Search query is too long.");
+        }
         return trimmed.isEmpty() ? null : trimmed.toLowerCase(Locale.ROOT);
+    }
+
+    private void validateBulkIsinCount(int size) {
+        if (size > MAX_BULK_ISINS) {
+            throw new IllegalArgumentException("Too many ISINs in request.");
+        }
+    }
+
+    private String toContainsLikePattern(String query) {
+        if (query == null) {
+            return null;
+        }
+        return "%" + escapeLikePattern(query) + "%";
+    }
+
+    private String toPrefixLikePattern(String query) {
+        if (query == null) {
+            return null;
+        }
+        return escapeLikePattern(query) + "%";
+    }
+
+    private String escapeLikePattern(String value) {
+        return value
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+    }
+
+    private DossierSearchSort normalizeDossierSearchSort(String sortBy, String sortDirection) {
+        String normalizedSortBy = sortBy == null || sortBy.isBlank() ? "isin" : sortBy.trim();
+        String canonicalSortBy;
+        if ("isin".equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = "isin";
+        } else if ("status".equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = "status";
+        } else if ("updatedAt".equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = "updatedAt";
+        } else {
+            throw new IllegalArgumentException("Invalid sort field.");
+        }
+
+        String defaultDirection = "updatedAt".equals(canonicalSortBy) ? "desc" : "asc";
+        String normalizedSortDirection = sortDirection == null || sortDirection.isBlank()
+                ? defaultDirection
+                : sortDirection.trim().toLowerCase(Locale.ROOT);
+        if (!"asc".equals(normalizedSortDirection) && !"desc".equals(normalizedSortDirection)) {
+            throw new IllegalArgumentException("Invalid sort direction.");
+        }
+        return new DossierSearchSort(canonicalSortBy, normalizedSortDirection);
     }
 
     private String textOrNull(JsonNode node, String field) {
@@ -1728,6 +1829,9 @@ public class KnowledgeBaseService {
 	record DossierDraftResult(KnowledgeBaseLlmDossierDraft draft,
 							KnowledgeBaseQualityGateService.DossierQualityResult quality) {
 	}
+
+    private record DossierSearchSort(String key, String direction) {
+    }
 
     public record BulkWebsearchDraftItem(String isin, String contentMd, String displayName, JsonNode citations,
                                          String error) {

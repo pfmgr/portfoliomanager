@@ -186,7 +186,7 @@ public class KnowledgeBaseRefreshService {
             runService.markFailed(run, "Canceled");
             throw ex;
         } catch (Exception ex) {
-            runService.markFailed(run, ex.getMessage());
+            runService.markFailed(run, "Refresh failed");
             return new KnowledgeBaseRefreshItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, null, null,
                     messageOrFallback(ex), null);
         }
@@ -226,7 +226,7 @@ public class KnowledgeBaseRefreshService {
             runService.markFailed(extractRun, "Canceled");
             throw ex;
         } catch (Exception ex) {
-            runService.markFailed(extractRun, ex.getMessage());
+            runService.markFailed(extractRun, "Extraction failed");
             return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId, null,
                     messageOrFallback(ex), null);
         }
@@ -262,9 +262,12 @@ public class KnowledgeBaseRefreshService {
 		} else {
 			List<InstrumentDossierSearchProjection> rows = dossierRepository.searchDossiers(
 					null,
+					null,
 					DossierStatus.APPROVED.name(),
 					true,
 					staleBefore,
+					"isin",
+					"asc",
 					limit,
 					0
 			);
@@ -323,16 +326,12 @@ public class KnowledgeBaseRefreshService {
 	private String normalizeIsin(String isin) {
 		String trimmed = isin == null ? "" : isin.trim().toUpperCase(Locale.ROOT);
 		if (!ISIN_RE.matcher(trimmed).matches()) {
-			throw new IllegalArgumentException("Invalid ISIN: " + trimmed);
+			throw new IllegalArgumentException("Invalid ISIN format.");
 		}
 		return trimmed;
 	}
 
 	private String messageOrFallback(Exception ex) {
-		String message = ex.getMessage();
-		if (message == null || message.isBlank()) {
-			return ex.getClass().getSimpleName();
-		}
-		return message;
+		return "Operation failed.";
 	}
 }

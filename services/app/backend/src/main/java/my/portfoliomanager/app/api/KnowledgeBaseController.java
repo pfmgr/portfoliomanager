@@ -38,6 +38,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.security.Principal;
 import java.util.List;
+import java.util.Locale;
 
 @RestController
 @RequestMapping("/api/kb")
@@ -64,22 +65,36 @@ public class KnowledgeBaseController {
 	@GetMapping("/dossiers")
 	@Operation(summary = "Search knowledge base dossiers")
 	public InstrumentDossierSearchPageDto searchDossiers(@RequestParam(required = false) String q,
-												 @RequestParam(required = false) String query,
-												 @RequestParam(required = false) String status,
-												 @RequestParam(required = false) Boolean stale,
-												 @RequestParam(required = false, defaultValue = "0") int page,
-												 @RequestParam(required = false, defaultValue = "50") int size,
-												 @RequestParam(required = false) Integer limit,
-												 @RequestParam(required = false) Integer offset) {
+											 @RequestParam(required = false) String query,
+											 @RequestParam(required = false) String status,
+											 @RequestParam(required = false) Boolean stale,
+											 @RequestParam(required = false) String sortBy,
+											 @RequestParam(required = false) String sortDirection,
+											 @RequestParam(required = false) String sortDir,
+											 @RequestParam(required = false, defaultValue = "0") int page,
+											 @RequestParam(required = false, defaultValue = "50") int size,
+											 @RequestParam(required = false) Integer limit,
+											 @RequestParam(required = false) Integer offset) {
 		availabilityService.assertEnabled();
 		String finalQuery = q != null ? q : query;
-		int finalLimit = limit != null ? limit : size;
-		int finalOffset = offset != null ? offset : page * finalLimit;
+		int requestedLimit = limit != null ? limit : size;
+		int finalLimit = Math.min(Math.max(requestedLimit, 1), 1000);
+		long requestedOffset = offset != null ? offset : (long) page * finalLimit;
+		if (requestedOffset > Integer.MAX_VALUE) {
+			throw new IllegalArgumentException("Offset is too large.");
+		}
+		int finalOffset = (int) Math.max(requestedOffset, 0L);
+		String finalSortDirection = sortDirection != null ? sortDirection : sortDir;
 		DossierStatus statusFilter = null;
 		if (status != null && !status.isBlank()) {
-			statusFilter = DossierStatus.valueOf(status.trim().toUpperCase());
+			try {
+				statusFilter = DossierStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+			} catch (IllegalArgumentException ex) {
+				throw new IllegalArgumentException("Invalid status filter.");
+			}
 		}
-		return knowledgeBaseService.searchDossiers(finalQuery, statusFilter, stale, finalLimit, finalOffset);
+		return knowledgeBaseService.searchDossiers(finalQuery, statusFilter, stale, finalLimit, finalOffset, sortBy,
+				finalSortDirection);
 	}
 
 	@PostMapping("/dossiers")
