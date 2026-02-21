@@ -169,7 +169,7 @@ public class OllamaLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 				system = system + " Schema: " + schemaJson;
 			}
 		}
-		String output = callChatCompletions(system, prompt);
+		String output = callChatCompletions(system, prompt, true);
 		String validated = ensureJsonOutput(output, system, prompt);
 		return new KnowledgeBaseLlmResponse(validated, model);
 	}
@@ -207,13 +207,19 @@ public class OllamaLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 	}
 
 	private String callChatCompletions(String systemPrompt, String userPrompt) {
-		Map<String, Object> request = Map.of(
-				"model", model,
-				"messages", List.of(
-						Map.of("role", "system", "content", systemPrompt == null ? "" : systemPrompt),
-						Map.of("role", "user", "content", userPrompt == null ? "" : userPrompt)
-				)
-		);
+		return callChatCompletions(systemPrompt, userPrompt, false);
+	}
+
+	private String callChatCompletions(String systemPrompt, String userPrompt, boolean jsonMode) {
+		Map<String, Object> request = new LinkedHashMap<>();
+		request.put("model", model);
+		if (jsonMode) {
+			request.put("response_format", Map.of("type", "json_object"));
+		}
+		request.put("messages", List.of(
+				Map.of("role", "system", "content", systemPrompt == null ? "" : systemPrompt),
+				Map.of("role", "user", "content", userPrompt == null ? "" : userPrompt)
+		));
 		Map<?, ?> response;
 		try {
 			response = llmClient.post().uri("/chat/completions").body(request).retrieve().body(Map.class);
@@ -582,7 +588,7 @@ public class OllamaLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 		if (objectMapper == null) {
 			return output;
 		}
-		String candidate = output == null ? "" : output;
+		String candidate = normalizeJsonOutput(output);
 		int attempts = 0;
 		while (attempts < 2) {
 			if (isValidJson(candidate)) {
@@ -591,9 +597,44 @@ public class OllamaLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 			attempts++;
 			String repairSystem = (systemPrompt == null ? "" : systemPrompt)
 					+ " Your previous response was invalid JSON. Return only valid JSON.";
-			candidate = callChatCompletions(repairSystem, userPrompt);
+			candidate = normalizeJsonOutput(callChatCompletions(repairSystem, userPrompt, true));
 		}
 		throw new LlmRequestException("LLM output is not valid JSON", null, true, null);
+	}
+
+	private String normalizeJsonOutput(String output) {
+		if (output == null) {
+			return "";
+		}
+		String trimmed = output.trim();
+		if (trimmed.startsWith("```")) {
+			int firstNewline = trimmed.indexOf('\n');
+			int lastFence = trimmed.lastIndexOf("```");
+			if (firstNewline > -1 && lastFence > firstNewline) {
+				trimmed = trimmed.substring(firstNewline + 1, lastFence).trim();
+			}
+		}
+		if (isValidJson(trimmed)) {
+			return trimmed;
+		}
+		String objectCandidate = extractJsonSubstring(trimmed, '{', '}');
+		if (isValidJson(objectCandidate)) {
+			return objectCandidate;
+		}
+		String arrayCandidate = extractJsonSubstring(trimmed, '[', ']');
+		return arrayCandidate == null ? trimmed : arrayCandidate;
+	}
+
+	private String extractJsonSubstring(String value, char open, char close) {
+		if (value == null || value.isBlank()) {
+			return value;
+		}
+		int start = value.indexOf(open);
+		int end = value.lastIndexOf(close);
+		if (start < 0 || end <= start) {
+			return value;
+		}
+		return value.substring(start, end + 1).trim();
 	}
 
 	private boolean isValidJson(String value) {

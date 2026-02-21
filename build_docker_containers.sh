@@ -8,4 +8,4 @@ fi
 
 (cd services/app/backend && ./build-docker.sh)
 (cd services/app/frontend && ./build-docker.sh)
-
+(cd services/searxng && ./build-docker.sh)

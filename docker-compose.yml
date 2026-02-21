@@ -73,12 +73,12 @@ services:
     restart: unless-stopped
 
   searxng:
-    image: searxng/searxng:latest
+    image: fg1212/seaxng-portfoliomanager:${PORTFOLIO_MANAGER_VERSION:-latest}
+    build:
+      context: ./services/searxng
     environment:
       SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080/}
       SEARXNG_SECRET: ${SEARXNG_SECRET}
-    volumes:
-      - ./services/searxng/settings.yml:/etc/searxng/settings.yml
     restart: unless-stopped
     profiles: ["llm", "llm-dev"]
 
