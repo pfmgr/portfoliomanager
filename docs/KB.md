@@ -9,10 +9,28 @@ KB endpoints require both:
 Relevant environment variables (see `services/app/backend/src/main/resources/application.yaml`):
 - `KB_ENABLED` -> enables `/api/kb/**` (default: `true`)
 - `KB_LLM_ENABLED` -> enables `LlmExtractorService` for extraction runs (default: `false`)
-- `LLM_PROVIDER` -> set to `openai` to enable the LLM client (default: `none`)
-- `LLM_PROVIDER_API_KEY` (or `OPENAI_API_KEY` fallback)
-- `LLM_PROVIDER_MODEL` (must support `web_search` for dossier research)
-- `LLM_PROVIDER_BASE_URL` (optional; default OpenAI API base URL)
+- `LLM_PROVIDER` -> `openai` (Responses API) or `ollama` (local, Chat Completions only)
+- `LLM_PROVIDER_API_KEY` (or `OPENAI_API_KEY` fallback) for OpenAI; not required for Ollama
+- `LLM_PROVIDER_MODEL` (OpenAI model or Ollama model tag, e.g. `llama3.1:8b`)
+- `LLM_PROVIDER_BASE_URL` (OpenAI base URL or `http://ollama:11434/v1`)
+- `KB_SEARCH_PROVIDER` -> `searxng` for local websearch
+- `KB_SEARCH_BASE_URL` -> `http://searxng:8080`
+- `KB_SEARCH_MAX_RESULTS` / `KB_SEARCH_MAX_SNIPPET_CHARS` / `KB_SEARCH_TIMEOUT_SECONDS`
+- `SEARXNG_SECRET` (required for the SearxNG container)
+- `services/searxng/settings.yml` enables JSON output for the SearxNG API.
+
+### Local LLM (Ollama + SearxNG)
+
+- Start services:
+  - Internal only: `docker compose --profile llm up -d`
+  - Dev with localhost Ollama: `docker compose --profile llm-dev up -d`
+- Set `.env`:
+  - `LLM_PROVIDER=ollama`
+  - `LLM_PROVIDER_MODEL=llama3.1:8b`
+  - `LLM_PROVIDER_BASE_URL=http://ollama:11434/v1`
+  - `KB_SEARCH_PROVIDER=searxng`
+  - `KB_SEARCH_BASE_URL=http://searxng:8080`
+  - `SEARXNG_SECRET=...`
 
 ## KB settings (database)
 

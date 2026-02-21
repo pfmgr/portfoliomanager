@@ -455,7 +455,7 @@ class InstrumentRebalanceServiceTest {
 		AppProperties.Jwt jwt = new AppProperties.Jwt("secret", "issuer");
 		AppProperties.Llm.OpenAi openAi = new AppProperties.Llm.OpenAi(null, null, null, null, null);
 		AppProperties.Llm llm = new AppProperties.Llm("none", openAi, false);
-		AppProperties.Kb kb = new AppProperties.Kb(kbEnabled, false);
+		AppProperties.Kb kb = new AppProperties.Kb(kbEnabled, false, null);
 		return new AppProperties(security, jwt, llm, kb);
 	}
 

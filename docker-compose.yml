@@ -46,8 +46,16 @@ services:
       LLM_PROVIDER_MODEL: ${LLM_PROVIDER_MODEL:-gpt-5-nano}
       LLM_PROVIDER_API_KEY: ${LLM_PROVIDER_API_KEY}
       LLM_PROVIDER_BASE_URL: ${LLM_PROVIDER_BASE_URL:-https://api.openai.com/v1}
+      LLM_PROVIDER_CONNECT_TIMEOUT_SECONDS: ${LLM_PROVIDER_CONNECT_TIMEOUT_SECONDS:-600}
+      LLM_PROVIDER_READ_TIMEOUT_SECONDS: ${LLM_PROVIDER_READ_TIMEOUT_SECONDS:-600}
+      LLM_EXTERNAL_PROVIDER: ${LLM_EXTERNAL_PROVIDER:-false}
       KB_ENABLED: ${KB_ENABLED:-true}
       KB_LLM_ENABLED: ${KB_LLM_ENABLED:-false}
+      KB_SEARCH_PROVIDER: ${KB_SEARCH_PROVIDER:-searxng}
+      KB_SEARCH_BASE_URL: ${KB_SEARCH_BASE_URL:-http://searxng:8080}
+      KB_SEARCH_MAX_RESULTS: ${KB_SEARCH_MAX_RESULTS:-8}
+      KB_SEARCH_MAX_SNIPPET_CHARS: ${KB_SEARCH_MAX_SNIPPET_CHARS:-1200}
+      KB_SEARCH_TIMEOUT_SECONDS: ${KB_SEARCH_TIMEOUT_SECONDS:-15}
       APP_KB_ENABLED: ${KB_ENABLED:-true}
       APP_KB_LLM_ENABLED: ${KB_LLM_ENABLED:-false}
     depends_on:
@@ -64,6 +72,37 @@ services:
       - "${ADMIN_FRONTEND_BIND:-127.0.0.1}:8080:80"
     restart: unless-stopped
 
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080/}
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+    volumes:
+      - ./services/searxng/settings.yml:/etc/searxng/settings.yml
+    restart: unless-stopped
+    profiles: ["llm", "llm-dev"]
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    profiles: ["llm"]
+
+  ollama_dev:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    profiles: ["llm-dev"]
+    networks:
+      default:
+        aliases:
+          - ollama
+
 volumes:
   metabase_data:
   portfolio_data:
+  ollama_data:

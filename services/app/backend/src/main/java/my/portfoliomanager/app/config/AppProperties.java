@@ -41,7 +41,20 @@ public record AppProperties(
 
 	public record Kb(
 			boolean enabled,
-			boolean llmEnabled
+			boolean llmEnabled,
+			Search search
 	) {
+		public record Search(
+				String provider,
+				Searxng searxng,
+				Integer maxResults,
+				Integer maxSnippetChars,
+				Integer timeoutSeconds
+		) {
+			public record Searxng(
+					String baseUrl
+			) {
+			}
+		}
 	}
 }

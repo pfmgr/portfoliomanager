@@ -49,7 +49,7 @@ public class LlmPromptPolicy {
 			Pattern.compile("\\brefresh_token\\b", Pattern.CASE_INSENSITIVE),
 			Pattern.compile("\\bclient_id\\b", Pattern.CASE_INSENSITIVE)
 	);
-	private static final List<String> LOCAL_HOSTS = List.of("localhost", "127.0.0.1", "::1", "0.0.0.0");
+	private static final List<String> LOCAL_HOSTS = List.of("localhost", "127.0.0.1", "::1", "0.0.0.0", "ollama");
 
 	private final AppProperties properties;
 
@@ -95,6 +95,9 @@ public class LlmPromptPolicy {
 		}
 		String provider = safeLower(properties.llm().provider());
 		if (provider.isBlank() || provider.equals("none") || provider.equals("noop") || provider.equals("disabled")) {
+			return false;
+		}
+		if (provider.equals("ollama")) {
 			return false;
 		}
 		String baseUrl = properties.llm().openai() == null ? null : properties.llm().openai().baseUrl();

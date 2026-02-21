@@ -49,6 +49,9 @@ Services in `docker-compose.yml`:
 - `admin_spring` (Spring Boot; reclassification rulesets + rebalancer API; JWT issuance)
 - `admin_frontend` (Vue 3 + Vite build served by Nginx; proxies /api to admin_spring)
 - `metabase` + `db_metabase` (BI dashboard; included in `docker-compose.yml`). If you don't need it, start only the core services or remove these services.
+- `searxng` (local websearch backend for KB; starts with `--profile llm` or `--profile llm-dev`)
+- `ollama` (local LLM; internal-only with `--profile llm`, exposed on `localhost:11434` with `--profile llm-dev`)
+- `searxng` uses `services/searxng/settings.yml` as `/etc/searxng/settings.yml` (JSON output enabled).
 Root `docker-compose.yml` only references images; build the app images with `build_docker_containers.sh` or pull them from docker.io before starting the stack.
 
 Ports / binds:
@@ -398,6 +401,8 @@ Findings (3-10):
 ## 14) Knowledge Base notes
 
 - Knowledge Base endpoints are gated by `KB_ENABLED=true` and a configured LLM provider; when LLM is not configured, `/api/kb/**` returns 503.
+- Local LLM setup uses `LLM_PROVIDER=ollama` and SearxNG websearch (`KB_SEARCH_PROVIDER=searxng`, `KB_SEARCH_BASE_URL=http://searxng:8080`).
+- Start the local LLM stack with `docker compose --profile llm up -d` (internal) or `--profile llm-dev` (Ollama exposed on localhost).
 - Test profile disables the KB refresh scheduler via `app.kb.refresh-scheduler-enabled=false` in `services/app/backend/src/test/resources/application-test.yaml`.
 - Default KB websearch allowed domains live in `services/app/backend/src/main/resources/kb_websearch_allowed_domains.json` and are seeded into `kb_config` only when the table is empty.
 - Backup/import now includes `instrument_dossiers`, `instrument_dossier_extractions`, `instrument_facts`, `kb_config`, `kb_runs`, and `kb_alternatives` in the import order/sequence reset lists; keep BackupService in sync when KB schema changes.
