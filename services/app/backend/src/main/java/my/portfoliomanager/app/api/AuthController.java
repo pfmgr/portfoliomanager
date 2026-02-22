@@ -14,12 +14,14 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Map;
 import java.time.Instant;
 
 @RestController
@@ -61,5 +63,10 @@ public class AuthController {
 	@RequestMapping(value = "/logout", method = {RequestMethod.GET, RequestMethod.POST})
 	public ResponseEntity<Void> logout() {
 		return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+	}
+
+	@GetMapping("/health")
+	public ResponseEntity<Map<String, String>> health() {
+		return ResponseEntity.ok(Map.of("status", "ok"));
 	}
 }

@@ -37,7 +37,7 @@ describe('LoginView', () => {
     await vi.runAllTimersAsync()
 
     expect(sessionStorage.getItem('jwt')).toBe('jwt-token')
-    expect(push).toHaveBeenCalledWith('/rulesets')
+    expect(push).toHaveBeenCalledWith('/start')
     vi.useRealTimers()
   })
 

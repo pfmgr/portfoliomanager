@@ -8,6 +8,13 @@ const seedToken = async (page) => {
 
 const stubApi = async (page) => {
   let pendingSaveRun = false
+  await page.route('**/auth/health', async (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'ok' })
+    })
+  })
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
@@ -330,6 +337,9 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('navigates across main pages', async ({ page }) => {
+  await page.goto('/start')
+  await expect(page.getByRole('heading', { name: 'Start', level: 1 })).toBeVisible()
+
   await page.goto('/rulesets')
   await expect(page.getByRole('heading', { name: 'Reclassification Rulesets', level: 2 })).toBeVisible()
 

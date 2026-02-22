@@ -12,11 +12,11 @@ describe('router auth guard', () => {
     expect(router.currentRoute.value.path).toBe('/login')
   })
 
-  it('redirects to rulesets when already authenticated', async () => {
+  it('redirects to start when already authenticated', async () => {
     sessionStorage.setItem('jwt', 'token')
     await router.push('/rulesets')
     await router.push('/login')
     await router.isReady()
-    expect(router.currentRoute.value.path).toBe('/rulesets')
+    expect(router.currentRoute.value.path).toBe('/start')
   })
 })
