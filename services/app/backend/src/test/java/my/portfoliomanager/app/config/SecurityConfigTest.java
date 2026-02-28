@@ -1,8 +1,10 @@
 package my.portfoliomanager.app.config;
 
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SecurityConfigTest {
@@ -22,9 +24,25 @@ class SecurityConfigTest {
 				.isInstanceOf(IllegalStateException.class);
 	}
 
-	@Test
+ 	@Test
 	void jwtJtiHashKeyRejectsBlankSecret() {
 		SecurityConfig config = new SecurityConfig(buildProperties("admin", "0123456789abcdef0123456789abcdef", " "));
+
+		assertThatThrownBy(config::jwtJtiHashKey)
+				.isInstanceOf(IllegalStateException.class);
+	}
+
+	@Test
+	void jwtSecretKeyRejectsTooShortSecret() {
+		SecurityConfig config = new SecurityConfig(buildProperties("admin", "short-secret", "abcdef0123456789abcdef0123456789"));
+
+		assertThatThrownBy(config::jwtSecretKey)
+				.isInstanceOf(IllegalStateException.class);
+	}
+
+	@Test
+	void jwtJtiHashKeyRejectsTooShortSecret() {
+		SecurityConfig config = new SecurityConfig(buildProperties("admin", "0123456789abcdef0123456789abcdef", "short-secret"));
 
 		assertThatThrownBy(config::jwtJtiHashKey)
 				.isInstanceOf(IllegalStateException.class);
@@ -37,6 +55,16 @@ class SecurityConfigTest {
 
 		assertThatThrownBy(config::jwtJtiHashKey)
 				.isInstanceOf(IllegalStateException.class);
+	}
+
+	@Test
+	void jwtKeysAcceptConfiguredSecrets() {
+		String signingSecret = "0123456789abcdef0123456789abcdef";
+		String jtiHashSecret = "abcdef0123456789abcdef0123456789";
+		SecurityConfig config = new SecurityConfig(buildProperties("admin", signingSecret, jtiHashSecret));
+
+		assertThat(config.jwtSecretKey().getEncoded()).isEqualTo(signingSecret.getBytes(StandardCharsets.UTF_8));
+		assertThat(config.jwtJtiHashKey().getEncoded()).isEqualTo(jtiHashSecret.getBytes(StandardCharsets.UTF_8));
 	}
 
 	private AppProperties buildProperties(String adminPass, String jwtSecret, String jtiHashSecret) {
