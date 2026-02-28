@@ -14,3 +14,7 @@ spring:
 app:
   kb:
     refresh-scheduler-enabled: false
+  jwt:
+    cleanup-enabled: false
+    secret: 0123456789abcdef0123456789abcdef
+    jti-hash-secret: 5f2c8b0d7a9146c1ab3c9d4e7f8a9012
