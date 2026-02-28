@@ -24,6 +24,10 @@ function redirectToLogin(reason) {
   if (reason) {
     params.set('message', reason)
   }
+  const returnTo = `${window.location.pathname}${window.location.search}`
+  if (returnTo && !returnTo.startsWith('/login')) {
+    params.set('returnTo', returnTo)
+  }
   const target = `/login${params.toString() ? `?${params.toString()}` : ''}`
   if (window.location.pathname !== '/login') {
     window.location.href = target
@@ -90,6 +94,27 @@ async function handleResponse(response) {
     throw new Error(extractErrorDetail(response, payload, raw))
   }
   return payload
+}
+
+export async function checkBackendHealth(options = {}) {
+  const timeoutMs = Number(options.timeoutMs ?? 2500)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(`${AUTH_BASE}/health`, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal
+    })
+    return { ok: response.ok, status: response.status }
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      return { ok: false, status: 0, error: 'timeout' }
+    }
+    return { ok: false, status: 0, error: err?.message || 'Network error' }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function apiRequest(path, options = {}) {

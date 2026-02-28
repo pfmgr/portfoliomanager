@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from './views/LoginView.vue'
+import StartView from './views/StartView.vue'
 import RulesetsView from './views/RulesetsView.vue'
 import ReclassificationsView from './views/ReclassificationsView.vue'
 import RebalancerView from './views/RebalancerView.vue'
@@ -13,7 +14,8 @@ import KnowledgeBaseView from './views/KnowledgeBaseView.vue'
 import { getJwtToken, clearJwtToken } from './api'
 
 const routes = [
-  { path: '/', redirect: '/rulesets' },
+  { path: '/', redirect: '/start' },
+  { path: '/start', component: StartView },
   { path: '/login', component: LoginView },
   { path: '/rulesets', component: RulesetsView },
   { path: '/reclassifications', component: ReclassificationsView },
@@ -36,10 +38,10 @@ const router = createRouter({
 router.beforeEach((to) => {
   const token = getJwtToken()
   if (to.path !== '/login' && !token) {
-    return '/login'
+    return { path: '/login', query: { returnTo: to.fullPath } }
   }
   if (to.path === '/login' && token) {
-    return '/rulesets'
+    return '/start'
   }
 })
 

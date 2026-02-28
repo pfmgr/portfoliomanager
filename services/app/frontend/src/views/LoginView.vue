@@ -30,6 +30,16 @@ const explicitMessage = ref('')
 const explicitMessageType = ref('')
 
 const autoMessage = computed(() => route.query.message || '')
+const returnTarget = computed(() => {
+  const target = route.query.returnTo
+  if (typeof target !== 'string') {
+    return '/start'
+  }
+  if (!target.startsWith('/') || target.startsWith('//')) {
+    return '/start'
+  }
+  return target
+})
 const displayMessage = computed(() => explicitMessage.value || autoMessage.value)
 const messageClass = computed(() => {
   if (explicitMessageType.value) {
@@ -49,7 +59,7 @@ async function submit() {
     storeJwtToken(response.token)
     explicitMessageType.value = 'success'
     explicitMessage.value = 'Login successful.'
-    setTimeout(() => router.push('/rulesets'), 600)
+    setTimeout(() => router.push(returnTarget.value), 600)
   } catch (err) {
     explicitMessageType.value = 'error'
     explicitMessage.value = err.message
