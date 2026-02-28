@@ -75,6 +75,28 @@ Ports / binds:
 
 If your repo differs, **Codex should search by symbol/function name** rather than relying on paths.
 
+## 3a) Feature scenarios (source of truth)
+
+Feature-level behavior and edge cases are documented in scenario files:
+
+- `scenarios/rebalancer.md`
+- `scenarios/assessor.md`
+- `scenarios/knowledgebase-extraction.md`
+- `scenarios/llm-websearch.md`
+
+OpenCode command wrappers for these scenarios are available in `.opencode/commands/`.
+
+## 3b) Scenario lifecycle and test planning (mandatory)
+
+- Scenario updates are required for every feature change.
+  - If an existing feature behavior changes, update the corresponding `scenarios/*.md` in the same task.
+  - If a new feature is introduced, create a new `scenarios/<feature>.md` in the same task.
+- Implementation plans must include scenario work explicitly (create/update scenario + tests derived from scenario).
+- Test planning must always be scenario-driven:
+  - Derive test cases from scenario sections such as core behavior, API contracts, data dependencies, and edge cases.
+  - If scenario and implementation differ, update the scenario first or alongside code.
+- A change is not complete until code, tests, and scenario docs are aligned.
+
 ---
 
 ## 4) Database schema (conceptual)
@@ -103,7 +125,7 @@ Key invariants / constraints:
 ### Import flow
 - Spring Boot parses uploads with the shared parsers.
 - Instruments are upserted (deduped) and missing instruments for the depot are marked deleted; rules are applied before snapshot rows are written.
-- When applying reclassification on import, Knowledge Base extraction data (matched by ISIN) takes precedence; rules apply only when no KB entry exists.
+- Feature-specific precedence details are documented in `scenarios/knowledgebase-extraction.md`.
 - File hash dedupe uses `import_files`; "force reimport" bypasses it.
 
 ### Add a new broker/export format
@@ -142,34 +164,24 @@ Important: All unknown instruments should remain `layer=5` until explicitly clas
 ---
 ## 6a) Layer target profiles & rebalancer config
 
-- Five rebalancer profiles (Classic → Opportunity) live in `services/app/backend/src/main/resources/layer_targets.json`. Each includes layer targets, an acceptable variance (default 3%), a minimum saving plan size (integer EUR, default 15), a minimum rebalancing amount (integer EUR, default 10), max saving plans per layer (default 17), and constraint thresholds (core minimum, layer 4/5 caps) so the rebalancer can warn about violations even before tolerance checks.
-- The `layer_target_config` table stores a single row (`id=1`). `LayerTargetConfigService` and Liquibase ensure the JSON supports the new schema plus backwards compatibility for legacy `{layer_targets, acceptable_variance_pct}` payloads. The service feeds `LayerTargetEffectiveConfig` to the rebalancer, merges custom overrides when enabled, and exposes `LayerTargetConfigResponseDto` to the UI.
-- API endpoints: `GET /api/layer-targets`, `PUT /api/layer-targets`, `POST /api/layer-targets/reset`. They supply/accept the active profile key, profile display metadata, effective layer targets, variance, layer name mapping, and custom override flags. Liquibase handles default inserts for Postgres, migrating legacy configs into the new shape.
-- The Vue UI (`ProfileConfigurationView.vue`) renders the “Rebalancer Profile” panel + new layer target table using the API response. It lets you switch profiles, enable overrides, edit per-layer weights (0–1), variance, minimum saving plan size, minimum rebalancing amount, and max saving plans per layer, and see delta warnings alongside layer names (Global Core, Core-Plus, Themes, Individual Stocks, Unclassified). Overridden weights flow back into the rebalancer narrative so the LLM and summaries always describe the actual profile in play.
-- Saving plan projection budgets blend projected gap weights (using effective holdings) with the current savings plan distribution. Each profile defines `projection_blend_min`/`projection_blend_max` (default 0.15 -> 0.45), and the blend factor increases linearly over 1-120 months (longer horizons are more conservative). The rebalancer and Assessor share this logic.
+- Detailed feature behavior has moved to scenario docs:
+  - `scenarios/rebalancer.md`
+  - `scenarios/assessor.md`
 
 ---
 
 ## 7) Developer workflows
 
-### Start stack
-- Build or pull app images: `./build_docker_containers.sh` (local build) or `docker pull fg1212/portfoliomanager-backend:latest` + `docker pull fg1212/portfoliomanager-frontend:latest` from docker.io.
-- `docker compose up -d`
-- If tests fail against running containers, inspect logs:
-  - `docker compose logs --tail=200 db_portfolio`
-  - `docker compose logs --tail=200 admin_spring`
-  - `docker compose logs --tail=200 admin_frontend`
+Build/test/run instructions are maintained in OpenCode skills:
 
-### Start E2E stack (isolated)
-- Preferred: `services/app/frontend/scripts/run-e2e.sh`
-  - Builds the stack, waits for readiness, runs Playwright e2e tests, and tears the stack down afterward.
-- Manual alternative (only if needed):
-  - `docker compose -f services/app/frontend/docker-compose.yml -p portfoliomanager_e2e up -d --build`
-  - Runs Spring + UI on `127.0.0.1:18089` and `127.0.0.1:18090` with hardcoded e2e credentials. The e2e Postgres uses container storage (no named volume); data is discarded on teardown.
-  - If tests fail against running containers, inspect logs:
-    - `docker compose -f services/app/frontend/docker-compose.yml -p portfoliomanager_e2e logs --tail=200 e2e_db_portfolio`
-    - `docker compose -f services/app/frontend/docker-compose.yml -p portfoliomanager_e2e logs --tail=200 e2e_admin_spring`
-    - `docker compose -f services/app/frontend/docker-compose.yml -p portfoliomanager_e2e logs --tail=200 e2e_admin_frontend`
+- `.opencode/skills/scenario-lifecycle/SKILL.md`
+- `.opencode/skills/docker-build-and-stack/SKILL.md`
+- `.opencode/skills/backend-junit-tests/SKILL.md`
+- `.opencode/skills/frontend-vitest-tests/SKILL.md`
+- `.opencode/skills/frontend-e2e-tests/SKILL.md`
+- `.opencode/skills/running-instance-smoke-tests/SKILL.md`
+
+OpenCode command wrappers for scenario loading are under `.opencode/commands/`.
 
 ### Reset database completely (schema changes)
 Default setup uses named volumes. For a full reset:
@@ -183,31 +195,6 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 ### Validate imports quickly
 - `docker compose exec db_portfolio psql -U portfolio -d portfolio -c "SELECT * FROM import_files ORDER BY imported_at DESC LIMIT 10;"`
 - `docker compose exec db_portfolio psql -U portfolio -d portfolio -c "SELECT COUNT(*) FROM snapshot_positions;"`
-
-### Run unit tests
-- Spring Boot (Postgres int-test env + Liquibase + JaCoCo coverage gate):
-  - Preferred: `services/app/backend/run-gradle-build.sh` (starts the int-test env, runs `./gradlew clean build`, and tears down).
-  - Manual:
-    - Start DB: `docker compose -f services/app/backend/int-test-env/compose.yaml up -d` (exposes Postgres on `localhost:5439`, db `mydatabase`, user `myuser`, password `secret`)
-    - Note: `services/app/backend/int-test-env/compose.yaml` uses the local image `portfoliomanager-postgres:16`; avoid `--pull` unless you have registry access.
-    - `cd services/app/backend`
-    - `GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home ./gradlew test`
-- Frontend (Vitest):
-  - Preferred: `services/app/frontend/scripts/run-unit-tests.sh`
-  - `cd services/app/frontend`
-  - `npm test`
-- Frontend tooling expects Node `v25.3.0`; keep local runtimes and Docker build images aligned with this version.
-- Always run tests for any component you changed (backend, frontend, or e2e) before handing off work.
-- CI: GitHub Actions workflows in `.github/workflows` run frontend build + Vitest and backend test/build against Postgres 16 using `DB_URL/DB_USER/DB_PASSWORD`; keep these aligned with test config if they change.
-
-### Run Spring Boot tests + coverage
-- Preferred for full build + integration tests in one step: `services/app/backend/run-gradle-build.sh`.
-- `cd services/app/backend`
-- Use `GRADLE_USER_HOME=/home/user/git/portfoliomanager/services/app/backend/.gradle_home` for agent runs to avoid permission issues.
-- `./gradlew test` (Postgres via int-test env + Liquibase + JaCoCo coverage gate; Postgres must be running as above)
-- If Gradle fails with `Could not determine a usable wildcard IP for this machine` (common in restricted sandboxes), fall back to the helper script for integration tests and use the Docker build only for packaging:
-  - `services/app/backend/run-gradle-build.sh` for full tests.
-  - `services/app/backend/build-docker.sh` for a build-only BootJar (tests are skipped).
 
 ### Postgres-specific column types (JSONB)
 - Integration tests now run on PostgreSQL (int-test env). Keep explicit JSONB handling where needed:
@@ -256,39 +243,22 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - **Reclassifications (review + apply)**:
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/RebalancerController.java` (`GET /api/rebalancer/reclassifications`)
   - `services/app/backend/src/main/java/my/portfoliomanager/app/api/RulesetController.java` (`POST /api/rulesets/{name}/apply`)
-  - Reclassification suggestions prefer Knowledge Base extraction fields by ISIN; ruleset output is used when KB data is missing.
+  - Behavior details are documented in `scenarios/knowledgebase-extraction.md`.
   - `services/app/backend/src/main/java/my/portfoliomanager/app/service/ClassificationService.java`
   - `services/app/frontend/src/views/ReclassificationsView.vue`
 
-- **Rebalancer analysis + UI**:
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/api/RebalancerController.java`
-  - `services/app/frontend/src/views/RebalancerView.vue`
-  - `services/app/frontend/src/views/RebalancerHistoryView.vue`
-  - Proposal table shows amounts only (Current EUR, Proposed EUR, Delta EUR); percent columns are intentionally omitted.
-- **Assessor analysis + UI**:
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/api/AssessorController.java`
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/service/AssessorService.java`
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/service/AssessorEngine.java`
-  - `services/app/frontend/src/views/AssessorView.vue`
-  - Assessor responses include new instrument suggestions for saving plans and one-time allocations when KB coverage shows missing themes/regions/sub-classes and budgets allow it; narratives must explain the gap and why each instrument fits.
-  - Saving plan assessment gate algorithm: compute target layer budgets from the active rebalancer profile, derive layer deltas, then walk layers 5→1 and enforce a gate size of `max(minimum saving plan size, minimum rebalancing amount)` by zeroing small positive deltas and snapping small negative deltas to `-gate`, shifting the delta difference to the next higher layer. For each layer with delta ≠ 0: if delta > 0, propose new saving plan candidates via gap detection and KB weighting while respecting min size and max plans; if none are eligible, allocate the full delta to existing plans by KB weights with per-plan deltas ≥ minimum rebalancing. If delta < 0, allocate weighted reductions while keeping post-change amounts ≥ minimum saving plan size; if that is not possible, discard the minimal number of plans (full disable) until the negative delta can be distributed.
-  - Instrument assessment scoring is penalty-based (lower is better). Core components: TER, SRI risk indicator, valuation (P/E, P/B, EV/EBITDA), concentration (top holdings + region), single-stock premium (25), data quality, and layer-4 quality bonuses (EPS stability/growth, profitability, leverage, fair valuation). Layer-1/2 ETF region penalties use 80%/90% thresholds; non-ETF layers use 60%/75%; layer-3 holdings penalties are halved.
-- **Layer targets config UI**:
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/api/LayerTargetConfigController.java`
-  - `services/app/backend/src/main/java/my/portfoliomanager/app/service/LayerTargetConfigService.java`
-  - `services/app/frontend/src/views/ProfileConfigurationView.vue`
-- `services/app/backend/src/main/resources/layer_targets.json` (targets config defaults)
-  - `services/app/backend/src/main/resources/db/changelog/db.changelog-master.yaml` (schema incl. advisor_runs)
+- **Feature scenarios (source of truth)**:
+  - `scenarios/rebalancer.md`
+  - `scenarios/assessor.md`
+  - `scenarios/knowledgebase-extraction.md`
+  - `scenarios/llm-websearch.md`
 
-- **Spring Boot rulesets + rebalancer**:
-  - API controllers: `services/app/backend/src/main/java/my/portfoliomanager/app/api`
-  - Services: `services/app/backend/src/main/java/my/portfoliomanager/app/service`
+- **Feature code roots**:
+  - Backend APIs: `services/app/backend/src/main/java/my/portfoliomanager/app/api`
+  - Backend services: `services/app/backend/src/main/java/my/portfoliomanager/app/service`
   - Rules engine: `services/app/backend/src/main/java/my/portfoliomanager/app/rules`
-  - Liquibase: `services/app/backend/src/main/resources/db/changelog/db.changelog-master.yaml`
-  - Vue UI: `services/app/frontend/src`
-- **LLM port (mockable)**:
-  - Interface + implementations: `services/app/backend/src/main/java/my/portfoliomanager/app/llm`
-  - Savings plan rebalancer uses LLM (if enabled) for narrative/explanation only; proposal targets remain deterministic (rule-based).
+  - LLM abstraction: `services/app/backend/src/main/java/my/portfoliomanager/app/llm`
+  - Frontend views: `services/app/frontend/src/views`
 
 ---
 
@@ -296,14 +266,10 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - Whenever the database schema structure changes (new/removed tables, new columns, constraints, or default rows), update the backup/export logic documented above so the exported JSON set and import truncation order cover the new schema; missing this causes backups to open with inconsistent table lists or to silently drop data.
 
 ## Backend validation
-- Backend changes must always be validated with full integration tests. Preferred commands:
-  1. `services/app/backend/run-gradle-build.sh` (starts the int-test env, runs `./gradlew clean build`, and tears down).
-  2. `services/app/backend/build-docker.sh` (build-only; runs `./gradlew clean bootJar -x test --no-daemon` inside the backend image).
-  3. `docker compose run --rm admin_spring /bin/sh -c "cd /app && ./gradlew <task> --stacktrace"` for specific `build`, `test`, or coverage targets when you need extra diagnostics.
-  4. `docker build --progress=plain services/app/backend` if you only need the build step without the Compose stack.
-  5. Always confirm that the required tests/reporting tasks succeeded after any backend change before finishing work so regressions are caught early.
-  6. When Docker commands require it, run them with escalated permissions so `docker build` can reach `/var/run/docker.sock`; this is necessary in environments where the user-level daemon socket is blocked.
-  7. If `./gradlew` fails locally because of sandbox/network restrictions (wildcard IP errors, socket permissions, etc.), rerun `services/app/backend/build-docker.sh` as the documented fallback and treat the container build result as the authoritative verification.
+- Backend changes must always be validated with full integration tests.
+- Use `.opencode/skills/backend-junit-tests/SKILL.md` for canonical backend test instructions.
+- Use `.opencode/skills/docker-build-and-stack/SKILL.md` for canonical container build instructions.
+- Always select and justify backend test cases from relevant `scenarios/*.md`.
 
 ## 10) Operational principles (keep things stable)
 
@@ -317,6 +283,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - On every change check if AGENTS.MD and other documentation needs to be updated and update documentation.
 - Add a short instruction in AGENTS.MD whenever new agent actions/configuration require special coordination, ensuring future sessions know to adjust this file proactively.
 - In case of missmatches between AGENTS.MD, other documentation and the real project contents always update AGENTS.MD and documentation to match the reality.
+- Treat `scenarios/*.md` as required living docs for feature behavior; every feature change/new feature must update or add scenarios in the same change set.
 
 ---
 
@@ -393,34 +360,19 @@ Findings (3-10):
 ## 13) Keep AGENTS.MD current
 
 - Whenever you learn something new that affects coordination (new requirements, tooling behavior, environment quirks, or handover notes), add a short entry to AGENTS.MD describing the change. Treat this guide as living documentation so future sessions automatically benefit from the latest context and avoid repeating the same problems.
-- When `gradlew test` fails with “usable wildcard IP,” use `services/app/backend/run-gradle-build.sh` for full tests; Docker builds now skip tests and only package the BootJar.
+- Keep `.opencode/skills/*/SKILL.md` and `scenarios/*.md` aligned with reality.
 
 ## 14) Knowledge Base notes
 
-- Knowledge Base endpoints are gated by `KB_ENABLED=true` and a configured LLM provider; when LLM is not configured, `/api/kb/**` returns 503.
-- Test profile disables the KB refresh scheduler via `app.kb.refresh-scheduler-enabled=false` in `services/app/backend/src/test/resources/application-test.yaml`.
-- Default KB websearch allowed domains live in `services/app/backend/src/main/resources/kb_websearch_allowed_domains.json` and are seeded into `kb_config` only when the table is empty.
-- Backup/import now includes `instrument_dossiers`, `instrument_dossier_extractions`, `instrument_facts`, `kb_config`, `kb_runs`, and `kb_alternatives` in the import order/sequence reset lists; keep BackupService in sync when KB schema changes.
-- Knowledge base dossiers no longer require a matching instrument; unknown ISINs are allowed and may not exist in `instruments`.
-- Knowledge Base UI can generate a dossier draft via async websearch jobs:
-  - `POST /api/kb/dossiers/websearch` returns `{jobId,status}` quickly
-  - `GET /api/kb/dossiers/websearch/{jobId}` returns `{status,result,error}` where `result` is `{contentMd,displayName,citations,model}`
-- Missing-data patch runs after extractions (refresh/bulk/alternatives) and can be triggered via `POST /api/kb/dossiers/{isin}/missing-data`. It patches only missing fields, preserves structure, appends citations, and retries websearch with primary sources plus issuer/ETF domains found in first-pass citations.
-- `KB_LLM_ENABLED=true` enables `LlmExtractorService` for dossier extraction runs (currently stubbed; adds a warning and uses the stub extractor payload).
-- `instrument_dossiers.display_name` is optional and used to display/search dossiers for unknown ISINs.
-- Async KB LLM job failures surface `Error ref KB-XXXXXXXX` in UI; logs include the same ref for troubleshooting.
-- OpenAI client timeouts are configurable via `app.llm.openai.connect-timeout-seconds` and `app.llm.openai.read-timeout-seconds`.
-- Bulk research parallelism uses `max_parallel_bulk_batches` in KB settings (default 2).
-- Quality gate profiles are stored in `kb_config.quality_gate_profiles` and seeded from `services/app/backend/src/main/resources/kb_quality_gate_profiles.json`.
-- Evidence gates always select rules by category (FUND/EQUITY/REIT/UNKNOWN). Default category mapping follows the active layer-target profile; custom overrides only apply when enabled and saved for that profile.
-- REIT exception: detected REIT instruments always use REIT evidence rules, regardless of layer mapping.
+- KB details are maintained in scenario docs:
+  - `scenarios/knowledgebase-extraction.md`
+  - `scenarios/llm-websearch.md`
 
 ### Automatic application
 If you change UI files or observe UI issues, run this review and add the output to the PR description or commit/review log.
 
 ### Rebalancer instrument proposals
-- Instrument-level saving plan proposals are gated by `app.kb.enabled` and the latest `knowledge_base_extractions` status (`COMPLETE`). When gating fails, rebalancer responses include missing ISINs and no instrument-level proposals.
-- `instrument_dossier_extractions` are synced into `knowledge_base_extractions` on extraction run/approve/apply.
+- See `scenarios/rebalancer.md` and `scenarios/knowledgebase-extraction.md`.
 
 ---
 
@@ -428,7 +380,8 @@ If you change UI files or observe UI issues, run this review and add the output 
 
 - Every change must include a brief critical review covering: security weaknesses, data leaks, injection vectors, and code duplication.
 - Review output must be recorded in the PR description or commit/review log (short list of findings + severity + recommended actions).
-- Always run tests after hardening changes: backend Junit, frontend Vitest, frontend E2E (see test commands above).
+- Always run tests after hardening changes: backend JUnit, frontend Vitest, frontend E2E (see `.opencode/skills/*/SKILL.md`).
+- Test scope must be derived from relevant scenario docs, not ad-hoc command selection.
 
 ### LLM Prompt Minimization Review (required)
 - Prompt templates defined in Java classes MUST be reviewed for need-to-know data before external LLM calls.
