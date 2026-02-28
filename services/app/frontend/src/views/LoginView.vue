@@ -2,7 +2,7 @@
   <div class="card" style="max-width: 420px; margin: 4rem auto;">
     <h2>Admin Login</h2>
     <p>Authenticate to access reclassification rulesets and rebalancer tools.</p>
-    <div v-if="displayMessage" :class="['toast', messageClass]">{{ displayMessage }}</div>
+    <div v-if="displayMessage" :class="['toast', messageClass]" role="alert">{{ displayMessage }}</div>
     <form @submit.prevent="submit">
       <label>
         Username
@@ -36,6 +36,10 @@ const returnTarget = computed(() => {
     return '/start'
   }
   if (!target.startsWith('/') || target.startsWith('//')) {
+    return '/start'
+  }
+  const resolved = router.resolve(target)
+  if (!resolved.matched.length || resolved.path === '/login') {
     return '/start'
   }
   return target

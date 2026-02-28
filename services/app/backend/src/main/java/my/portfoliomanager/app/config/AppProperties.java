@@ -19,8 +19,13 @@ public record AppProperties(
 	}
 
 	public record Jwt(
-			String secret,
-			@NotBlank String issuer
+			@NotBlank String secret,
+			@NotBlank String jtiHashSecret,
+			@NotBlank String issuer,
+			Long expiresInSeconds,
+			Long cleanupIntervalSeconds,
+			Integer cleanupBatchSize,
+			Boolean cleanupEnabled
 	) {
 	}
 

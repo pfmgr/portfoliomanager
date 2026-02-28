@@ -1052,12 +1052,13 @@ databaseChangeLog:
       dbms: postgresql
       preConditions:
         onFail: MARK_RAN
-        tableExists:
-          tableName: knowledge_base_extractions
-        tableExists:
-          tableName: instrument_dossier_extractions
-        tableExists:
-          tableName: instrument_dossiers
+        and:
+          - tableExists:
+              tableName: knowledge_base_extractions
+          - tableExists:
+              tableName: instrument_dossier_extractions
+          - tableExists:
+              tableName: instrument_dossiers
       changes:
         - sql:
             splitStatements: false
@@ -1382,3 +1383,73 @@ databaseChangeLog:
             columns:
               - column:
                   name: status
+  - changeSet:
+      id: 018a-auth-tokens-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: auth_tokens
+      changes:
+        - createTable:
+            tableName: auth_tokens
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: jti_hash
+                  type: VARCHAR(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: subject
+                  type: VARCHAR(128)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: issued_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: expires_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: revoked_at
+                  type: TIMESTAMP WITH TIME ZONE
+              - column:
+                  name: created_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: auth_tokens
+            columnNames: jti_hash
+            constraintName: ux_auth_tokens_jti_hash
+        - createIndex:
+            tableName: auth_tokens
+            indexName: ix_auth_tokens_expires_at
+            columns:
+              - column:
+                  name: expires_at
+        - createIndex:
+            tableName: auth_tokens
+            indexName: ix_auth_tokens_subject
+            columns:
+              - column:
+                  name: subject
+        - sql:
+            splitStatements: true
+            sql: |
+              ALTER TABLE auth_tokens
+              ADD CONSTRAINT auth_tokens_expiry_check CHECK (expires_at > issued_at);

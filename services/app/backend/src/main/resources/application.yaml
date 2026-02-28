@@ -36,7 +36,13 @@ app:
     admin-user: ${ADMIN_USER:admin}
     admin-pass: ${ADMIN_PASS:}
   jwt:
+    secret: ${JWT_SECRET:}
+    jti-hash-secret: ${JWT_JTI_HASH_SECRET:}
     issuer: ${JWT_ISSUER:portfolio-manager}
+    expires-in-seconds: ${JWT_EXPIRES_IN_SECONDS:3600}
+    cleanup-interval-seconds: ${JWT_CLEANUP_INTERVAL_SECONDS:300}
+    cleanup-batch-size: ${JWT_CLEANUP_BATCH_SIZE:1000}
+    cleanup-enabled: ${JWT_CLEANUP_ENABLED:true}
   llm:
     provider: ${LLM_PROVIDER:none}
     external-provider: ${LLM_EXTERNAL_PROVIDER:false}

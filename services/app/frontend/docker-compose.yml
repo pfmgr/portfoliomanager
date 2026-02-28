@@ -15,9 +15,11 @@ services:
       DB_URL: jdbc:postgresql://e2e_db_portfolio:5432/portfolio
       DB_USER: portfolio
       DB_PASSWORD: portfolio_e2e
-      ADMIN_USER: admin
-      ADMIN_PASS: admin
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASS: ${ADMIN_PASS:?required}
       JWT_ISSUER: portfolio-manager-e2e
+      JWT_SECRET: ${JWT_SECRET:?required}
+      JWT_JTI_HASH_SECRET: ${JWT_JTI_HASH_SECRET:?required}
       LLM_PROVIDER: none
       LLM_PROVIDER_API_KEY: ""
     depends_on:

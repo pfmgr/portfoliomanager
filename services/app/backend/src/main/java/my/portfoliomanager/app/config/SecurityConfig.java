@@ -3,11 +3,11 @@ package my.portfoliomanager.app.config;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.time.Clock;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -18,6 +18,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -26,6 +27,8 @@ import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import my.portfoliomanager.app.security.JwtDatabaseValidator;
+import my.portfoliomanager.app.service.AuthTokenService;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.OctetSequenceKey;
@@ -37,12 +40,16 @@ import java.util.Locale;
 
 @Configuration
 public class SecurityConfig {
-	private static final Logger logger = LoggerFactory.getLogger(SecurityConfig.class);
 	private static final int MIN_SECRET_BYTES = 32;
 	private final AppProperties properties;
 
 	public SecurityConfig(AppProperties properties) {
 		this.properties = properties;
+	}
+
+	@Bean
+	public Clock systemClock() {
+		return Clock.systemUTC();
 	}
 
 	@Bean
@@ -52,8 +59,13 @@ public class SecurityConfig {
 
 	@Bean
 	public UserDetailsService userDetailsService(PasswordEncoder passwordEncoder) {
-		var user = User.withUsername(properties.security().adminUser())
-				.password(passwordEncoder.encode(properties.security().adminPass()))
+		String adminUser = properties.security().adminUser();
+		String adminPass = properties.security().adminPass();
+		if (adminPass == null || adminPass.isBlank()) {
+			throw new IllegalStateException("app.security.admin-pass must be set and non-empty");
+		}
+		var user = User.withUsername(adminUser)
+				.password(passwordEncoder.encode(adminPass))
 				.roles("ADMIN")
 				.build();
 		return new InMemoryUserDetailsManager(user);
@@ -66,12 +78,23 @@ public class SecurityConfig {
 
 	@Bean
 	public SecretKey jwtSecretKey() {
-		byte[] secret = resolveJwtSecret();
+		byte[] secret = resolveJwtSecret(properties.jwt().secret(), "app.jwt.secret");
 		return new SecretKeySpec(secret, "HmacSHA256");
 	}
 
 	@Bean
-	public JwtEncoder jwtEncoder(SecretKey jwtSecretKey) {
+	public SecretKey jwtJtiHashKey() {
+		String signingSecret = properties.jwt().secret();
+		String hashSecret = properties.jwt().jtiHashSecret();
+		if (signingSecret != null && hashSecret != null && signingSecret.equals(hashSecret)) {
+			throw new IllegalStateException("app.jwt.jti-hash-secret must differ from app.jwt.secret");
+		}
+		byte[] secret = resolveJwtSecret(hashSecret, "app.jwt.jti-hash-secret");
+		return new SecretKeySpec(secret, "HmacSHA256");
+	}
+
+	@Bean
+	public JwtEncoder jwtEncoder(@Qualifier("jwtSecretKey") SecretKey jwtSecretKey) {
 		byte[] secret = jwtSecretKey.getEncoded();
 		OctetSequenceKey key = new OctetSequenceKey.Builder(secret)
 				.algorithm(JWSAlgorithm.HS256)
@@ -81,25 +104,59 @@ public class SecurityConfig {
 	}
 
 	@Bean
-	public JwtDecoder jwtDecoder(SecretKey jwtSecretKey) {
+	public JwtDecoder jwtDecoder(@Qualifier("jwtSecretKey") SecretKey jwtSecretKey, AuthTokenService tokenService, Clock clock) {
+		var decoder = NimbusJwtDecoder.withSecretKey(jwtSecretKey).build();
+		var baseValidator = JwtValidators.createDefaultWithIssuer(properties.jwt().issuer());
+		var dbValidator = new JwtDatabaseValidator(tokenService, clock);
+		decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(baseValidator, dbValidator));
+		return decoder;
+	}
+
+	@Bean
+	public JwtDecoder logoutJwtDecoder(@Qualifier("jwtSecretKey") SecretKey jwtSecretKey) {
 		var decoder = NimbusJwtDecoder.withSecretKey(jwtSecretKey).build();
 		decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(properties.jwt().issuer()));
 		return decoder;
 	}
 
 	@Bean
-	public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationConverter jwtAuthenticationConverter) throws Exception {
+	@Order(1)
+	public SecurityFilterChain logoutSecurityFilterChain(HttpSecurity http,
+									 JwtAuthenticationConverter jwtAuthenticationConverter,
+									 @Qualifier("logoutJwtDecoder") JwtDecoder logoutJwtDecoder) throws Exception {
 		http
+			.securityMatcher("/auth/logout", "/api/auth/logout")
 			.csrf(csrf -> csrf.disable())
 			.sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 			.authorizeHttpRequests(auth -> auth
-				.requestMatchers("/api/auth/**", "/auth/**").permitAll()
+				.anyRequest().authenticated()
+			)
+			.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt
+					.decoder(logoutJwtDecoder)
+					.jwtAuthenticationConverter(jwtAuthenticationConverter)));
+
+		return http.build();
+	}
+
+	@Bean
+	@Order(2)
+	public SecurityFilterChain securityFilterChain(HttpSecurity http,
+									 JwtAuthenticationConverter jwtAuthenticationConverter,
+									 @Qualifier("jwtDecoder") JwtDecoder jwtDecoder) throws Exception {
+		http
+			.securityMatcher("/**")
+			.csrf(csrf -> csrf.disable())
+			.sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+			.authorizeHttpRequests(auth -> auth
+				.requestMatchers("/api/auth/token", "/auth/token", "/api/auth/health", "/auth/health").permitAll()
 				.requestMatchers("/", "/index.html", "/assets/**").permitAll()
 				.requestMatchers("/api/kb/**").hasRole("ADMIN")
 				.requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api/**").authenticated()
 				.anyRequest().denyAll()
 			)
-			.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter)));
+			.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt
+					.decoder(jwtDecoder)
+					.jwtAuthenticationConverter(jwtAuthenticationConverter)));
 
 		return http.build();
 	}
@@ -169,23 +226,14 @@ public class SecurityConfig {
 		authorities.add(new SimpleGrantedAuthority("SCOPE_" + normalized));
 	}
 
-	private byte[] resolveJwtSecret() {
-		String configured = properties.jwt().secret();
+	private byte[] resolveJwtSecret(String configured, String propertyName) {
 		if (configured == null || configured.isBlank()) {
-			logger.warn("JWT secret not configured. Generating a runtime secret.");
-			return generateSecret();
+			throw new IllegalStateException(propertyName + " must be configured");
 		}
 		byte[] secret = configured.getBytes(StandardCharsets.UTF_8);
 		if (secret.length < MIN_SECRET_BYTES) {
-			logger.warn("Configured JWT secret is too short. Generating a runtime secret.");
-			return generateSecret();
+			throw new IllegalStateException(propertyName + " must be at least " + MIN_SECRET_BYTES + " bytes");
 		}
-		return secret;
-	}
-
-	private byte[] generateSecret() {
-		byte[] secret = new byte[MIN_SECRET_BYTES];
-		new SecureRandom().nextBytes(secret);
 		return secret;
 	}
 }

@@ -9,6 +9,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -17,6 +22,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 import com.jayway.jsonpath.JsonPath;
+import my.portfoliomanager.app.config.AppProperties;
+import my.portfoliomanager.app.service.AuthTokenService;
+
+import java.time.Instant;
+import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -37,6 +47,15 @@ class AuthApiIntegrationTest {
 
 	@Autowired
 	private TestDatabaseCleaner databaseCleaner;
+
+	@Autowired
+	private JwtEncoder jwtEncoder;
+
+	@Autowired
+	private AuthTokenService authTokenService;
+
+	@Autowired
+	private AppProperties properties;
 
 	@BeforeEach
 	void setUp() {
@@ -107,8 +126,62 @@ class AuthApiIntegrationTest {
 
 	@Test
 	void logoutEndpointReturnsUnauthorized() throws Exception {
-		mockMvc.perform(get("/auth/logout"))
+		mockMvc.perform(post("/auth/logout"))
 				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void tokenWithoutDbEntryIsRejected() throws Exception {
+		String jti = UUID.randomUUID().toString();
+		Instant now = Instant.now();
+		String token = buildJwt(jti, now, now.plusSeconds(300));
+
+		mockMvc.perform(get("/api/rulesets")
+					.header("Authorization", "Bearer " + token))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void expiredTokenIsRejectedEvenWhenStored() throws Exception {
+		String jti = UUID.randomUUID().toString();
+		Instant now = Instant.now();
+		Instant issuedAt = now.minusSeconds(7200);
+		Instant expiresAt = now.minusSeconds(3600);
+		String token = buildJwt(jti, issuedAt, expiresAt);
+		authTokenService.storeToken(jti, "admin", issuedAt, expiresAt);
+
+		mockMvc.perform(get("/api/rulesets")
+					.header("Authorization", "Bearer " + token))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void logoutRevokesToken() throws Exception {
+		String jti = UUID.randomUUID().toString();
+		Instant now = Instant.now();
+		Instant expiresAt = now.plusSeconds(600);
+		String token = buildJwt(jti, now, expiresAt);
+		authTokenService.storeToken(jti, "admin", now, expiresAt);
+
+		mockMvc.perform(post("/auth/logout")
+					.header("Authorization", "Bearer " + token))
+				.andExpect(status().isNoContent());
+
+		mockMvc.perform(get("/api/rulesets")
+					.header("Authorization", "Bearer " + token))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void logoutAcceptsTokenEvenWhenNotStored() throws Exception {
+		String jti = UUID.randomUUID().toString();
+		Instant now = Instant.now();
+		Instant expiresAt = now.plusSeconds(600);
+		String token = buildJwt(jti, now, expiresAt);
+
+		mockMvc.perform(post("/auth/logout")
+					.header("Authorization", "Bearer " + token))
+				.andExpect(status().isNoContent());
 	}
 
 	@Configuration
@@ -117,5 +190,18 @@ class AuthApiIntegrationTest {
 		NoopLlmClient llmClient() {
 			return new NoopLlmClient();
 		}
+	}
+
+	private String buildJwt(String jti, Instant issuedAt, Instant expiresAt) {
+		JwtClaimsSet claims = JwtClaimsSet.builder()
+				.issuer(properties.jwt().issuer())
+				.subject("admin")
+				.id(jti)
+				.issuedAt(issuedAt)
+				.expiresAt(expiresAt)
+				.claim("roles", "ADMIN")
+				.build();
+		JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
+		return jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
 	}
 }
