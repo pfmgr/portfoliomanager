@@ -1,7 +1,7 @@
 ---
-description: Reviews code for quality and best practices
+description: Testing Agent
 mode: subagent
-temperature: 0.1
+temperature: 0.5
 tools:
   write: false
   edit: false
