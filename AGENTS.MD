@@ -291,25 +291,25 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 
 This section is mandatory for any UI change or any detected UI issue. It must be applied by Codex and humans alike.
 
-### UI Change Detection (wann die Review zwingend ist)
+### UI Change Detection 
 Run this review if ANY of the following is true:
 - Changes under UI paths: `services/app/frontend/src/components/**`, `services/app/frontend/src/views/**`, `services/app/frontend/src/pages/**`, `services/app/frontend/src/layouts/**`, `services/app/frontend/src/styles/**`, `services/app/frontend/src/assets/**`
 - Changes to UI-relevant routing or state flows (router, stores, view models) that alter navigation or presentation
 - Changes to component library usage, design tokens, typography, spacing, colors, icons, or layout primitives
 - Any reported/observed UI defect or usability/clarity issue, even without code changes
 
-### Nicht verhandelbar (harte Regeln)
+### Must-Have Rules
 - No "div-only" data lists when content is tabular (rows/columns comparison).
 - No fake tables via CSS Grid/Flex when a semantic table is required.
 - No unclear visual hierarchy: missing heading structure, poor grouping, or inconsistent states (Loading/Empty/Error).
 
-### Entscheidungsregel (immer anwenden)
+### Decission Rules
 - If records are rows and users compare, sort, or scan columns quickly: use `<table>`.
 - If it is a linear list without column comparison: use `<ul>`/`<ol>`.
 - If it is label–value pairs: use `<dl>`.
 If you deviate, you MUST justify and document it in 2–3 sentences in the review output.
 
-### Tabellen-Mindeststandard (Checkliste)
+### Tabele minimum standards
 - `<table>` with `<thead>/<tbody>`
 - Column headers are `<th scope="col">`, row headers (if any) are `<th scope="row">`
 - `caption` present when meaningful (can be visually hidden)
@@ -318,7 +318,7 @@ If you deviate, you MUST justify and document it in 2–3 sentences in the revie
 - Responsive behavior defined: horizontal scroll OR row details/stacking; never unreadable mini-columns
 - States are clear and consistent: Loading/Empty/Error
 
-### Ubersichtlichkeit / Scannability Scorecard (0-2 je Kriterium)
+### Scannability Scorecard (0-2 per criterion)
 Score each criterion 0–2 and add a short rationale:
 - Scannability: alignment, row height, column widths, wrap rules, consistent value formatting
 - Visual hierarchy: heading levels, grouping, spacing, contrast, progressive disclosure
@@ -333,7 +333,7 @@ Score each criterion 0–2 and add a short rationale:
 - S2 medium: UX friction, suboptimal hierarchy/spacing but usable
 - S3 low: cosmetic/polish
 
-### Review output (pflicht; in PR description or commit/review log)
+### Review output (mandatory; in PR description or commit/review log)
 If UI is affected or a UI issue is found, include:
 A) Scorecard (0–2 per criterion) + 3–10 key findings (each with Severity, Impact, Recommendation)
 B) Brief "Before/After" structure note (what changed for clarity/semantics)
