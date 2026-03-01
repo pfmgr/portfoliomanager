@@ -14,7 +14,8 @@ KB extraction enriches instruments/dossiers and feeds downstream classification,
 
 ## APIs
 
-- `POST /api/kb/dossiers/{isin}/missing-data`
+- `POST /api/kb/dossiers/{id}/extract`
+- `POST /api/kb/dossiers/{id}/complete-missing-metrics`
 - Additional KB extraction endpoints under `/api/kb/**`.
 
 ## Data dependencies
@@ -30,7 +31,18 @@ KB extraction enriches instruments/dossiers and feeds downstream classification,
 ## Config and gating
 
 - KB endpoints require `KB_ENABLED=true` and a configured/enabled LLM provider.
-- If LLM is not available, `/api/kb/**` returns `503`.
+- Extraction uses action-specific env vars when provided:
+  - `LLM_EXTRACTION_PROVIDER`
+  - `LLM_EXTRACTION_PROVIDER_API_KEY`
+  - `LLM_EXTRACTION_PROVIDER_BASE_URL`
+  - `LLM_EXTRACTION_PROVIDER_MODEL`
+- Fallback chain:
+  - `provider`/`base-url`/`model`: extraction-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
+  - `api-key`: extraction-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
+- Provider support is currently OpenAI only (`openai`; `none` disables).
+- LLM-enabled KB endpoints return `503` when the required action config is unavailable:
+  - websearch endpoints require websearch action config
+  - extraction endpoints require extraction action config
 - Test profile disables KB refresh scheduler via `app.kb.refresh-scheduler-enabled=false`.
 
 ## Code map

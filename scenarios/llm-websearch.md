@@ -21,6 +21,15 @@ Generate dossier drafts and enrich missing fields using asynchronous LLM websear
 
 - Allowed domains seed file:
   - `services/app/backend/src/main/resources/kb_websearch_allowed_domains.json`
+- Provider support: currently only OpenAI is supported (`openai`; `none` disables).
+- Action-specific env vars for websearch (also used by alternatives):
+  - `LLM_WEBSEARCH_PROVIDER`
+  - `LLM_WEBSEARCH_PROVIDER_API_KEY`
+  - `LLM_WEBSEARCH_PROVIDER_BASE_URL`
+  - `LLM_WEBSEARCH_PROVIDER_MODEL`
+- Fallback chain:
+  - `provider`/`base-url`/`model`: websearch-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
+  - `api-key`: websearch-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
 - OpenAI timeouts:
   - `app.llm.openai.connect-timeout-seconds`
   - `app.llm.openai.read-timeout-seconds`

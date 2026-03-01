@@ -1,8 +1,11 @@
 package my.portfoliomanager.app.service;
 
 import my.portfoliomanager.app.config.AppProperties;
+import my.portfoliomanager.app.llm.LlmActionSupport;
+import my.portfoliomanager.app.llm.LlmActionType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -52,13 +55,15 @@ public class LlmPromptPolicy {
 	private static final List<String> LOCAL_HOSTS = List.of("localhost", "127.0.0.1", "::1", "0.0.0.0");
 
 	private final AppProperties properties;
+	private final LlmActionSupport llmActionSupport;
 
-	public LlmPromptPolicy(AppProperties properties) {
+	public LlmPromptPolicy(AppProperties properties, ObjectProvider<LlmActionSupport> llmActionSupportProvider) {
 		this.properties = properties;
+		this.llmActionSupport = llmActionSupportProvider == null ? null : llmActionSupportProvider.getIfAvailable();
 	}
 
 	public String validatePrompt(String prompt, LlmPromptPurpose purpose) {
-		if (!isExternalProvider() || prompt == null || prompt.isBlank()) {
+		if (!isExternalProvider(purpose) || prompt == null || prompt.isBlank()) {
 			return prompt;
 		}
 		List<String> violations = new ArrayList<>();
@@ -86,6 +91,14 @@ public class LlmPromptPolicy {
 	}
 
 	public boolean isExternalProvider() {
+		return isExternalProvider(LlmPromptPurpose.REBALANCER_NARRATIVE);
+	}
+
+	public boolean isExternalProvider(LlmPromptPurpose purpose) {
+		LlmActionType actionType = actionTypeForPurpose(purpose);
+		if (llmActionSupport != null) {
+			return llmActionSupport.isExternalProviderFor(actionType);
+		}
 		if (properties == null || properties.llm() == null) {
 			return false;
 		}
@@ -97,8 +110,36 @@ public class LlmPromptPolicy {
 		if (provider.isBlank() || provider.equals("none") || provider.equals("noop") || provider.equals("disabled")) {
 			return false;
 		}
-		String baseUrl = properties.llm().openai() == null ? null : properties.llm().openai().baseUrl();
+		AppProperties.Llm.Action action = actionConfigFor(actionType);
+		String actionBaseUrl = action == null ? null : action.baseUrl();
+		String baseUrl = actionBaseUrl;
+		if (baseUrl == null || baseUrl.isBlank()) {
+			baseUrl = properties.llm().openai() == null ? null : properties.llm().openai().baseUrl();
+		}
 		return !isLocalBaseUrl(baseUrl);
+	}
+
+	private LlmActionType actionTypeForPurpose(LlmPromptPurpose purpose) {
+		if (purpose == null) {
+			return LlmActionType.NARRATIVE;
+		}
+		return switch (purpose) {
+			case KB_BULK_WEBSEARCH, KB_DOSSIER_WEBSEARCH, KB_DOSSIER_PATCH, KB_ALTERNATIVES_WEBSEARCH ->
+					LlmActionType.WEBSEARCH;
+			case KB_DOSSIER_EXTRACTION -> LlmActionType.EXTRACTION;
+			default -> LlmActionType.NARRATIVE;
+		};
+	}
+
+	private AppProperties.Llm.Action actionConfigFor(LlmActionType actionType) {
+		if (properties == null || properties.llm() == null || actionType == null) {
+			return null;
+		}
+		return switch (actionType) {
+			case WEBSEARCH -> properties.llm().websearch();
+			case EXTRACTION -> properties.llm().extraction();
+			case NARRATIVE -> properties.llm().narrative();
+		};
 	}
 
 	private boolean isLocalBaseUrl(String baseUrl) {

@@ -22,6 +22,12 @@ services:
       JWT_JTI_HASH_SECRET: ${JWT_JTI_HASH_SECRET:?required}
       LLM_PROVIDER: none
       LLM_PROVIDER_API_KEY: ""
+      LLM_WEBSEARCH_PROVIDER: none
+      LLM_WEBSEARCH_PROVIDER_API_KEY: ""
+      LLM_EXTRACTION_PROVIDER: none
+      LLM_EXTRACTION_PROVIDER_API_KEY: ""
+      LLM_NARRATIVE_PROVIDER: none
+      LLM_NARRATIVE_PROVIDER_API_KEY: ""
     depends_on:
       - e2e_db_portfolio
     networks:

@@ -32,7 +32,10 @@ public record AppProperties(
 	public record Llm(
 			@NotBlank String provider,
 			OpenAi openai,
-			Boolean externalProvider
+			Boolean externalProvider,
+			Action websearch,
+			Action extraction,
+			Action narrative
 	) {
 		public record OpenAi(
 				String apiKey,
@@ -40,6 +43,14 @@ public record AppProperties(
 				String model,
 				Integer connectTimeoutSeconds,
 				Integer readTimeoutSeconds
+		) {
+		}
+
+		public record Action(
+				String provider,
+				String apiKey,
+				String baseUrl,
+				String model
 		) {
 		}
 	}

@@ -140,7 +140,7 @@ public class KnowledgeBaseController {
 	public KnowledgeBaseLlmActionDto findAlternatives(@PathVariable("isin") String isin,
 													  @RequestBody(required = false) KnowledgeBaseAlternativesRequestDto request,
 													  Principal principal) {
-		availabilityService.assertLlmAvailable();
+		availabilityService.assertWebsearchAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		Boolean autoApprove = request == null ? null : request.autoApprove();
 		return actionService.startAlternatives(isin, autoApprove, actor, KnowledgeBaseLlmActionTrigger.USER);
@@ -170,7 +170,7 @@ public class KnowledgeBaseController {
 	@PostMapping("/dossiers/websearch")
 	@Operation(summary = "Start LLM websearch draft")
 	public InstrumentDossierWebsearchJobResponseDto startWebsearchDraft(@Valid @RequestBody InstrumentDossierWebsearchRequest request) {
-		availabilityService.assertLlmAvailable();
+		availabilityService.assertWebsearchAvailable();
 		return websearchJobService.start(request.isin());
 	}
 
@@ -178,7 +178,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Start bulk LLM websearch draft")
 	public InstrumentDossierBulkWebsearchJobResponseDto startBulkWebsearchDraft(@Valid @RequestBody InstrumentDossierBulkWebsearchRequest request,
 													Principal principal) {
-		availabilityService.assertLlmAvailable();
+		availabilityService.assertWebsearchAvailable();
 		String createdBy = principal == null ? "system" : principal.getName();
 		return bulkWebsearchJobService.start(request.isins(), createdBy);
 	}
@@ -186,14 +186,14 @@ public class KnowledgeBaseController {
 	@GetMapping("/dossiers/websearch/{jobId}")
 	@Operation(summary = "Get LLM websearch draft job")
 	public InstrumentDossierWebsearchJobResponseDto getWebsearchDraft(@PathVariable("jobId") String jobId) {
-		availabilityService.assertLlmAvailable();
+		availabilityService.assertWebsearchAvailable();
 		return websearchJobService.get(jobId);
 	}
 
 	@GetMapping("/dossiers/websearch/bulk/{jobId}")
 	@Operation(summary = "Get bulk LLM websearch draft job")
 	public InstrumentDossierBulkWebsearchJobResponseDto getBulkWebsearchDraft(@PathVariable("jobId") String jobId) {
-		availabilityService.assertLlmAvailable();
+		availabilityService.assertWebsearchAvailable();
 		return bulkWebsearchJobService.get(jobId);
 	}
 
@@ -241,7 +241,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Run extraction for dossier")
 	public KnowledgeBaseLlmActionDto runExtraction(@PathVariable("id") Long dossierId,
 								   Principal principal) {
-		availabilityService.assertEnabled();
+		availabilityService.assertExtractionAvailable();
 		String actor = principal == null ? "system" : principal.getName();
 		return actionService.startExtraction(dossierId, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}

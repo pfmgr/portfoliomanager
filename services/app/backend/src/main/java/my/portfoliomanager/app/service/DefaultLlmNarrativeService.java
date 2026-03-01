@@ -1,9 +1,12 @@
 package my.portfoliomanager.app.service;
 
 import my.portfoliomanager.app.llm.LlmClient;
+import my.portfoliomanager.app.llm.LlmActionSupport;
+import my.portfoliomanager.app.llm.LlmActionType;
 import my.portfoliomanager.app.llm.NoopLlmClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -12,9 +15,14 @@ public class DefaultLlmNarrativeService implements LlmNarrativeService {
 	private final LlmClient llmClient;
 	private final boolean enabled;
 
-	public DefaultLlmNarrativeService(LlmClient llmClient) {
+	public DefaultLlmNarrativeService(LlmClient llmClient, ObjectProvider<LlmActionSupport> llmActionSupportProvider) {
 		this.llmClient = llmClient;
-		this.enabled = !(llmClient instanceof NoopLlmClient);
+		LlmActionSupport llmActionSupport = llmActionSupportProvider == null ? null : llmActionSupportProvider.getIfAvailable();
+		if (llmActionSupport != null) {
+			this.enabled = llmActionSupport.isConfiguredFor(LlmActionType.NARRATIVE);
+		} else {
+			this.enabled = !(llmClient instanceof NoopLlmClient);
+		}
 	}
 
 	@Override

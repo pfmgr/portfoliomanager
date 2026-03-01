@@ -25,6 +25,18 @@ Assessor evaluates portfolio quality and proposes saving-plan and one-time actio
 
 - `GET /api/assessor/**`
 
+## LLM narrative config
+
+- Narrative generation uses action-specific env vars when provided:
+  - `LLM_NARRATIVE_PROVIDER`
+  - `LLM_NARRATIVE_PROVIDER_API_KEY`
+  - `LLM_NARRATIVE_PROVIDER_BASE_URL`
+  - `LLM_NARRATIVE_PROVIDER_MODEL`
+- Fallback chain:
+  - `provider`/`base-url`/`model`: narrative-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
+  - `api-key`: narrative-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
+- Provider support is currently OpenAI only (`openai`; `none` disables).
+
 ## UI
 
 - `services/app/frontend/src/views/AssessorView.vue`

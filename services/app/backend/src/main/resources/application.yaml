@@ -44,7 +44,7 @@ app:
     cleanup-batch-size: ${JWT_CLEANUP_BATCH_SIZE:1000}
     cleanup-enabled: ${JWT_CLEANUP_ENABLED:true}
   llm:
-    provider: ${LLM_PROVIDER:none}
+    provider: ${LLM_PROVIDER:openai}
     external-provider: ${LLM_EXTERNAL_PROVIDER:false}
     openai:
       api-key: ${LLM_PROVIDER_API_KEY:${OPENAI_API_KEY:}}
@@ -52,6 +52,21 @@ app:
       model: ${LLM_PROVIDER_MODEL:gpt-5-mini}
       connect-timeout-seconds: ${LLM_PROVIDER_CONNECT_TIMEOUT_SECONDS:300}
       read-timeout-seconds: ${LLM_PROVIDER_READ_TIMEOUT_SECONDS:300}
+    websearch:
+      provider: ${LLM_WEBSEARCH_PROVIDER:}
+      api-key: ${LLM_WEBSEARCH_PROVIDER_API_KEY:}
+      base-url: ${LLM_WEBSEARCH_PROVIDER_BASE_URL:}
+      model: ${LLM_WEBSEARCH_PROVIDER_MODEL:}
+    extraction:
+      provider: ${LLM_EXTRACTION_PROVIDER:}
+      api-key: ${LLM_EXTRACTION_PROVIDER_API_KEY:}
+      base-url: ${LLM_EXTRACTION_PROVIDER_BASE_URL:}
+      model: ${LLM_EXTRACTION_PROVIDER_MODEL:}
+    narrative:
+      provider: ${LLM_NARRATIVE_PROVIDER:}
+      api-key: ${LLM_NARRATIVE_PROVIDER_API_KEY:}
+      base-url: ${LLM_NARRATIVE_PROVIDER_BASE_URL:}
+      model: ${LLM_NARRATIVE_PROVIDER_MODEL:}
   kb:
     enabled: ${KB_ENABLED:true}
     llm-enabled: ${KB_LLM_ENABLED:false}
