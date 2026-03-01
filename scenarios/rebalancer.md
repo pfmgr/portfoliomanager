@@ -42,3 +42,15 @@ Rebalancer computes deterministic allocation proposals across portfolio layers a
 - Missing KB coverage: no instrument-level proposals, include missing ISINs in response.
 - Profile constraints can produce warnings even when tolerance checks pass.
 - LLM unavailability must not change deterministic proposal targets.
+
+## LLM narrative config
+
+- Rebalancer narrative uses action-specific env vars when provided:
+  - `LLM_NARRATIVE_PROVIDER`
+  - `LLM_NARRATIVE_PROVIDER_API_KEY`
+  - `LLM_NARRATIVE_PROVIDER_BASE_URL`
+  - `LLM_NARRATIVE_PROVIDER_MODEL`
+- Fallback chain:
+  - `provider`/`base-url`/`model`: narrative-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
+  - `api-key`: narrative-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
+- Provider support is currently OpenAI only (`openai`; `none` disables).

@@ -10,7 +10,6 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -320,11 +319,11 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         String contentType = ex.getResponseHeaders() == null || ex.getResponseHeaders().getContentType() == null
                 ? "unknown"
                 : ex.getResponseHeaders().getContentType().toString();
-        String bodyPreview = responseBodyPreview(ex.getResponseBodyAsByteArray(), contentType);
+        int bodyLength = ex.getResponseBodyAsByteArray() == null ? 0 : ex.getResponseBodyAsByteArray().length;
         String effort = extractReasoningEffort(request);
         int status = ex.getStatusCode() == null ? 0 : ex.getStatusCode().value();
-        logger.error("OpenAI responses API error (model={}, effort={}, status={}, contentType={}, body={})",
-                model, effort, status, contentType, bodyPreview, ex);
+        logger.error("OpenAI responses API error (model={}, effort={}, status={}, contentType={}, bodyLength={})",
+                model, effort, status, contentType, bodyLength, ex);
     }
 
     private void logRequestError(Exception ex, Map<String, Object> request) {
@@ -344,25 +343,6 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         Object effort = map.get("effort");
         return effort == null ? "unknown" : effort.toString();
     }
-
-	private String responseBodyPreview(byte[] body, String contentType) {
-		if (body == null || body.length == 0) {
-			return "<empty>";
-		}
-		String normalizedType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-		if (normalizedType.contains("octet-stream")) {
-			return "<binary length=" + body.length + ">";
-		}
-		String text = new String(body, StandardCharsets.UTF_8).trim();
-		if (text.isBlank()) {
-			return "<blank length=" + body.length + ">";
-		}
-		int maxChars = 4000;
-		if (text.length() > maxChars) {
-			return text.substring(0, maxChars) + "... (truncated, length=" + text.length() + ")";
-		}
-		return text;
-	}
 
     private String safeMessage(Exception ex) {
         if (ex == null) {
