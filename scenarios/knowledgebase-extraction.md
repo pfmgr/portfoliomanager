@@ -53,4 +53,5 @@ KB extraction enriches instruments/dossiers and feeds downstream classification,
 ## Edge cases
 
 - Unknown ISIN dossiers are allowed and do not require an existing instrument row.
+- Large valuation values (for example trillion-scale `market_cap` or `enterprise_value`) must be persisted in `instrument_facts.fact_value_num` without numeric overflow during approve/apply flows.
 - Backup/import logic must include all KB tables in truncate/import/sequence-reset order after schema changes.

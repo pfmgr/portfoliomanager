@@ -34,6 +34,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -260,6 +261,62 @@ class KnowledgeBaseServiceTest {
 	}
 
 	@Test
+	void approveExtraction_withLargeValuationFacts_appliesWithoutNumericOverflow() throws Exception {
+		setApplyExtractionsToOverrides(true);
+
+		InstrumentDossier dossier = createDossier("Name: NVIDIA Corporation");
+		InstrumentDossierExtraction extraction = createPendingExtraction(
+				dossier.getDossierId(),
+				largeValuationPayload("DE0000000001")
+		);
+
+		var approved = knowledgeBaseService.approveExtraction(extraction.getExtractionId(), "tester");
+
+		assertThat(approved.status()).isEqualTo(DossierExtractionStatus.APPLIED);
+		assertThat(readFactValueNum("DE0000000001", "valuation.market_cap"))
+				.isEqualByComparingTo("4430000000000");
+		assertThat(readFactValueNum("DE0000000001", "valuation.enterprise_value"))
+				.isEqualByComparingTo("4480000000000");
+	}
+
+	@Test
+	void approveExtraction_autoApproveWithLargeValuationFacts_appliesWithoutNumericOverflow() throws Exception {
+		InstrumentDossier dossier = createDossier("Name: NVIDIA Corporation");
+		InstrumentDossierExtraction extraction = createPendingExtraction(
+				dossier.getDossierId(),
+				largeValuationPayload("DE0000000001")
+		);
+
+		var approved = knowledgeBaseService.approveExtraction(extraction.getExtractionId(), "tester", true, true);
+
+		assertThat(approved.status()).isEqualTo(DossierExtractionStatus.APPLIED);
+		assertThat(extractionRepository.findById(extraction.getExtractionId()).orElseThrow().isAutoApproved()).isTrue();
+		assertThat(readFactValueNum("DE0000000001", "valuation.market_cap"))
+				.isEqualByComparingTo("4430000000000");
+	}
+
+	@Test
+	void applyExtraction_withLargeValuationFacts_persistsWithoutNumericOverflow() throws Exception {
+		InstrumentDossier dossier = createDossier("Name: NVIDIA Corporation");
+		InstrumentDossierExtraction extraction = createPendingExtraction(
+				dossier.getDossierId(),
+				largeValuationPayload("DE0000000001")
+		);
+		extraction.setStatus(DossierExtractionStatus.APPROVED);
+		extraction.setApprovedBy("tester");
+		extraction.setApprovedAt(LocalDateTime.now());
+		extraction = extractionRepository.save(extraction);
+
+		var applied = knowledgeBaseService.applyExtraction(extraction.getExtractionId(), "tester");
+
+		assertThat(applied.status()).isEqualTo(DossierExtractionStatus.APPLIED);
+		assertThat(readFactValueNum("DE0000000001", "valuation.market_cap"))
+				.isEqualByComparingTo("4430000000000");
+		assertThat(readFactValueNum("DE0000000001", "valuation.enterprise_value"))
+				.isEqualByComparingTo("4480000000000");
+	}
+
+	@Test
 	void runExtraction_keepsPriceStableWhenContextContainsBWord() throws Exception {
 		InstrumentDossier dossier = createDossier(
 				"# DE0000000001 - Test\n"
@@ -316,6 +373,84 @@ class KnowledgeBaseServiceTest {
 		extraction.setApprovedBy("tester");
 		extraction.setApprovedAt(LocalDateTime.now());
 		return extractionRepository.save(extraction);
+	}
+
+	private InstrumentDossierExtraction createPendingExtraction(Long dossierId, JsonNode extractedJson) {
+		InstrumentDossierExtraction extraction = new InstrumentDossierExtraction();
+		extraction.setDossierId(dossierId);
+		extraction.setModel("stub");
+		extraction.setExtractedJson(extractedJson);
+		extraction.setMissingFieldsJson(objectMapper.createArrayNode());
+		extraction.setWarningsJson(objectMapper.createArrayNode());
+		extraction.setStatus(DossierExtractionStatus.PENDING_REVIEW);
+		extraction.setCreatedAt(LocalDateTime.now());
+		return extractionRepository.save(extraction);
+	}
+
+	private JsonNode largeValuationPayload(String isin) throws Exception {
+		return objectMapper.readTree("""
+				{
+				  "isin": "%s",
+				  "name": "NVIDIA Corporation",
+				  "instrument_type": "Single Stock",
+				  "asset_class": "Equity",
+				  "valuation": {
+				    "market_cap": 4430000000000,
+				    "enterprise_value": 4480000000000
+				  },
+				  "sources": [],
+				  "missing_fields": [],
+				  "warnings": []
+				}
+				""".formatted(isin));
+	}
+
+	private BigDecimal readFactValueNum(String isin, String factKey) {
+		return jdbcTemplate.queryForObject(
+				"""
+						select fact_value_num
+						from instrument_facts
+						where isin = ?
+						  and fact_key = ?
+						order by updated_at desc
+						limit 1
+						""",
+				BigDecimal.class,
+				isin,
+				factKey
+		);
+	}
+
+	private void setApplyExtractionsToOverrides(boolean enabled) {
+		KnowledgeBaseConfigDto current = configService.getConfig();
+		KnowledgeBaseConfigDto updated = new KnowledgeBaseConfigDto(
+				current.enabled(),
+				current.refreshIntervalDays(),
+				current.autoApprove(),
+				enabled,
+				current.overwriteExistingOverrides(),
+				current.batchSizeInstruments(),
+				current.batchMaxInputChars(),
+				current.maxParallelBulkBatches(),
+				current.maxBatchesPerRun(),
+				current.pollIntervalSeconds(),
+				current.maxInstrumentsPerRun(),
+				current.maxRetriesPerInstrument(),
+				current.baseBackoffSeconds(),
+				current.maxBackoffSeconds(),
+				current.dossierMaxChars(),
+				current.kbRefreshMinDaysBetweenRunsPerInstrument(),
+				current.runTimeoutMinutes(),
+				current.websearchReasoningEffort(),
+				current.websearchAllowedDomains(),
+				current.bulkMinCitations(),
+				current.bulkRequirePrimarySource(),
+				current.alternativesMinSimilarityScore(),
+				current.extractionEvidenceRequired(),
+				current.qualityGateRetryLimit(),
+				current.qualityGateProfiles()
+		);
+		configService.updateConfig(updated);
 	}
 
 	private InstrumentDossierExtractionPayload payload(String isin, String name) {
