@@ -1453,3 +1453,20 @@ databaseChangeLog:
             sql: |
               ALTER TABLE auth_tokens
               ADD CONSTRAINT auth_tokens_expiry_check CHECK (expires_at > issued_at);
+  - changeSet:
+      id: 018b-instrument-facts-numeric-widen-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        and:
+          - tableExists:
+              tableName: instrument_facts
+          - columnExists:
+              tableName: instrument_facts
+              columnName: fact_value_num
+      changes:
+        - modifyDataType:
+            tableName: instrument_facts
+            columnName: fact_value_num
+            newDataType: NUMERIC(24,6)
