@@ -13,6 +13,7 @@ TESTS_PATH=""
 KEEP_RUNNING=false
 TOKEN_NAME=""
 SONAR_TOKEN=""
+DEFAULT_QUALITY_GATE="${SONAR_DEFAULT_QUALITY_GATE:-PortfolioManager Default}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -186,6 +187,15 @@ if ! docker run --rm \
   "${SCANNER_ARGS[@]}"; then
   echo "SonarQube scan failed." >&2
   exit 11
+fi
+
+if [[ -n "${DEFAULT_QUALITY_GATE}" ]]; then
+  if ! curl -sf -u "${SONAR_LOGIN}:${SONAR_PASSWORD}" -X POST \
+    "${SONAR_URL}/api/qualitygates/select" \
+    --data-urlencode "projectKey=${PROJECT_KEY}" \
+    --data-urlencode "gateName=${DEFAULT_QUALITY_GATE}" >/dev/null; then
+    log "Warning: failed to assign quality gate '${DEFAULT_QUALITY_GATE}' to project '${PROJECT_KEY}'."
+  fi
 fi
 
 log "Fetching quality gate status..."
