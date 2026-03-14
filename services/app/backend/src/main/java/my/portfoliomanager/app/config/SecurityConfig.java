@@ -121,6 +121,7 @@ public class SecurityConfig {
 
 	@Bean
 	@Order(1)
+	@SuppressWarnings("java:S4502") // Acceptable: stateless JWT API, no server-side session, CSRF not applicable for token-authenticated requests.
 	public SecurityFilterChain logoutSecurityFilterChain(HttpSecurity http,
 									 JwtAuthenticationConverter jwtAuthenticationConverter,
 									 @Qualifier("logoutJwtDecoder") JwtDecoder logoutJwtDecoder) throws Exception {
@@ -140,6 +141,7 @@ public class SecurityConfig {
 
 	@Bean
 	@Order(2)
+	@SuppressWarnings("java:S4502") // Acceptable: stateless JWT API, no server-side session, CSRF not applicable for token-authenticated requests.
 	public SecurityFilterChain securityFilterChain(HttpSecurity http,
 									 JwtAuthenticationConverter jwtAuthenticationConverter,
 									 @Qualifier("jwtDecoder") JwtDecoder jwtDecoder) throws Exception {
