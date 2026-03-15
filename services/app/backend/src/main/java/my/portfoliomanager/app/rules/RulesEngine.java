@@ -18,57 +18,85 @@ public static final String FACT_IS_SAVINGPLAN_ACTIVE = "is_savingPlan_active";
 
 	public EvaluationResult evaluate(Instrument instrument, boolean isSavingPlanActive, RulesetDefinition ruleset) {
 		Map<String, Object> facts = buildFacts(instrument, isSavingPlanActive);
-		List<RuleDefinition> rules = ruleset.getRules();
-		if (rules == null) {
-			rules = List.of();
-		}
-		List<RuleDefinition> sorted = new ArrayList<>(rules);
-		sorted.sort(Comparator.comparing((RuleDefinition r) -> r.getPriority() == null ? 0 : r.getPriority()).reversed());
+		List<RuleDefinition> sortedRules = sortedRules(ruleset == null ? null : ruleset.getRules());
+		EvaluationState state = evaluateRules(sortedRules, facts);
 
+		RulesetDefaults defaults = ruleset == null ? null : ruleset.getDefaults();
+		String proposedInstrumentType = pickValue(state.instrumentTypeCandidate(), instrument.getInstrumentType(), defaults == null ? null : defaults.getInstrumentType());
+		String proposedAssetClass = pickValue(state.assetClassCandidate(), instrument.getAssetClass(), defaults == null ? null : defaults.getAssetClass());
+		String proposedSubClass = pickValue(state.subClassCandidate(), instrument.getSubClass(), defaults == null ? null : defaults.getSubClass());
+		Integer proposedLayer = pickValue(state.layerCandidate(), instrument.getLayer(), defaults == null ? null : defaults.getLayer());
+
+		int confidenceScore = state.layerCandidate() == null ? 0 : state.layerCandidate().score;
+		double confidence = Math.min(1.0d, confidenceScore / 100.0d);
+
+		return new EvaluationResult(
+				new Classification(proposedInstrumentType, proposedAssetClass, proposedSubClass, proposedLayer),
+				confidence,
+				state.firedRules(),
+				facts
+		);
+	}
+
+	private List<RuleDefinition> sortedRules(List<RuleDefinition> rules) {
+		List<RuleDefinition> candidates = rules == null ? List.of() : rules;
+		List<RuleDefinition> sorted = new ArrayList<>(candidates);
+		sorted.sort(Comparator.comparing((RuleDefinition r) -> r.getPriority() == null ? 0 : r.getPriority()).reversed());
+		return sorted;
+	}
+
+	private EvaluationState evaluateRules(List<RuleDefinition> sortedRules, Map<String, Object> facts) {
 		Candidate<String> instrumentTypeCandidate = null;
 		Candidate<String> assetClassCandidate = null;
 		Candidate<String> subClassCandidate = null;
 		Candidate<Integer> layerCandidate = null;
 		List<FiredRule> firedRules = new ArrayList<>();
 
-		for (RuleDefinition rule : sorted) {
+		for (RuleDefinition rule : sortedRules) {
 			if (!matches(rule.getMatch(), facts)) {
 				continue;
 			}
 			ActionsDefinition actions = rule.getActions();
 			int score = score(rule, actions);
-			if (actions != null) {
-				if (actions.getInstrumentType() != null && instrumentTypeCandidate == null) {
-					instrumentTypeCandidate = new Candidate<>(actions.getInstrumentType(), score, rule);
-				}
-				if (actions.getAssetClass() != null) {
-					assetClassCandidate = pickBest(assetClassCandidate, new Candidate<>(actions.getAssetClass(), score, rule));
-				}
-				if (actions.getSubClass() != null) {
-					subClassCandidate = pickBest(subClassCandidate, new Candidate<>(actions.getSubClass(), score, rule));
-				}
-				if (actions.getLayer() != null) {
-					layerCandidate = pickBest(layerCandidate, new Candidate<>(actions.getLayer(), score, rule));
-				}
-			}
+			RuleEvaluation evaluation = applyActions(actions, score, rule, instrumentTypeCandidate, assetClassCandidate,
+					subClassCandidate, layerCandidate);
+			instrumentTypeCandidate = evaluation.instrumentTypeCandidate();
+			assetClassCandidate = evaluation.assetClassCandidate();
+			subClassCandidate = evaluation.subClassCandidate();
+			layerCandidate = evaluation.layerCandidate();
 			firedRules.add(new FiredRule(rule.getId(), rule.getPriority(), score));
 		}
 
-		RulesetDefaults defaults = ruleset.getDefaults();
-		String proposedInstrumentType = pickValue(instrumentTypeCandidate, instrument.getInstrumentType(), defaults == null ? null : defaults.getInstrumentType());
-		String proposedAssetClass = pickValue(assetClassCandidate, instrument.getAssetClass(), defaults == null ? null : defaults.getAssetClass());
-		String proposedSubClass = pickValue(subClassCandidate, instrument.getSubClass(), defaults == null ? null : defaults.getSubClass());
-		Integer proposedLayer = pickValue(layerCandidate, instrument.getLayer(), defaults == null ? null : defaults.getLayer());
+		return new EvaluationState(instrumentTypeCandidate, assetClassCandidate, subClassCandidate, layerCandidate, firedRules);
+	}
 
-		int confidenceScore = layerCandidate == null ? 0 : layerCandidate.score;
-		double confidence = Math.min(1.0d, confidenceScore / 100.0d);
-
-		return new EvaluationResult(
-				new Classification(proposedInstrumentType, proposedAssetClass, proposedSubClass, proposedLayer),
-				confidence,
-				firedRules,
-				facts
-		);
+	private RuleEvaluation applyActions(ActionsDefinition actions,
+							 int score,
+							 RuleDefinition rule,
+							 Candidate<String> instrumentTypeCandidate,
+							 Candidate<String> assetClassCandidate,
+							 Candidate<String> subClassCandidate,
+							 Candidate<Integer> layerCandidate) {
+		if (actions == null) {
+			return new RuleEvaluation(instrumentTypeCandidate, assetClassCandidate, subClassCandidate, layerCandidate);
+		}
+		Candidate<String> instrumentType = instrumentTypeCandidate;
+		Candidate<String> assetClass = assetClassCandidate;
+		Candidate<String> subClass = subClassCandidate;
+		Candidate<Integer> layer = layerCandidate;
+		if (actions.getInstrumentType() != null && instrumentType == null) {
+			instrumentType = new Candidate<>(actions.getInstrumentType(), score, rule);
+		}
+		if (actions.getAssetClass() != null) {
+			assetClass = pickBest(assetClass, new Candidate<>(actions.getAssetClass(), score, rule));
+		}
+		if (actions.getSubClass() != null) {
+			subClass = pickBest(subClass, new Candidate<>(actions.getSubClass(), score, rule));
+		}
+		if (actions.getLayer() != null) {
+			layer = pickBest(layer, new Candidate<>(actions.getLayer(), score, rule));
+		}
+		return new RuleEvaluation(instrumentType, assetClass, subClass, layer);
 	}
 
 	private int score(RuleDefinition rule, ActionsDefinition actions) {
@@ -215,5 +243,22 @@ public static final String FACT_IS_SAVINGPLAN_ACTIVE = "is_savingPlan_active";
 	}
 
 	private record Candidate<T>(T value, int score, RuleDefinition rule) {
+	}
+
+	private record EvaluationState(
+			Candidate<String> instrumentTypeCandidate,
+			Candidate<String> assetClassCandidate,
+			Candidate<String> subClassCandidate,
+			Candidate<Integer> layerCandidate,
+			List<FiredRule> firedRules
+	) {
+	}
+
+	private record RuleEvaluation(
+			Candidate<String> instrumentTypeCandidate,
+			Candidate<String> assetClassCandidate,
+			Candidate<String> subClassCandidate,
+			Candidate<Integer> layerCandidate
+	) {
 	}
 }

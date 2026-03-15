@@ -10,10 +10,11 @@ import java.time.Clock;
 import java.time.Instant;
 
 public class JwtDatabaseValidator implements OAuth2TokenValidator<Jwt> {
-	private static final OAuth2Error MISSING_JTI = new OAuth2Error("invalid_token", "Token is missing jti", null);
-	private static final OAuth2Error EXPIRED = new OAuth2Error("invalid_token", "Token has expired", null);
-	private static final OAuth2Error NOT_ACTIVE = new OAuth2Error("invalid_token", "Token is not active", null);
-	private static final OAuth2Error VALIDATION_FAILED = new OAuth2Error("invalid_token", "Token validation failed", null);
+	private static final String INVALID_TOKEN_CODE = "invalid_token";
+	private static final OAuth2Error MISSING_JTI = new OAuth2Error(INVALID_TOKEN_CODE, "Token is missing jti", null);
+	private static final OAuth2Error EXPIRED = new OAuth2Error(INVALID_TOKEN_CODE, "Token has expired", null);
+	private static final OAuth2Error NOT_ACTIVE = new OAuth2Error(INVALID_TOKEN_CODE, "Token is not active", null);
+	private static final OAuth2Error VALIDATION_FAILED = new OAuth2Error(INVALID_TOKEN_CODE, "Token validation failed", null);
 
 	private final AuthTokenService tokenService;
 	private final Clock clock;

@@ -79,6 +79,8 @@ if [[ -z "${PORT_OVERRIDE}" && -f "${RUNTIME_ENV}" ]]; then
   EXISTING_COMPOSE_PROJECT_NAME=""
   EXISTING_SONAR_PORT=""
   EXISTING_SONAR_URL=""
+  EXISTING_SONAR_TOKEN=""
+  EXISTING_SONAR_TOKEN_NAME=""
   set -a
   # shellcheck disable=SC1090
   source "${RUNTIME_ENV}"
@@ -86,17 +88,19 @@ if [[ -z "${PORT_OVERRIDE}" && -f "${RUNTIME_ENV}" ]]; then
   EXISTING_COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
   EXISTING_SONAR_PORT="${SONAR_PORT:-}"
   EXISTING_SONAR_URL="${SONAR_URL:-}"
+  EXISTING_SONAR_TOKEN="${SONAR_TOKEN:-}"
+  EXISTING_SONAR_TOKEN_NAME="${SONAR_TOKEN_NAME:-}"
   COMPOSE_PROJECT_NAME="${REPO_PREFIX}_sonar"
 
   if [[ "${EXISTING_COMPOSE_PROJECT_NAME}" == "${COMPOSE_PROJECT_NAME}" && -n "${EXISTING_SONAR_PORT}" && -n "${EXISTING_SONAR_URL}" ]]; then
     existing_container_id="$(docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" ps -q sonarqube 2>/dev/null || true)"
-      if [[ -n "${existing_container_id}" ]]; then
-        if curl -sf "${EXISTING_SONAR_URL}/api/system/status" | grep -q '"status":"UP"'; then
-          SONAR_PORT="${EXISTING_SONAR_PORT}"
-          SONAR_URL="${EXISTING_SONAR_URL}"
-          REUSE_RUNNING=true
-        fi
+    if [[ -n "${existing_container_id}" ]]; then
+      if curl -sf "${EXISTING_SONAR_URL}/api/system/status" | grep -q '"status":"UP"'; then
+        SONAR_PORT="${EXISTING_SONAR_PORT}"
+        SONAR_URL="${EXISTING_SONAR_URL}"
+        REUSE_RUNNING=true
       fi
+    fi
   fi
 fi
 
@@ -136,7 +140,14 @@ if [[ -z "${SONAR_PORT}" ]]; then
 fi
 
 SONAR_URL="http://127.0.0.1:${SONAR_PORT}"
+SONAR_ADMIN_USER="${SONAR_ADMIN_USER:-admin}"
 SONAR_ADMIN_PASSWORD="${SONAR_ADMIN_PASSWORD:-admin}"
+SONAR_TOKEN="${SONAR_TOKEN:-${SONAR_ADMIN_TOKEN:-${EXISTING_SONAR_TOKEN:-}}}"
+SONAR_TOKEN_NAME="${SONAR_TOKEN_NAME:-${EXISTING_SONAR_TOKEN_NAME:-}}"
+
+sonar_api() {
+  curl -sf -H "Authorization: Bearer ${SONAR_TOKEN}" "$@"
+}
 
 is_true() {
   case "${1:-}" in
@@ -147,6 +158,85 @@ is_true() {
       return 1
       ;;
   esac
+}
+
+write_runtime_env() {
+  cat > "${RUNTIME_ENV}" <<EOF
+REPO_PREFIX=${REPO_PREFIX}
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+SONAR_PORT=${SONAR_PORT}
+SONAR_URL=${SONAR_URL}
+SONAR_TOKEN=${SONAR_TOKEN}
+SONAR_TOKEN_NAME=${SONAR_TOKEN_NAME}
+EOF
+}
+
+token_is_valid() {
+  if [[ -z "${SONAR_TOKEN}" ]]; then
+    return 1
+  fi
+  sonar_api "${SONAR_URL}/api/qualitygates/list" >/dev/null 2>&1
+}
+
+generate_sonar_token() {
+  local cookie_file
+  local token_name
+  local token_json
+  local generated
+  local xsrf_token
+
+  cookie_file="$(mktemp)"
+  if ! curl -sf -c "${cookie_file}" -X POST \
+    "${SONAR_URL}/api/authentication/login" \
+    --data-urlencode "login=${SONAR_ADMIN_USER}" \
+    --data-urlencode "password=${SONAR_ADMIN_PASSWORD}" >/dev/null; then
+    rm -f "${cookie_file}"
+    log "Error: failed SonarQube login for token bootstrap."
+    return 1
+  fi
+
+  token_name="opencode_${REPO_PREFIX}_$(date +%s%N)"
+  xsrf_token="$(awk '$6=="XSRF-TOKEN" {print $7}' "${cookie_file}" || true)"
+  if [[ -z "${xsrf_token}" ]]; then
+    rm -f "${cookie_file}"
+    log "Error: failed to obtain SonarQube XSRF token for API token generation."
+    return 1
+  fi
+  token_json="$(curl -sf -b "${cookie_file}" -X POST \
+    "${SONAR_URL}/api/user_tokens/generate" \
+    -H "X-XSRF-TOKEN: ${xsrf_token}" \
+    --data-urlencode "name=${token_name}" || true)"
+  rm -f "${cookie_file}"
+
+  generated="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else ""; data=json.loads(payload) if payload else {}; print(data.get("token", ""))' "${token_json}" 2>/dev/null || true)"
+  if [[ -z "${generated}" ]]; then
+    log "Error: failed to generate SonarQube token."
+    return 1
+  fi
+
+  SONAR_TOKEN="${generated}"
+  SONAR_TOKEN_NAME="${token_name}"
+  log "Generated SonarQube token '${SONAR_TOKEN_NAME}'."
+  return 0
+}
+
+ensure_sonar_token() {
+  if token_is_valid; then
+    return 0
+  fi
+
+  if [[ -n "${SONAR_TOKEN}" ]]; then
+    log "Warning: existing SonarQube token is invalid; generating a fresh token."
+  fi
+
+  generate_sonar_token || return 1
+
+  if ! token_is_valid; then
+    log "Error: generated SonarQube token is not valid for API access."
+    return 1
+  fi
+
+  return 0
 }
 
 ensure_quality_gate_condition() {
@@ -172,7 +262,7 @@ print("1" if any(c.get("metric")==metric and c.get("op")==op and as_str(c.get("e
     return 0
   fi
 
-  if curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
+  if sonar_api -X POST \
     "${SONAR_URL}/api/qualitygates/create_condition" \
     --data-urlencode "gateName=${gate_name}" \
     --data-urlencode "metric=${metric}" \
@@ -186,29 +276,47 @@ print("1" if any(c.get("metric")==metric and c.get("op")==op and as_str(c.get("e
   return 1
 }
 
-ensure_quality_gate_condition_any_metric() {
+remove_quality_gate_metric_conditions() {
   local gate_name="$1"
-  local op="$2"
-  local error="$3"
-  local gate_show_json="$4"
-  shift 4
+  local gate_show_json="$2"
+  shift 2
 
-  local metric
-  for metric in "$@"; do
-    if ensure_quality_gate_condition "${gate_name}" "${metric}" "${op}" "${error}" "${gate_show_json}"; then
-      return 0
+  local delete_ids
+  delete_ids="$(${PYTHON_BIN} -c 'import json,sys
+payload=sys.argv[1] if len(sys.argv)>1 else ""
+metrics=set(sys.argv[2:])
+data=json.loads(payload) if payload else {}
+for c in data.get("conditions",[]):
+    metric=c.get("metric")
+    cond_id=c.get("id")
+    if metric in metrics and cond_id is not None:
+        print(cond_id)
+' "${gate_show_json}" "$@" 2>/dev/null || true)"
+
+  if [[ -z "${delete_ids}" ]]; then
+    return 0
+  fi
+
+  local cond_id
+  while IFS= read -r cond_id; do
+    [[ -z "${cond_id}" ]] && continue
+    if ! sonar_api -X POST \
+      "${SONAR_URL}/api/qualitygates/delete_condition" \
+      --data-urlencode "id=${cond_id}" >/dev/null; then
+      log "Error: failed to delete quality gate condition id ${cond_id} on '${gate_name}'."
+      return 1
     fi
-  done
+    log "Removed quality gate condition id ${cond_id}."
+  done <<< "${delete_ids}"
 
-  log "Error: failed to ensure any quality gate condition for metrics: $* ${op} ${error}."
-  return 1
+  return 0
 }
 
 is_default_quality_gate_active() {
   local gate_name="$1"
   local gates_json
 
-  gates_json="$(curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" "${SONAR_URL}/api/qualitygates/list" || true)"
+  gates_json="$(sonar_api "${SONAR_URL}/api/qualitygates/list" || true)"
   if [[ -z "${gates_json}" ]]; then
     return 1
   fi
@@ -225,7 +333,7 @@ ensure_default_quality_gate_policy() {
   local gate_name="$1"
   local gate_show_json
 
-  gate_show_json="$(curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -G \
+  gate_show_json="$(sonar_api -G \
     "${SONAR_URL}/api/qualitygates/show" \
     --data-urlencode "name=${gate_name}" || true)"
   if [[ -z "${gate_show_json}" ]]; then
@@ -233,14 +341,34 @@ ensure_default_quality_gate_policy() {
     return 0
   fi
 
-  ensure_quality_gate_condition "${gate_name}" "new_reliability_rating" "GT" "1" "${gate_show_json}"
-  ensure_quality_gate_condition "${gate_name}" "new_security_rating" "GT" "1" "${gate_show_json}"
-  ensure_quality_gate_condition "${gate_name}" "new_maintainability_rating" "GT" "1" "${gate_show_json}"
+  remove_quality_gate_metric_conditions "${gate_name}" "${gate_show_json}" \
+    "new_reliability_rating" \
+    "new_security_rating" \
+    "new_maintainability_rating" \
+    "new_issues" \
+    "new_violations" \
+    "new_coverage" \
+    "new_duplicated_lines_density" \
+    "new_security_hotspots_reviewed" \
+    "new_blocker_violations" \
+    "new_critical_violations" \
+    "new_major_violations" \
+    "new_minor_violations"
+
+  gate_show_json="$(sonar_api -G \
+    "${SONAR_URL}/api/qualitygates/show" \
+    --data-urlencode "name=${gate_name}" || true)"
+  if [[ -z "${gate_show_json}" ]]; then
+    log "Error: unable to refresh gate '${gate_name}' details after condition cleanup."
+    return 1
+  fi
+
   ensure_quality_gate_condition "${gate_name}" "new_coverage" "LT" "80" "${gate_show_json}"
   ensure_quality_gate_condition "${gate_name}" "new_duplicated_lines_density" "GT" "3" "${gate_show_json}"
   ensure_quality_gate_condition "${gate_name}" "new_blocker_violations" "GT" "0" "${gate_show_json}"
   ensure_quality_gate_condition "${gate_name}" "new_critical_violations" "GT" "0" "${gate_show_json}"
-  ensure_quality_gate_condition_any_metric "${gate_name}" "GT" "0" "${gate_show_json}" "new_issues" "new_violations"
+  ensure_quality_gate_condition "${gate_name}" "new_major_violations" "GT" "0" "${gate_show_json}"
+  ensure_quality_gate_condition "${gate_name}" "new_minor_violations" "GT" "0" "${gate_show_json}"
 }
 
 configure_default_quality_gate() {
@@ -253,7 +381,7 @@ configure_default_quality_gate() {
     return 0
   fi
 
-  GATES_JSON="$(curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" "${SONAR_URL}/api/qualitygates/list" || true)"
+  GATES_JSON="$(sonar_api "${SONAR_URL}/api/qualitygates/list" || true)"
   if [[ -z "${GATES_JSON}" ]]; then
     log "Warning: unable to read quality gates; skipping default gate setup."
     return 0
@@ -266,7 +394,7 @@ print("1" if any(g.get("name")==target for g in data.get("qualitygates",[])) els
 
   if [[ -z "${GATE_EXISTS}" ]]; then
     if is_true "${CREATE_DEFAULT_QUALITY_GATE}"; then
-      if curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
+      if sonar_api -X POST \
         "${SONAR_URL}/api/qualitygates/create" \
         --data-urlencode "name=${DEFAULT_QUALITY_GATE}" >/dev/null; then
         log "Created quality gate '${DEFAULT_QUALITY_GATE}'."
@@ -302,7 +430,7 @@ data=json.loads(payload) if payload else {};\
 target=sys.argv[2] if len(sys.argv)>2 else "";\
 print(next((str(g.get("id","")) for g in data.get("qualitygates",[]) if g.get("name")==target),""))' "${GATES_JSON}" "${DEFAULT_QUALITY_GATE}" 2>/dev/null || true)"
 
-  if curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
+  if sonar_api -X POST \
     "${SONAR_URL}/api/qualitygates/set_as_default" \
     --data-urlencode "name=${DEFAULT_QUALITY_GATE}" >/dev/null; then
     if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
@@ -313,7 +441,7 @@ print(next((str(g.get("id","")) for g in data.get("qualitygates",[]) if g.get("n
     exit 5
   fi
 
-  if [[ -n "${GATE_ID}" ]] && curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
+  if [[ -n "${GATE_ID}" ]] && sonar_api -X POST \
     "${SONAR_URL}/api/qualitygates/set_as_default" \
     --data-urlencode "id=${GATE_ID}" >/dev/null; then
     if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
@@ -328,20 +456,21 @@ print(next((str(g.get("id","")) for g in data.get("qualitygates",[]) if g.get("n
   exit 5
 }
 
-cat > "${RUNTIME_ENV}" <<EOF
-REPO_PREFIX=${REPO_PREFIX}
-COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
-SONAR_PORT=${SONAR_PORT}
-SONAR_URL=${SONAR_URL}
-EOF
+write_runtime_env
 
-export REPO_PREFIX SONAR_PORT SONAR_ADMIN_PASSWORD
+export REPO_PREFIX SONAR_PORT SONAR_TOKEN
 
 if [[ "${REUSE_RUNNING}" == "true" ]]; then
+  if ! ensure_sonar_token; then
+    echo "Unable to ensure SonarQube token." >&2
+    exit 4
+  fi
+  write_runtime_env
   configure_default_quality_gate
   log "SonarQube is already running and quality gate policy is ensured."
   echo "SONAR_PORT=${SONAR_PORT}"
   echo "SONAR_URL=${SONAR_URL}"
+  echo "SONAR_TOKEN=${SONAR_TOKEN}"
   exit 0
 fi
 
@@ -354,10 +483,16 @@ fi
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
   if curl -sf "${SONAR_URL}/api/system/status" | grep -q '"status":"UP"'; then
+    if ! ensure_sonar_token; then
+      echo "Unable to ensure SonarQube token." >&2
+      exit 4
+    fi
+    write_runtime_env
     configure_default_quality_gate
     log "SonarQube is UP."
     echo "SONAR_PORT=${SONAR_PORT}"
     echo "SONAR_URL=${SONAR_URL}"
+    echo "SONAR_TOKEN=${SONAR_TOKEN}"
     exit 0
   fi
   sleep 2

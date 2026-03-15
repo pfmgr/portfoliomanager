@@ -19,7 +19,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class DekaCsvParser implements DepotParser {
-	private static final Pattern ISIN_RE = Pattern.compile("^[A-Z]{2}[A-Z0-9]{9}[0-9]$");
+	private static final Pattern ISIN_RE = Pattern.compile("^[A-Z]{2}[A-Z\\d]{9}\\d$");
 	private static final Pattern DATE_FROM_FILENAME = Pattern.compile("(\\d{8})");
 
 	@Override
@@ -27,36 +27,24 @@ public class DekaCsvParser implements DepotParser {
 		String content = decode(payload);
 		LocalDate asOf = inferAsOfDate(filename);
 
-		Map<String, Aggregation> agg = new HashMap<>();
+		Map<String, Aggregation> aggregatedByIsin = new HashMap<>();
 		try (CSVParser parser = CSVParser.parse(
 				new StringReader(content),
 				CSVFormat.DEFAULT.withDelimiter(';').withFirstRecordAsHeader()
 		)) {
-			for (CSVRecord record : parser) {
-				String isin = trimUpper(record.get("ISIN"));
-				if (isin.isBlank() || !ISIN_RE.matcher(isin).matches()) {
+			for (CSVRecord csvRecord : parser) {
+				ParsedRow parsedRow = parseRow(csvRecord);
+				if (parsedRow == null) {
 					continue;
 				}
-				String name = trim(record.get("Wertpapier"));
-				BigDecimal shares = parseDecimalDe(record.get("St_Nom"));
-				BigDecimal value = parseDecimalDe(record.get("Wert"));
-
-				Aggregation existing = agg.get(isin);
-				if (existing == null) {
-					agg.put(isin, new Aggregation(name, shares, value));
-				} else {
-					String finalName = existing.name.isBlank() ? name : existing.name;
-					BigDecimal totalShares = existing.shares.add(shares);
-					BigDecimal totalValue = existing.value.add(value);
-					agg.put(isin, new Aggregation(finalName, totalShares, totalValue));
-				}
+				aggregatedByIsin.merge(parsedRow.isin(), parsedRow.aggregation(), this::mergeAggregation);
 			}
 		} catch (IOException exc) {
 			throw new IllegalArgumentException("Failed to read Deka CSV: " + exc.getMessage(), exc);
 		}
 
 		List<Position> positions = new ArrayList<>();
-		for (Map.Entry<String, Aggregation> entry : agg.entrySet()) {
+		for (Map.Entry<String, Aggregation> entry : aggregatedByIsin.entrySet()) {
 			Aggregation aggregation = entry.getValue();
 			positions.add(new Position(
 					depotCode,
@@ -72,6 +60,30 @@ public class DekaCsvParser implements DepotParser {
 		}
 		positions.sort(Comparator.comparing(Position::isin));
 		return positions;
+	}
+
+	private ParsedRow parseRow(CSVRecord csvRecord) {
+		String isin = trimUpper(csvRecord.get("ISIN"));
+		if (isin.isBlank() || !ISIN_RE.matcher(isin).matches()) {
+			return null;
+		}
+		String name = trim(csvRecord.get("Wertpapier"));
+		BigDecimal shares = parseDecimalDe(csvRecord.get("St_Nom"));
+		BigDecimal value = parseDecimalDe(csvRecord.get("Wert"));
+		return new ParsedRow(isin, new Aggregation(name, shares, value));
+	}
+
+	private Aggregation mergeAggregation(Aggregation existing, Aggregation incoming) {
+		if (existing == null) {
+			return incoming;
+		}
+		if (incoming == null) {
+			return existing;
+		}
+		String finalName = existing.name.isBlank() ? incoming.name : existing.name;
+		BigDecimal totalShares = existing.shares.add(incoming.shares);
+		BigDecimal totalValue = existing.value.add(incoming.value);
+		return new Aggregation(finalName, totalShares, totalValue);
 	}
 
 	private String decode(byte[] payload) {
@@ -137,5 +149,8 @@ public class DekaCsvParser implements DepotParser {
 			shares = shares == null ? BigDecimal.ZERO : shares;
 			value = value == null ? BigDecimal.ZERO : value;
 		}
+	}
+
+	private record ParsedRow(String isin, Aggregation aggregation) {
 	}
 }

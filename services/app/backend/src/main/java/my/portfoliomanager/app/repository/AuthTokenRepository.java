@@ -16,14 +16,11 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, Long> {
 	int revokeByJtiHash(@Param("jtiHash") String jtiHash, @Param("revokedAt") Instant revokedAt);
 
 	@Modifying
-	@Query(value = """
-		delete from auth_tokens
-		where id in (
-			select id from auth_tokens
-			where expires_at <= :cutoff
-			order by expires_at
-			limit :limit
-		)
-		""", nativeQuery = true)
+	@Query(value = "delete from auth_tokens where id in ("
+			+ "select id from auth_tokens "
+			+ "where expires_at <= :cutoff "
+			+ "order by expires_at "
+			+ "limit :limit"
+			+ ")", nativeQuery = true)
 	int deleteExpiredBatch(@Param("cutoff") Instant cutoff, @Param("limit") int limit);
 }

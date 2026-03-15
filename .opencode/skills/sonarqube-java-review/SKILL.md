@@ -10,7 +10,8 @@ Use this skill when reviewing Java code and you need static analysis findings to
 ## Preconditions
 
 - Docker and Docker Compose are available.
-- This flow uses local-only `admin/admin` authentication.
+- `sonar-start.sh` auto-generates and persists a Sonar token in `.opencode/docker/sonar/.runtime.env`.
+- Optional override: set `SONAR_TOKEN` (or `SONAR_ADMIN_TOKEN`) explicitly.
 
 ## Preferred command
 

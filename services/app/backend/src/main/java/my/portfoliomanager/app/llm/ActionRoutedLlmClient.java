@@ -19,12 +19,7 @@ public class ActionRoutedLlmClient implements LlmClient, KnowledgeBaseLlmProvide
 	public ActionRoutedLlmClient(LlmClient websearchClient,
 								  LlmClient extractionClient,
 								  LlmClient narrativeClient,
-								  boolean websearchConfigured,
-								  boolean extractionConfigured,
-								  boolean narrativeConfigured,
-								  boolean websearchExternal,
-								  boolean extractionExternal,
-								  boolean narrativeExternal) {
+								  RoutingConfig config) {
 		this.websearchClient = websearchClient == null ? new NoopLlmClient() : websearchClient;
 		this.extractionClient = extractionClient == null ? new NoopLlmClient() : extractionClient;
 		this.narrativeClient = narrativeClient == null ? new NoopLlmClient() : narrativeClient;
@@ -34,12 +29,13 @@ public class ActionRoutedLlmClient implements LlmClient, KnowledgeBaseLlmProvide
 		this.extractionProvider = this.extractionClient instanceof KnowledgeBaseLlmProvider provider
 				? provider
 				: new NoopLlmClient();
-		this.websearchConfigured = websearchConfigured;
-		this.extractionConfigured = extractionConfigured;
-		this.narrativeConfigured = narrativeConfigured;
-		this.websearchExternal = websearchExternal;
-		this.extractionExternal = extractionExternal;
-		this.narrativeExternal = narrativeExternal;
+		RoutingConfig routing = config == null ? new RoutingConfig(false, false, false, false, false, false) : config;
+		this.websearchConfigured = routing.websearchConfigured();
+		this.extractionConfigured = routing.extractionConfigured();
+		this.narrativeConfigured = routing.narrativeConfigured();
+		this.websearchExternal = routing.websearchExternal();
+		this.extractionExternal = routing.extractionExternal();
+		this.narrativeExternal = routing.narrativeExternal();
 	}
 
 	@Override
@@ -143,5 +139,15 @@ public class ActionRoutedLlmClient implements LlmClient, KnowledgeBaseLlmProvide
 			case EXTRACTION -> extractionExternal;
 			case NARRATIVE -> narrativeExternal;
 		};
+	}
+
+	public record RoutingConfig(
+			boolean websearchConfigured,
+			boolean extractionConfigured,
+			boolean narrativeConfigured,
+			boolean websearchExternal,
+			boolean extractionExternal,
+			boolean narrativeExternal
+	) {
 	}
 }

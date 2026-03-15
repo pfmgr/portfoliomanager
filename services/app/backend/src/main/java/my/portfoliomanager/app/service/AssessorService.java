@@ -46,6 +46,14 @@ public class AssessorService {
 	private static final int DEFAULT_MIN_INSTRUMENT = 25;
 	private static final double MIN_SCORE_WEIGHT_FACTOR = 0.2;
 	private static final String ASSESSMENT_TYPE_INSTRUMENT_ONE_TIME = "instrument_one_time";
+	private static final String PROFILE_BALANCED = "BALANCED";
+	private static final String PROMPT_RULES_HEADER = "Rules:\n";
+	private static final String PROMPT_CONTEXT_HEADER = "Context:\n";
+	private static final String PROMPT_LAYER_NAMES = "layer_names=";
+	private static final String LABEL_LAYER_PREFIX = "Layer ";
+	private static final String SQL_PARAM_ISINS = "isins";
+	private static final String COLUMN_LAYER = "layer";
+	private static final String PLAN_TYPE_INCREASE = "increase";
 
 	private final SavingPlanRepository savingPlanRepository;
 	private final LayerTargetConfigService layerTargetConfigService;
@@ -294,7 +302,7 @@ public class AssessorService {
 		}
 		String narrative = null;
 		if (llmEnabled && assessment.missingIsins().isEmpty() && !itemDtos.isEmpty()) {
-			narrative = buildInstrumentAssessmentNarrative(assessment, config, itemDtos, riskThresholds, riskThresholdsByLayer);
+			narrative = buildInstrumentAssessmentNarrative(assessment, config, itemDtos, riskThresholds);
 		}
 		AssessorInstrumentAssessmentDto instrumentAssessment = new AssessorInstrumentAssessmentDto(
 				(double) amount,
@@ -321,58 +329,11 @@ public class AssessorService {
 		);
 	}
 
-	private String buildInstrumentAssessmentNarrativePrompt(
-			AssessorInstrumentAssessmentService.AssessmentResult assessment,
-			LayerTargetConfigResponseDto config,
-			List<AssessorInstrumentAssessmentItemDto> items,
-			LayerTargetRiskThresholds riskThresholds,
-			Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
-		StringBuilder builder = new StringBuilder();
-		builder.append("Write a concise narrative (2-6 sentences) describing the instrument assessment and allocation.\n");
-		builder.append("Rules:\n");
-		builder.append("- Explain the criteria used for the assessment score and include a per-instrument score breakdown.\n");
-		builder.append("- Scores are penalties: lower is better.\n");
-		builder.append("- Use risk_category and the provided thresholds (low_risk_max, high_risk_min).\n");
-		builder.append("- Low and medium risk are acceptable_risk; medium risk must include a warning.\n");
-		builder.append("- High risk is not_acceptable_risk and should be called out clearly.\n");
-		builder.append("- Use recommendation_status exactly as given; do not infer or invert the risk bands.\n");
-		builder.append("- Explain how the amount was distributed across layers and instruments.\n");
-		builder.append("- If allocation_criteria includes Assessment score weighting, explain that lower scores receive higher weights.\n");
-		builder.append("- Use instrument name, ISIN, score, allocation amounts, and score component points.\n");
-		builder.append("- You may use short bullets for the score breakdown.\n");
-		builder.append("- Do not invent instruments or criteria.\n");
-		builder.append("Context:\n");
-		builder.append("amount_eur=").append(assessment.amountEur()).append("\n");
-		builder.append("score_cutoff=").append(assessment.scoreCutoff()).append("\n");
-		builder.append("low_risk_max=").append(riskThresholds == null ? null : riskThresholds.getLowMax()).append("\n");
-		builder.append("high_risk_min=").append(riskThresholds == null ? null : riskThresholds.getHighMin()).append("\n");
-		builder.append("risk_thresholds_by_layer=")
-				.append(toRiskThresholdsByLayerDto(riskThresholdsByLayer)).append("\n");
-		builder.append("score_criteria=").append(assessment.scoreCriteria()).append("\n");
-		builder.append("allocation_criteria=").append(assessment.allocationCriteria()).append("\n");
-		builder.append("layer_names=").append(config == null ? Map.of() : config.getLayerNames()).append("\n");
-		builder.append("layer_budgets_eur=").append(toAmountMap(assessment.layerBudgets())).append("\n");
-		builder.append("items=\n");
-		for (AssessorInstrumentAssessmentItemDto item : items) {
-			builder.append("- isin=").append(item.isin())
-					.append(", name=").append(item.instrumentName())
-					.append(", layer=").append(item.layer())
-					.append(", score=").append(item.score())
-					.append(", risk_category=").append(item.riskCategory())
-					.append(", recommendation_status=").append(formatRecommendationStatus(item.riskCategory()))
-					.append(", allocation_eur=").append(item.allocation())
-					.append(", score_components=").append(formatScoreComponents(item.scoreComponents()))
-					.append("\n");
-		}
-		return builder.toString();
-	}
-
 	private String buildInstrumentAssessmentNarrative(
 			AssessorInstrumentAssessmentService.AssessmentResult assessment,
 			LayerTargetConfigResponseDto config,
 			List<AssessorInstrumentAssessmentItemDto> items,
-			LayerTargetRiskThresholds riskThresholds,
-			Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+			LayerTargetRiskThresholds riskThresholds) {
 		if (assessment == null || items == null || items.isEmpty()) {
 			return null;
 		}
@@ -457,22 +418,12 @@ public class AssessorService {
 		if (layer == null) {
 			return "Layer ?";
 		}
-		String defaultName = "Layer " + layer;
+		String defaultName = LABEL_LAYER_PREFIX + layer;
 		String label = layerNames == null ? defaultName : layerNames.getOrDefault(layer, defaultName);
 		if (label.equals(defaultName)) {
 			return defaultName;
 		}
 		return defaultName + " (" + label + ")";
-	}
-
-	private String formatLayerBudgets(Map<Integer, BigDecimal> layerBudgets, Map<Integer, String> layerNames) {
-		Map<Integer, Double> amounts = toAmountMap(layerBudgets);
-		List<String> parts = new ArrayList<>();
-		for (Map.Entry<Integer, Double> entry : amounts.entrySet()) {
-			String label = formatLayerLabel(entry.getKey(), layerNames);
-			parts.add(label + " " + formatAmountValue(entry.getValue()) + " EUR");
-		}
-		return String.join(", ", parts);
 	}
 
 	private String formatLayerBudgetSummary(Map<Integer, BigDecimal> layerBudgets, Map<Integer, String> layerNames) {
@@ -538,11 +489,6 @@ public class AssessorService {
 		return amount.toPlainString();
 	}
 
-	private String formatRecommendationStatus(String riskCategory) {
-		String normalized = normalizeRiskCategory(riskCategory);
-		return "high".equals(normalized) ? "not_acceptable_risk" : "acceptable_risk";
-	}
-
 	private String normalizeRiskCategory(String value) {
 		if (value == null || value.isBlank()) {
 			return "";
@@ -574,7 +520,7 @@ public class AssessorService {
 				dto = profile.getRiskThresholds();
 			}
 			if (dto == null) {
-				LayerTargetConfigResponseDto.LayerTargetProfileDto balanced = config.getProfiles().get("BALANCED");
+				LayerTargetConfigResponseDto.LayerTargetProfileDto balanced = config.getProfiles().get(PROFILE_BALANCED);
 				if (balanced != null) {
 					dto = balanced.getRiskThresholds();
 				}
@@ -591,31 +537,41 @@ public class AssessorService {
 			LayerTargetConfigResponseDto config,
 			LayerTargetRiskThresholds fallback
 	) {
-		Map<Integer, LayerTargetRiskThresholdsDto> raw = null;
-		if (config != null && config.getProfiles() != null) {
-			LayerTargetConfigResponseDto.LayerTargetProfileDto profile = config.getProfiles().get(profileKey);
-			if (profile != null) {
-				raw = profile.getRiskThresholdsByLayer();
-			}
-			if ((raw == null || raw.isEmpty())) {
-				LayerTargetConfigResponseDto.LayerTargetProfileDto balanced = config.getProfiles().get("BALANCED");
-				if (balanced != null) {
-					raw = balanced.getRiskThresholdsByLayer();
-				}
-			}
-		}
-		Map<Integer, LayerTargetRiskThresholds> mapped = new LinkedHashMap<>();
-		if (raw != null) {
-			for (Map.Entry<Integer, LayerTargetRiskThresholdsDto> entry : raw.entrySet()) {
-				Integer layer = entry.getKey();
-				LayerTargetRiskThresholdsDto dto = entry.getValue();
-				if (layer == null || dto == null) {
-					continue;
-				}
-				mapped.put(layer, new LayerTargetRiskThresholds(dto.lowMax(), dto.highMin()));
-			}
-		}
+		Map<Integer, LayerTargetRiskThresholdsDto> raw = resolveRiskThresholdsByLayerDto(profileKey, config);
+		Map<Integer, LayerTargetRiskThresholds> mapped = mapRiskThresholdsByLayer(raw);
 		return RiskThresholdsUtil.normalizeByLayer(mapped, fallback);
+	}
+
+	private Map<Integer, LayerTargetRiskThresholdsDto> resolveRiskThresholdsByLayerDto(
+			String profileKey,
+			LayerTargetConfigResponseDto config) {
+		if (config == null || config.getProfiles() == null) {
+			return null;
+		}
+		LayerTargetConfigResponseDto.LayerTargetProfileDto profile = config.getProfiles().get(profileKey);
+		Map<Integer, LayerTargetRiskThresholdsDto> raw = profile == null ? null : profile.getRiskThresholdsByLayer();
+		if (raw != null && !raw.isEmpty()) {
+			return raw;
+		}
+		LayerTargetConfigResponseDto.LayerTargetProfileDto balanced = config.getProfiles().get(PROFILE_BALANCED);
+		return balanced == null ? null : balanced.getRiskThresholdsByLayer();
+	}
+
+	private Map<Integer, LayerTargetRiskThresholds> mapRiskThresholdsByLayer(
+			Map<Integer, LayerTargetRiskThresholdsDto> raw) {
+		Map<Integer, LayerTargetRiskThresholds> mapped = new LinkedHashMap<>();
+		if (raw == null || raw.isEmpty()) {
+			return mapped;
+		}
+		for (Map.Entry<Integer, LayerTargetRiskThresholdsDto> entry : raw.entrySet()) {
+			Integer layer = entry.getKey();
+			LayerTargetRiskThresholdsDto dto = entry.getValue();
+			if (layer == null || dto == null) {
+				continue;
+			}
+			mapped.put(layer, new LayerTargetRiskThresholds(dto.lowMax(), dto.highMin()));
+		}
+		return mapped;
 	}
 
 	private Map<Integer, LayerTargetRiskThresholdsDto> toRiskThresholdsByLayerDto(
@@ -646,28 +602,6 @@ public class AssessorService {
 			mapped.add(new AssessorInstrumentAssessmentScoreComponentDto(component.criterion(), component.points()));
 		}
 		return mapped;
-	}
-
-	private String formatScoreComponents(List<AssessorInstrumentAssessmentScoreComponentDto> components) {
-		if (components == null || components.isEmpty()) {
-			return "[]";
-		}
-		StringBuilder builder = new StringBuilder("[");
-		boolean first = true;
-		for (AssessorInstrumentAssessmentScoreComponentDto component : components) {
-			if (component == null || component.criterion() == null || component.criterion().isBlank()) {
-				continue;
-			}
-			if (!first) {
-				builder.append(", ");
-			}
-			builder.append(component.criterion())
-					.append(":")
-					.append(formatScorePoints(component.points()));
-			first = false;
-		}
-		builder.append("]");
-		return builder.toString();
 	}
 
 	private String formatScorePoints(Double points) {
@@ -757,7 +691,7 @@ public class AssessorService {
 		final boolean[] hasRows = {false};
 		namedParameterJdbcTemplate.query(sql, params, rs -> {
 			LocalDate date = rs.getDate("as_of_date") == null ? null : rs.getDate("as_of_date").toLocalDate();
-			Integer layer = rs.getObject("layer") == null ? null : rs.getInt("layer");
+			Integer layer = rs.getObject(COLUMN_LAYER) == null ? null : rs.getInt(COLUMN_LAYER);
 			BigDecimal value = rs.getObject("value_eur") == null ? BigDecimal.ZERO : rs.getBigDecimal("value_eur");
 			if (layer == null) {
 				return;
@@ -820,7 +754,7 @@ public class AssessorService {
 				from knowledge_base_extractions
 				where isin in (:isins)
 				""";
-		MapSqlParameterSource params = new MapSqlParameterSource("isins", isins);
+		MapSqlParameterSource params = new MapSqlParameterSource(SQL_PARAM_ISINS, isins);
 		Set<String> complete = new HashSet<>();
 		namedParameterJdbcTemplate.query(sql, params, rs -> {
 			String isin = rs.getString("isin");
@@ -844,7 +778,7 @@ public class AssessorService {
 				from instruments_effective
 				where isin in (:isins)
 				""";
-		MapSqlParameterSource params = new MapSqlParameterSource("isins", isins);
+		MapSqlParameterSource params = new MapSqlParameterSource(SQL_PARAM_ISINS, isins);
 		Map<String, InstrumentMeta> metadata = new LinkedHashMap<>();
 		namedParameterJdbcTemplate.query(sql, params, rs -> {
 			String isin = normalizeIsin(rs.getString("isin"));
@@ -852,7 +786,7 @@ public class AssessorService {
 				return;
 			}
 			String name = rs.getString("name");
-			Integer layer = rs.getObject("layer") == null ? null : rs.getInt("layer");
+			Integer layer = rs.getObject(COLUMN_LAYER) == null ? null : rs.getInt(COLUMN_LAYER);
 			metadata.put(isin, new InstrumentMeta(name, normalizeLayer(layer)));
 		});
 		return metadata;
@@ -868,7 +802,7 @@ public class AssessorService {
 				from instruments_effective
 				where isin in (:isins)
 				""";
-		MapSqlParameterSource params = new MapSqlParameterSource("isins", normalized);
+		MapSqlParameterSource params = new MapSqlParameterSource(SQL_PARAM_ISINS, normalized);
 		Set<String> effective = new HashSet<>();
 		namedParameterJdbcTemplate.query(sql, params, rs -> {
 			String isin = normalizeIsin(rs.getString("isin"));
@@ -897,7 +831,7 @@ public class AssessorService {
 		Map<String, Integer> layers = new LinkedHashMap<>();
 		namedParameterJdbcTemplate.query(sql, params, rs -> {
 			String isin = normalizeIsin(rs.getString("isin"));
-			Integer layer = rs.getObject("layer") == null ? null : rs.getInt("layer");
+			Integer layer = rs.getObject(COLUMN_LAYER) == null ? null : rs.getInt(COLUMN_LAYER);
 			if (!isin.isBlank()) {
 				layers.put(isin, normalizeLayer(layer));
 			}
@@ -927,25 +861,39 @@ public class AssessorService {
 	}
 
 	private List<AssessorInstrumentBucketDto> buildInstrumentBucketDtos(Map<String, BigDecimal> buckets,
-																		Map<String, InstrumentMeta> instrumentMeta) {
+																Map<String, InstrumentMeta> instrumentMeta) {
 		if (buckets == null || buckets.isEmpty()) {
 			return null;
 		}
 		List<AssessorInstrumentBucketDto> detailed = new ArrayList<>();
 		for (Map.Entry<String, BigDecimal> entry : buckets.entrySet()) {
-			if (entry.getValue() == null || entry.getValue().signum() <= 0) {
-				continue;
+			AssessorInstrumentBucketDto dto = toInstrumentBucketDto(entry, instrumentMeta);
+			if (dto != null) {
+				detailed.add(dto);
 			}
-			String isin = normalizeIsin(entry.getKey());
-			InstrumentMeta meta = instrumentMeta == null ? null : instrumentMeta.get(isin);
-			detailed.add(new AssessorInstrumentBucketDto(
-					isin,
-					toAmount(entry.getValue()),
-					meta == null ? null : meta.name(),
-					meta == null ? null : meta.layer()
-			));
 		}
-		detailed.sort((a, b) -> {
+		sortInstrumentBuckets(detailed);
+		return List.copyOf(detailed);
+	}
+
+	private AssessorInstrumentBucketDto toInstrumentBucketDto(Map.Entry<String, BigDecimal> entry,
+															 Map<String, InstrumentMeta> instrumentMeta) {
+		BigDecimal amount = entry.getValue();
+		if (amount == null || amount.signum() <= 0) {
+			return null;
+		}
+		String isin = normalizeIsin(entry.getKey());
+		InstrumentMeta meta = instrumentMeta == null ? null : instrumentMeta.get(isin);
+		return new AssessorInstrumentBucketDto(
+				isin,
+				toAmount(amount),
+				meta == null ? null : meta.name(),
+				meta == null ? null : meta.layer()
+		);
+	}
+
+	private void sortInstrumentBuckets(List<AssessorInstrumentBucketDto> buckets) {
+		buckets.sort((a, b) -> {
 			int layerA = a.layer() == null ? 99 : a.layer();
 			int layerB = b.layer() == null ? 99 : b.layer();
 			int cmp = Integer.compare(layerA, layerB);
@@ -954,7 +902,6 @@ public class AssessorService {
 			}
 			return a.isin().compareTo(b.isin());
 		});
-		return List.copyOf(detailed);
 	}
 
 	private NarrativeBundle buildNarratives(AssessorEngine.AssessorEngineResult result,
@@ -1021,7 +968,7 @@ public class AssessorService {
 									 AssessorGapDetectionPolicy gapDetectionPolicy) {
 		StringBuilder builder = new StringBuilder();
 		builder.append("Write a concise narrative (2-5 sentences) describing the savings plan proposal.\n");
-		builder.append("Rules:\n");
+		builder.append(PROMPT_RULES_HEADER);
 		builder.append("- Use the provided layer names.\n");
 		builder.append("- Mention whether the current distribution is within tolerance.\n");
 		builder.append("- Explain that layer budgets blend projected gap weights (using effective holdings) with the current savings plan distribution; longer horizons weight the current distribution more.\n");
@@ -1032,7 +979,7 @@ public class AssessorService {
 		builder.append("- If allocation_notes is not none, mention the redistribution or gate impact using those notes.\n");
 		builder.append("- If new_instruments is none, add one sentence using no_new_instruments_reason verbatim.\n");
 		builder.append("- Do not invent instruments or reasons.\n");
-		builder.append("Context:\n");
+		builder.append(PROMPT_CONTEXT_HEADER);
 		builder.append("profile_key=").append(result.selectedProfile()).append("\n");
 		builder.append("profile_display_name=").append(resolveProfileDisplayName(result.selectedProfile(), config)).append("\n");
 		builder.append("gap_detection_policy=").append(gapDetectionPolicy == null
@@ -1060,7 +1007,7 @@ public class AssessorService {
 				.append("the tie is resolved alphabetically by ISIN.\n");
 		builder.append("within_tolerance=").append(result.diagnostics() != null && result.diagnostics().withinTolerance()).append("\n");
 		builder.append("monthly_total_eur=").append(toAmount(result.currentMonthlyTotal())).append("\n");
-		builder.append("layer_names=").append(config == null ? Map.of() : config.getLayerNames()).append("\n");
+		builder.append(PROMPT_LAYER_NAMES).append(config == null ? Map.of() : config.getLayerNames()).append("\n");
 		builder.append("current_layer_amounts_eur=").append(toAmountMap(result.currentLayerDistribution())).append("\n");
 		Map<Integer, BigDecimal> targets = targetLayerAmounts == null ? result.targetLayerDistribution() : targetLayerAmounts;
 		builder.append("target_layer_amounts_eur=").append(toAmountMap(targets)).append("\n");
@@ -1103,7 +1050,7 @@ public class AssessorService {
 											   Map<String, BigDecimal> adjustedOneTimeBuckets) {
 		StringBuilder builder = new StringBuilder();
 		builder.append("Write a concise narrative (2-4 sentences) describing the one-time allocation proposal.\n");
-		builder.append("Rules:\n");
+		builder.append(PROMPT_RULES_HEADER);
 		builder.append("- Use the provided layer names.\n");
 		builder.append("- Mention the total one-time amount.\n");
 		builder.append("- Explain that layer amounts close gaps to the target weights using effective holdings.\n");
@@ -1112,10 +1059,10 @@ public class AssessorService {
 		builder.append("- If new_instruments is not none, add a sentence for each explaining the portfolio gap and why the specific instrument was selected, using the rationale.\n");
 		builder.append("- If new_instruments is none, add one sentence using no_new_instruments_reason verbatim.\n");
 		builder.append("- Do not mention saving plan changes.\n");
-		builder.append("Context:\n");
+		builder.append(PROMPT_CONTEXT_HEADER);
 		builder.append("amount_eur=").append(oneTimeAmount).append("\n");
 		builder.append("minimum_instrument_amount_eur=").append(minimumInstrumentAmount).append("\n");
-		builder.append("layer_names=").append(config == null ? Map.of() : config.getLayerNames()).append("\n");
+		builder.append(PROMPT_LAYER_NAMES).append(config == null ? Map.of() : config.getLayerNames()).append("\n");
 		builder.append("layer_buckets_eur=").append(toSparseAmountMap(result.oneTimeAllocation().layerBuckets())).append("\n");
 		Map<String, BigDecimal> instrumentBuckets = adjustedOneTimeBuckets == null
 				? result.oneTimeAllocation().instrumentBuckets()
@@ -1151,7 +1098,7 @@ public class AssessorService {
 			String isin = normalizeIsin(suggestion.isin());
 			String instrumentName = suggestion.instrumentName();
 			Integer layer = suggestion.layer();
-			String layerName = layer == null ? null : layerNames.getOrDefault(layer, "Layer " + layer);
+			String layerName = layer == null ? null : layerNames.getOrDefault(layer, LABEL_LAYER_PREFIX + layer);
 			lines.add(String.format("- type=%s, isin=%s, name=%s, layer=%s, layer_name=%s, old_eur=%s, new_eur=%s, delta_eur=%s, rationale=%s",
 					suggestion.type(),
 					isin,
@@ -1194,7 +1141,7 @@ public class AssessorService {
 			String isin = normalizeIsin(suggestion.isin());
 			String instrumentName = suggestion.instrumentName();
 			Integer layer = suggestion.layer();
-			String layerName = layer == null ? null : layerNames.getOrDefault(layer, "Layer " + layer);
+			String layerName = layer == null ? null : layerNames.getOrDefault(layer, LABEL_LAYER_PREFIX + layer);
 			lines.add(String.format("- isin=%s, name=%s, layer=%s, layer_name=%s, amount_eur=%s, rationale=%s",
 					isin,
 					instrumentName,
@@ -1222,7 +1169,7 @@ public class AssessorService {
 			InstrumentMeta meta = savingPlanSnapshot.instrumentMeta().get(isin);
 			String instrumentName = meta == null ? null : meta.name();
 			Integer layer = meta == null ? null : meta.layer();
-			String layerName = layer == null ? null : layerNames.getOrDefault(layer, "Layer " + layer);
+			String layerName = layer == null ? null : layerNames.getOrDefault(layer, LABEL_LAYER_PREFIX + layer);
 			lines.add(String.format("- isin=%s, name=%s, layer=%s, layer_name=%s, amount_eur=%s",
 					isin,
 					instrumentName,
@@ -1301,7 +1248,7 @@ public class AssessorService {
 					rationale = "Keep amount.";
 					newAmount = oldAmount;
 				} else if (type == null || type.isBlank() || type.equalsIgnoreCase("keep")) {
-					type = "increase";
+					type = PLAN_TYPE_INCREASE;
 					if (rationale == null || rationale.isBlank()) {
 						rationale = "Increase amount.";
 					}
@@ -1694,7 +1641,7 @@ public class AssessorService {
 				from knowledge_base_extractions
 				where isin in (:isins)
 				""";
-		MapSqlParameterSource params = new MapSqlParameterSource("isins", normalized);
+		MapSqlParameterSource params = new MapSqlParameterSource(SQL_PARAM_ISINS, normalized);
 		Set<String> complete = new HashSet<>();
 		namedParameterJdbcTemplate.query(sql, params, rs -> {
 			String isin = rs.getString("isin");
@@ -1830,29 +1777,14 @@ public class AssessorService {
 	}
 
 	private Map<Integer, BigDecimal> computeSavingPlanDeltaBudgets(Map<Integer, BigDecimal> targetAmounts,
-																   Map<Integer, BigDecimal> currentAmounts,
-																   List<AssessorEngine.SavingPlanSuggestion> suggestions,
-																   SavingPlanSnapshot savingPlanSnapshot) {
+															   Map<Integer, BigDecimal> currentAmounts,
+															   List<AssessorEngine.SavingPlanSuggestion> suggestions,
+															   SavingPlanSnapshot savingPlanSnapshot) {
 		if (targetAmounts == null || targetAmounts.isEmpty()) {
 			return Map.of();
 		}
-		Map<Integer, BigDecimal> planTotals = new LinkedHashMap<>();
-		for (int layer = 1; layer <= 5; layer++) {
-			BigDecimal current = currentAmounts == null ? BigDecimal.ZERO : currentAmounts.getOrDefault(layer, BigDecimal.ZERO);
-			planTotals.put(layer, current);
-		}
-		if (suggestions != null && !suggestions.isEmpty()) {
-			for (AssessorEngine.SavingPlanSuggestion suggestion : suggestions) {
-				if (suggestion == null || suggestion.delta() == null || suggestion.delta().signum() == 0) {
-					continue;
-				}
-				Integer layer = resolveSuggestionLayer(suggestion, savingPlanSnapshot);
-				if (layer == null) {
-					continue;
-				}
-				planTotals.put(layer, planTotals.getOrDefault(layer, BigDecimal.ZERO).add(suggestion.delta()));
-			}
-		}
+		Map<Integer, BigDecimal> planTotals = initializeLayerTotals(currentAmounts);
+		applySuggestionDeltas(planTotals, suggestions, savingPlanSnapshot);
 		Map<Integer, BigDecimal> budgets = new LinkedHashMap<>();
 		for (int layer = 1; layer <= 5; layer++) {
 			BigDecimal target = targetAmounts.getOrDefault(layer, BigDecimal.ZERO);
@@ -1863,6 +1795,33 @@ public class AssessorService {
 			}
 		}
 		return budgets;
+	}
+
+	private Map<Integer, BigDecimal> initializeLayerTotals(Map<Integer, BigDecimal> currentAmounts) {
+		Map<Integer, BigDecimal> totals = new LinkedHashMap<>();
+		for (int layer = 1; layer <= 5; layer++) {
+			BigDecimal current = currentAmounts == null ? BigDecimal.ZERO : currentAmounts.getOrDefault(layer, BigDecimal.ZERO);
+			totals.put(layer, current);
+		}
+		return totals;
+	}
+
+	private void applySuggestionDeltas(Map<Integer, BigDecimal> planTotals,
+											   List<AssessorEngine.SavingPlanSuggestion> suggestions,
+											   SavingPlanSnapshot savingPlanSnapshot) {
+		if (suggestions == null || suggestions.isEmpty()) {
+			return;
+		}
+		for (AssessorEngine.SavingPlanSuggestion suggestion : suggestions) {
+			if (suggestion == null || suggestion.delta() == null || suggestion.delta().signum() == 0) {
+				continue;
+			}
+			Integer layer = resolveSuggestionLayer(suggestion, savingPlanSnapshot);
+			if (layer == null) {
+				continue;
+			}
+			planTotals.put(layer, planTotals.getOrDefault(layer, BigDecimal.ZERO).add(suggestion.delta()));
+		}
 	}
 
 	private SavingPlanAllocation buildSavingPlanAllocation(AssessorEngine.AssessorEngineResult result,
@@ -2049,7 +2008,6 @@ public class AssessorService {
 		if (gateValue <= 0) {
 			return new LayerDeltaGateAdjustment(normalizedTargets, deltas, false, List.of());
 		}
-		BigDecimal gate = BigDecimal.valueOf(gateValue);
 		Map<Integer, BigDecimal> adjustedDeltas = new LinkedHashMap<>(deltas);
 		List<String> notes = new ArrayList<>();
 		boolean changed = false;
@@ -2058,21 +2016,21 @@ public class AssessorService {
 			if (delta.signum() == 0) {
 				continue;
 			}
-			if (delta.abs().compareTo(gate) >= 0) {
+			if (delta.abs().compareTo(BigDecimal.valueOf(gateValue)) >= 0) {
 				continue;
 			}
-			BigDecimal newDelta = delta.signum() < 0 ? gate.negate() : BigDecimal.ZERO;
+			BigDecimal newDelta = delta.signum() < 0 ? BigDecimal.valueOf(-gateValue) : BigDecimal.ZERO;
 			BigDecimal diff = delta.subtract(newDelta);
 			adjustedDeltas.put(layer, newDelta);
 			if (layer > 1 && diff.signum() != 0) {
 				adjustedDeltas.put(layer - 1, adjustedDeltas.getOrDefault(layer - 1, BigDecimal.ZERO).add(diff));
 				notes.add(String.format(
 						"Layer %d delta %s EUR was below the minimum gate %s EUR; shifted %s EUR to Layer %d.",
-						layer, toAmount(delta), toAmount(gate), toAmount(diff), layer - 1));
+						layer, toAmount(delta), gateValue, toAmount(diff), layer - 1));
 			} else {
 				notes.add(String.format(
 						"Layer %d delta %s EUR was below the minimum gate %s EUR; suppressed.",
-						layer, toAmount(delta), toAmount(gate)));
+						layer, toAmount(delta), gateValue));
 			}
 			changed = true;
 		}
@@ -2217,20 +2175,32 @@ public class AssessorService {
 			if (isin.isBlank()) {
 				continue;
 			}
-			Map<String, BigDecimal> layerWeights = weightsByLayer == null ? null : weightsByLayer.get(plan.layer());
-			BigDecimal weight = layerWeights == null ? null : layerWeights.get(isin);
-			if (weight == null || weight.signum() <= 0) {
-				weight = BigDecimal.ONE;
-			}
-			Integer score = assessmentScores == null ? null : assessmentScores.get(isin);
-			LayerTargetRiskThresholds layerThresholds =
-					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, thresholds, plan.layer());
-			double scoreCutoff = layerThresholds.getHighMin();
-			double factor = score == null ? 1.0 : scoreWeightFactor(score, scoreCutoff);
-			weight = weight.multiply(BigDecimal.valueOf(factor));
+			BigDecimal weight = resolvePlanWeight(isin, plan.layer(), weightsByLayer, assessmentScores,
+					thresholds, thresholdsByLayer);
 			weights.put(new AssessorEngine.PlanKey(isin, plan.depotId()), weight);
 		}
 		return weights;
+	}
+
+	private BigDecimal resolvePlanWeight(String isin,
+									int layer,
+									Map<Integer, Map<String, BigDecimal>> weightsByLayer,
+									Map<String, Integer> assessmentScores,
+									LayerTargetRiskThresholds thresholds,
+									Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
+		Map<String, BigDecimal> layerWeights = weightsByLayer == null ? null : weightsByLayer.get(layer);
+		BigDecimal baseWeight = layerWeights == null ? null : layerWeights.get(isin);
+		if (baseWeight == null || baseWeight.signum() <= 0) {
+			baseWeight = BigDecimal.ONE;
+		}
+		Integer score = assessmentScores == null ? null : assessmentScores.get(isin);
+		if (score == null) {
+			return baseWeight;
+		}
+		LayerTargetRiskThresholds layerThresholds =
+				RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, thresholds, layer);
+		double factor = scoreWeightFactor(score, layerThresholds.getHighMin());
+		return baseWeight.multiply(BigDecimal.valueOf(factor));
 	}
 
 	private double scoreWeightFactor(int score, double scoreCutoff) {
@@ -2331,13 +2301,6 @@ public class AssessorService {
 		return List.copyOf(suggestions);
 	}
 
-	private BigDecimal normalizeMinimum(BigDecimal value) {
-		if (value == null || value.signum() <= 0) {
-			return BigDecimal.ZERO;
-		}
-		return value;
-	}
-
 	private int normalizeProjectionHorizonMonths(Integer projectionHorizonMonths) {
 		if (projectionHorizonMonths == null) {
 			return 12;
@@ -2359,18 +2322,18 @@ public class AssessorService {
 			return "create";
 		}
 		if (newAmount.compareTo(oldAmount) > 0) {
-			return "increase";
+			return PLAN_TYPE_INCREASE;
 		}
 		if (newAmount.compareTo(oldAmount) < 0) {
 			return "decrease";
 		}
-		return "increase";
+		return PLAN_TYPE_INCREASE;
 	}
 
 	private String buildPlanRationale(String type) {
 		return switch (type) {
 			case "discard" -> "Discard to avoid sub-minimum saving plan size.";
-			case "increase" -> "Increase to align with target layer allocation.";
+			case PLAN_TYPE_INCREASE -> "Increase to align with target layer allocation.";
 			case "decrease" -> "Decrease to align with target layer allocation.";
 			case "create" -> "Create to align with target layer allocation.";
 			default -> "Adjust to align with target layer allocation.";
@@ -2403,7 +2366,7 @@ public class AssessorService {
 				continue;
 			}
 			String isin = normalizeIsin(suggestion.isin());
-			String action = effective.contains(isin) ? "increase" : "new";
+			String action = effective.contains(isin) ? PLAN_TYPE_INCREASE : "new";
 			dtos.add(new AssessorNewInstrumentSuggestionDto(
 					isin,
 					suggestion.name(),
@@ -2555,7 +2518,7 @@ public class AssessorService {
 	}
 
 	private String resolveProfileKey(String requested, LayerTargetConfigResponseDto config) {
-		String fallback = config == null ? "BALANCED" : config.getActiveProfileKey();
+		String fallback = config == null ? PROFILE_BALANCED : config.getActiveProfileKey();
 		if (requested == null || requested.isBlank()) {
 			return fallback;
 		}

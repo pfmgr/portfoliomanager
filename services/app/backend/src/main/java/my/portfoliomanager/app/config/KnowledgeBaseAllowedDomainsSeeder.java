@@ -68,22 +68,30 @@ public class KnowledgeBaseAllowedDomainsSeeder implements ApplicationRunner {
 			return false;
 		}
 		if (allowedDomains.isArray()) {
-			for (JsonNode item : allowedDomains) {
-				if (item == null || item.isNull()) {
-					continue;
-				}
-				String value = item.asText();
-				if (value != null && !value.trim().isBlank()) {
-					return true;
-				}
-			}
-			return false;
+			return hasNonBlankArrayValue(allowedDomains);
 		}
 		if (allowedDomains.isObject()) {
 			return allowedDomains.size() > 0;
 		}
 		String value = allowedDomains.asText();
-		return value != null && !value.isBlank();
+		return value != null && !value.trim().isBlank();
+	}
+
+	private boolean hasNonBlankArrayValue(JsonNode values) {
+		for (JsonNode item : values) {
+			if (!isBlankNodeValue(item)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean isBlankNodeValue(JsonNode item) {
+		if (item == null || item.isNull()) {
+			return true;
+		}
+		String value = item.asText();
+		return value == null || value.trim().isBlank();
 	}
 
 	private ObjectNode toConfigObject(JsonNode existing) {
@@ -115,15 +123,19 @@ public class KnowledgeBaseAllowedDomainsSeeder implements ApplicationRunner {
 		}
 		List<String> cleaned = new ArrayList<>();
 		for (String domain : domains) {
-			if (domain == null) {
-				continue;
+			String normalized = normalizeDomain(domain);
+			if (normalized != null) {
+				cleaned.add(normalized);
 			}
-			String trimmed = domain.trim().toLowerCase(Locale.ROOT);
-			if (trimmed.isBlank()) {
-				continue;
-			}
-			cleaned.add(trimmed);
 		}
 		return cleaned;
+	}
+
+	private String normalizeDomain(String domain) {
+		if (domain == null) {
+			return null;
+		}
+		String trimmed = domain.trim().toLowerCase(Locale.ROOT);
+		return trimmed.isBlank() ? null : trimmed;
 	}
 }
