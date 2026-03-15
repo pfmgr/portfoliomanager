@@ -50,7 +50,11 @@ const stubApi = async (page) => {
             currentWeightPct: 62.5,
             targetWeightPct: 60,
             targetAmountEur: 48,
-            deltaEur: -2
+            deltaEur: -2,
+            currentTargetTotalWeightPct: 62.3,
+            currentTargetTotalAmountEur: 62300,
+            targetTotalWeightPct: 60,
+            targetTotalAmountEur: 60000
           }
         ],
         actualDistributionByLayer: { 1: 62.5, 2: 37.5, 3: 0, 4: 0, 5: 0 },
@@ -390,6 +394,13 @@ test('rebalancer displays savings plan rebalancing', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Savings plan Rebalancing' })).toBeVisible()
   await expect(page.getByText('Monthly by Layer')).toBeVisible()
   await expect(page.getByText('Rebalancing Proposal (Savings plan amounts, EUR)')).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Current Target %' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Target Total (Rebalanced) %' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Current Target Total Amount €' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Target Total Amount (Rebalanced) €' })).toBeVisible()
+  await expect(page.getByText('62.30')).toBeVisible()
+  await expect(page.getByText('62300.00')).toBeVisible()
+  await expect(page.getByText('60000.00')).toBeVisible()
   await expect(page.getByText('Proposal source')).toBeVisible()
   await expect(page.getByText('Valuation glossary', { exact: true })).toBeVisible()
 })

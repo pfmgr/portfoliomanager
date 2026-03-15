@@ -101,6 +101,14 @@ class AdvisorServiceInstrumentTotalsTest {
 		assertThat(findTargetAmount(summary.savingPlanProposal().getLayers(), 2)).isEqualTo(22.0d);
 		assertThat(findTargetAmount(summary.savingPlanProposal().getLayers(), 3)).isEqualTo(7.0d);
 		assertThat(findTargetAmount(summary.savingPlanProposal().getLayers(), 4)).isEqualTo(3.0d);
+
+		SavingPlanProposalLayerDto layerOne = findLayer(summary.savingPlanProposal().getLayers(), 1);
+		SavingPlanProposalLayerDto layerTwo = findLayer(summary.savingPlanProposal().getLayers(), 2);
+		assertThat(layerOne.getCurrentTargetTotalAmountEur()).isNotEqualTo(layerOne.getTargetTotalAmountEur());
+		assertThat(layerTwo.getCurrentTargetTotalAmountEur()).isNotEqualTo(layerTwo.getTargetTotalAmountEur());
+		double horizonOne = (layerOne.getTargetTotalAmountEur() - layerOne.getCurrentTargetTotalAmountEur()) / layerOne.getDeltaEur();
+		double horizonTwo = (layerTwo.getTargetTotalAmountEur() - layerTwo.getCurrentTargetTotalAmountEur()) / layerTwo.getDeltaEur();
+		assertThat(horizonOne).isCloseTo(horizonTwo, org.assertj.core.data.Offset.offset(0.001d));
 	}
 
 	private double findTargetAmount(List<SavingPlanProposalLayerDto> layers, int layer) {
@@ -109,6 +117,13 @@ class AdvisorServiceInstrumentTotalsTest {
 				.findFirst()
 				.map(row -> row.getTargetAmountEur() == null ? 0.0d : row.getTargetAmountEur())
 				.orElse(0.0d);
+	}
+
+	private SavingPlanProposalLayerDto findLayer(List<SavingPlanProposalLayerDto> layers, int layer) {
+		return layers.stream()
+				.filter(row -> row.getLayer() != null && row.getLayer() == layer)
+				.findFirst()
+				.orElseThrow();
 	}
 
 	@Configuration

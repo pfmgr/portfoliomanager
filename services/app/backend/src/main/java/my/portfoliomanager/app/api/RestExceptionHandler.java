@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
@@ -67,6 +68,19 @@ public class RestExceptionHandler {
 				.map(this::formatFieldError)
 				.toList();
 		detail.setProperty("errors", errors);
+		detail.setProperty("path", request.getRequestURI());
+		return detail;
+	}
+
+	@ExceptionHandler(ResponseStatusException.class)
+	public ProblemDetail handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
+		int statusCode = ex.getStatusCode().value();
+		HttpStatus status = HttpStatus.resolve(statusCode);
+		ProblemDetail detail = status == null
+				? ProblemDetail.forStatus(statusCode)
+				: ProblemDetail.forStatus(status);
+		detail.setTitle(status == null ? "Request failed" : status.getReasonPhrase());
+		detail.setDetail(ex.getReason() == null || ex.getReason().isBlank() ? "Request failed." : ex.getReason());
 		detail.setProperty("path", request.getRequestURI());
 		return detail;
 	}

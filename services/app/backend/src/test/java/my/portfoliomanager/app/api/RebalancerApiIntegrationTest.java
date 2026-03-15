@@ -135,13 +135,28 @@ class RebalancerApiIntegrationTest {
 				.andReturn();
 		String jobId = JsonHelper.read(result, "$.job_id").toString();
 		awaitJob(jobId);
-		mockMvc.perform(get("/api/rebalancer/run/" + jobId)
+		MvcResult detailResult = mockMvc.perform(get("/api/rebalancer/run/" + jobId)
 						.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.result.summary.savingPlanProposal.layerBudgets").exists())
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.layers[0].currentTargetTotalWeightPct").exists())
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.layers[0].currentTargetTotalAmountEur").exists())
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.layers[0].targetTotalWeightPct").exists())
 				.andExpect(jsonPath("$.result.summary.savingPlanProposal.gating.kbComplete").value(true))
 				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals").isArray())
-				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals[0].isin").value("DE000C"));
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals[0].isin").value("DE000C"))
+				.andReturn();
+
+		@SuppressWarnings("unchecked")
+		java.util.List<Number> currentTargetAmounts = (java.util.List<Number>) JsonHelper.read(detailResult, "$.result.summary.savingPlanProposal.layers[*].currentTargetTotalAmountEur");
+		@SuppressWarnings("unchecked")
+		java.util.List<Number> currentTargetWeights = (java.util.List<Number>) JsonHelper.read(detailResult, "$.result.summary.savingPlanProposal.layers[*].currentTargetTotalWeightPct");
+		org.assertj.core.api.Assertions.assertThat(currentTargetAmounts)
+				.isNotEmpty()
+				.anySatisfy(value -> org.assertj.core.api.Assertions.assertThat(value.doubleValue()).isGreaterThan(0.0d));
+		org.assertj.core.api.Assertions.assertThat(currentTargetWeights)
+				.isNotEmpty()
+				.anySatisfy(value -> org.assertj.core.api.Assertions.assertThat(value.doubleValue()).isGreaterThan(0.0d));
 	}
 
 	@Test

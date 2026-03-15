@@ -97,6 +97,13 @@ class AdvisorServiceTest {
 				return layer.getTargetAmountEur() % 1;
 				})
 				.containsOnly(0.0d);
+		assertThat(summary.savingPlanProposal().getLayers())
+				.allSatisfy(layer -> {
+					assertThat(layer.getCurrentTargetTotalWeightPct()).isNotNull();
+					assertThat(layer.getCurrentTargetTotalAmountEur()).isNotNull();
+					assertThat(layer.getTargetTotalWeightPct()).isNotNull();
+					assertThat(layer.getTargetTotalAmountEur()).isNotNull();
+				});
 		double proposalTotal = summary.savingPlanProposal().getLayers().stream()
 				.mapToDouble(layer -> layer.getTargetAmountEur() == null ? 0.0d : layer.getTargetAmountEur())
 				.sum();
@@ -175,10 +182,18 @@ class AdvisorServiceTest {
 		assertThat(byLayer.get(2).getTargetTotalAmountEur()).isEqualTo(44000.0d);
 		assertThat(byLayer.get(3).getTargetTotalAmountEur()).isEqualTo(17600.0d);
 		assertThat(byLayer.get(4).getTargetTotalAmountEur()).isEqualTo(4400.0d);
+		assertThat(byLayer.get(1).getCurrentTargetTotalAmountEur()).isEqualTo(154000.0d);
+		assertThat(byLayer.get(2).getCurrentTargetTotalAmountEur()).isEqualTo(44000.0d);
+		assertThat(byLayer.get(3).getCurrentTargetTotalAmountEur()).isEqualTo(17600.0d);
+		assertThat(byLayer.get(4).getCurrentTargetTotalAmountEur()).isEqualTo(4400.0d);
 		assertThat(byLayer.get(1).getTargetTotalWeightPct()).isCloseTo(70.0d, org.assertj.core.data.Offset.offset(0.01d));
 		assertThat(byLayer.get(2).getTargetTotalWeightPct()).isCloseTo(20.0d, org.assertj.core.data.Offset.offset(0.01d));
 		assertThat(byLayer.get(3).getTargetTotalWeightPct()).isCloseTo(8.0d, org.assertj.core.data.Offset.offset(0.01d));
 		assertThat(byLayer.get(4).getTargetTotalWeightPct()).isCloseTo(2.0d, org.assertj.core.data.Offset.offset(0.01d));
+		assertThat(byLayer.get(1).getCurrentTargetTotalWeightPct()).isCloseTo(70.0d, org.assertj.core.data.Offset.offset(0.01d));
+		assertThat(byLayer.get(2).getCurrentTargetTotalWeightPct()).isCloseTo(20.0d, org.assertj.core.data.Offset.offset(0.01d));
+		assertThat(byLayer.get(3).getCurrentTargetTotalWeightPct()).isCloseTo(8.0d, org.assertj.core.data.Offset.offset(0.01d));
+		assertThat(byLayer.get(4).getCurrentTargetTotalWeightPct()).isCloseTo(2.0d, org.assertj.core.data.Offset.offset(0.01d));
 	}
 
 	@Test

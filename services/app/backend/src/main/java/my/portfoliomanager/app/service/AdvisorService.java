@@ -1299,14 +1299,19 @@ public class AdvisorService {
 		List<SavingPlanProposalLayerDto> layers = new ArrayList<>();
 		Map<Integer, String> layerNames = targetConfig.layerNames();
 		Map<Integer, BigDecimal> holdings = normalizeHoldingsByLayer(holdingsByLayer);
+		Map<Integer, BigDecimal> currentTargetTotals = new LinkedHashMap<>();
 		int horizon = normalizeProjectionHorizonMonths(targetConfig.projectionHorizonMonths());
 		Map<Integer, BigDecimal> targetTotals = new LinkedHashMap<>();
 		for (int layer = 1; layer <= 5; layer++) {
 			BigDecimal holding = holdings.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal current = metrics.monthlyByLayer().getOrDefault(layer, BigDecimal.ZERO);
 			BigDecimal proposed = proposalAmounts.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal currentProjected = current.multiply(BigDecimal.valueOf(horizon));
 			BigDecimal projected = proposed.multiply(BigDecimal.valueOf(horizon));
+			currentTargetTotals.put(layer, holding.add(currentProjected));
 			targetTotals.put(layer, holding.add(projected));
 		}
+		BigDecimal currentTargetTotalSum = sumAmounts(currentTargetTotals);
 		BigDecimal targetTotalSum = sumAmounts(targetTotals);
 		for (int layer = 1; layer <= 5; layer++) {
 			BigDecimal currentAmount = metrics.monthlyByLayer().getOrDefault(layer, BigDecimal.ZERO);
@@ -1314,6 +1319,10 @@ public class AdvisorService {
 			BigDecimal targetWeight = targetWeights.getOrDefault(layer, BigDecimal.ZERO);
 			BigDecimal proposedAmount = proposalAmounts.getOrDefault(layer, BigDecimal.ZERO);
 			BigDecimal delta = proposedAmount.subtract(currentAmount);
+			BigDecimal currentTargetTotalAmount = currentTargetTotals.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal currentTargetTotalWeight = currentTargetTotalSum.signum() <= 0
+					? BigDecimal.ZERO
+					: currentTargetTotalAmount.divide(currentTargetTotalSum, 6, RoundingMode.HALF_UP);
 			BigDecimal targetTotalAmount = targetTotals.getOrDefault(layer, BigDecimal.ZERO);
 			BigDecimal targetTotalWeight = targetTotalSum.signum() <= 0
 					? BigDecimal.ZERO
@@ -1327,6 +1336,8 @@ public class AdvisorService {
 					toWeightPct(targetWeight),
 					toAmount(proposedAmount),
 					toAmount(delta),
+					toWeightPct(currentTargetTotalWeight),
+					toAmount(currentTargetTotalAmount),
 					toWeightPct(targetTotalWeight),
 					toAmount(targetTotalAmount)
 			));
