@@ -169,6 +169,7 @@ SCANNER_ARGS=(
   "-Dsonar.token=${SONAR_TOKEN}"
   "-Dsonar.projectKey=${PROJECT_KEY}"
   "-Dsonar.sources=${SRC_PATH}"
+  "-Dsonar.working.directory=/tmp/sonar-scanner-work-${PROJECT_KEY}"
 )
 
 if [[ -n "${TESTS_PATH}" ]]; then

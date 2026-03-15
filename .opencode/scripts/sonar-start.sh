@@ -11,6 +11,7 @@ QUIET=false
 DEFAULT_QUALITY_GATE="${SONAR_DEFAULT_QUALITY_GATE:-PortfolioManager Default}"
 CONFIGURE_DEFAULT_QUALITY_GATE=true
 CREATE_DEFAULT_QUALITY_GATE="${SONAR_CREATE_DEFAULT_QUALITY_GATE:-true}"
+REUSE_RUNNING=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -89,13 +90,13 @@ if [[ -z "${PORT_OVERRIDE}" && -f "${RUNTIME_ENV}" ]]; then
 
   if [[ "${EXISTING_COMPOSE_PROJECT_NAME}" == "${COMPOSE_PROJECT_NAME}" && -n "${EXISTING_SONAR_PORT}" && -n "${EXISTING_SONAR_URL}" ]]; then
     existing_container_id="$(docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" ps -q sonarqube 2>/dev/null || true)"
-    if [[ -n "${existing_container_id}" ]]; then
-      if curl -sf "${EXISTING_SONAR_URL}/api/system/status" | grep -q '"status":"UP"'; then
-        echo "SONAR_PORT=${EXISTING_SONAR_PORT}"
-        echo "SONAR_URL=${EXISTING_SONAR_URL}"
-        exit 0
+      if [[ -n "${existing_container_id}" ]]; then
+        if curl -sf "${EXISTING_SONAR_URL}/api/system/status" | grep -q '"status":"UP"'; then
+          SONAR_PORT="${EXISTING_SONAR_PORT}"
+          SONAR_URL="${EXISTING_SONAR_URL}"
+          REUSE_RUNNING=true
+        fi
       fi
-    fi
   fi
 fi
 
@@ -117,7 +118,9 @@ finally:
 PY
 }
 
-SONAR_PORT="${PORT_OVERRIDE}"
+if [[ "${REUSE_RUNNING}" != "true" ]]; then
+  SONAR_PORT="${PORT_OVERRIDE}"
+fi
 if [[ -z "${SONAR_PORT}" ]]; then
   for port in $(seq 9000 9100); do
     if is_port_free "${port}"; then
@@ -179,8 +182,43 @@ print("1" if any(c.get("metric")==metric and c.get("op")==op and as_str(c.get("e
     return 0
   fi
 
-  log "Warning: failed to add quality gate condition ${metric} ${op} ${error}."
-  return 0
+  log "Error: failed to add quality gate condition ${metric} ${op} ${error}."
+  return 1
+}
+
+ensure_quality_gate_condition_any_metric() {
+  local gate_name="$1"
+  local op="$2"
+  local error="$3"
+  local gate_show_json="$4"
+  shift 4
+
+  local metric
+  for metric in "$@"; do
+    if ensure_quality_gate_condition "${gate_name}" "${metric}" "${op}" "${error}" "${gate_show_json}"; then
+      return 0
+    fi
+  done
+
+  log "Error: failed to ensure any quality gate condition for metrics: $* ${op} ${error}."
+  return 1
+}
+
+is_default_quality_gate_active() {
+  local gate_name="$1"
+  local gates_json
+
+  gates_json="$(curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" "${SONAR_URL}/api/qualitygates/list" || true)"
+  if [[ -z "${gates_json}" ]]; then
+    return 1
+  fi
+
+  local active
+  active="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
+data=json.loads(payload) if payload else {};\
+target=sys.argv[2] if len(sys.argv)>2 else "";\
+print("1" if any(g.get("name")==target and g.get("isDefault") for g in data.get("qualitygates",[])) else "")' "${gates_json}" "${gate_name}" 2>/dev/null || true)"
+  [[ -n "${active}" ]]
 }
 
 ensure_default_quality_gate_policy() {
@@ -202,6 +240,7 @@ ensure_default_quality_gate_policy() {
   ensure_quality_gate_condition "${gate_name}" "new_duplicated_lines_density" "GT" "3" "${gate_show_json}"
   ensure_quality_gate_condition "${gate_name}" "new_blocker_violations" "GT" "0" "${gate_show_json}"
   ensure_quality_gate_condition "${gate_name}" "new_critical_violations" "GT" "0" "${gate_show_json}"
+  ensure_quality_gate_condition_any_metric "${gate_name}" "GT" "0" "${gate_show_json}" "new_issues" "new_violations"
 }
 
 configure_default_quality_gate() {
@@ -250,8 +289,12 @@ data=json.loads(payload) if payload else {};\
 print(next((g.get("name","") for g in data.get("qualitygates",[]) if g.get("isDefault")),""))' "${GATES_JSON}" 2>/dev/null || true)"
 
   if [[ "${CURRENT_DEFAULT_GATE}" == "${DEFAULT_QUALITY_GATE}" ]]; then
-    log "Default quality gate already set to '${DEFAULT_QUALITY_GATE}'."
-    return 0
+    if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
+      log "Default quality gate already set to '${DEFAULT_QUALITY_GATE}'."
+      return 0
+    fi
+    log "Error: unable to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
+    exit 5
   fi
 
   GATE_ID="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
@@ -262,18 +305,27 @@ print(next((str(g.get("id","")) for g in data.get("qualitygates",[]) if g.get("n
   if curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
     "${SONAR_URL}/api/qualitygates/set_as_default" \
     --data-urlencode "name=${DEFAULT_QUALITY_GATE}" >/dev/null; then
-    log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
-    return 0
+    if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
+      log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
+      return 0
+    fi
+    log "Error: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
+    exit 5
   fi
 
   if [[ -n "${GATE_ID}" ]] && curl -sf -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
     "${SONAR_URL}/api/qualitygates/set_as_default" \
     --data-urlencode "id=${GATE_ID}" >/dev/null; then
-    log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
-    return 0
+    if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
+      log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
+      return 0
+    fi
+    log "Error: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
+    exit 5
   fi
 
-  log "Warning: failed to set default quality gate '${DEFAULT_QUALITY_GATE}'."
+  log "Error: failed to set default quality gate '${DEFAULT_QUALITY_GATE}'."
+  exit 5
 }
 
 cat > "${RUNTIME_ENV}" <<EOF
@@ -284,6 +336,14 @@ SONAR_URL=${SONAR_URL}
 EOF
 
 export REPO_PREFIX SONAR_PORT SONAR_ADMIN_PASSWORD
+
+if [[ "${REUSE_RUNNING}" == "true" ]]; then
+  configure_default_quality_gate
+  log "SonarQube is already running and quality gate policy is ensured."
+  echo "SONAR_PORT=${SONAR_PORT}"
+  echo "SONAR_URL=${SONAR_URL}"
+  exit 0
+fi
 
 log "Starting SonarQube stack (${COMPOSE_PROJECT_NAME}) on port ${SONAR_PORT}..."
 if ! docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" up -d; then
