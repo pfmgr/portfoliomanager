@@ -269,31 +269,50 @@
             {{ note }}
           </li>
         </ul>
-        <p class="note">Target totals combine current holdings with projected saving plan contributions over the horizon.</p>
-        <p class="note">Target Total % reflects the projected total distribution (holdings + projected contributions), not the target weights.</p>
+        <p class="note">Current projection uses existing saving plan amounts; rebalanced projection uses proposed saving plan amounts.</p>
+        <p class="note">Both projections combine current holdings with projected saving plan contributions over the horizon.</p>
+        <p class="note">Current Target % and Target Total (Rebalanced) % reflect projected total distributions, not target weights.</p>
         <p class="note">Market price changes are not included in target totals.</p>
         <p class="note">Longer projection horizons keep proposals closer to the current distribution.</p>
         <p class="note">Saving Plan Delta shows proposed minus current amounts.</p>
-        <div class="table-wrap">
-          <table class="table">
-            <caption class="sr-only">Savings plan rebalancing proposal by layer.</caption>
+        <p class="note scroll-hint" id="proposal-scroll-hint">Scroll horizontally to view all columns.</p>
+        <p v-if="loading" id="proposal-loading-status" class="sr-only" role="status" aria-live="polite">
+          Loading rebalancing proposal table.
+        </p>
+        <div
+          class="table-wrap proposal-table-wrap"
+          tabindex="0"
+          aria-label="Savings plan rebalancing proposal table"
+          :aria-busy="loading ? 'true' : 'false'"
+          :aria-describedby="loading ? 'proposal-scroll-hint proposal-loading-status' : 'proposal-scroll-hint'"
+        >
+          <table class="table proposal-table" :aria-busy="loading ? 'true' : 'false'">
+            <caption id="proposal-table-caption" class="sr-only">Savings plan rebalancing proposal by layer comparing current projection without rebalancing and rebalanced projection with proposed amounts.</caption>
             <thead>
               <tr>
-                <th scope="col">Layer</th>
-                <th scope="col" class="num">Current €</th>
-                <th scope="col" class="num">Proposed €</th>
-                <th scope="col" class="num">Saving Plan Delta €</th>
-                <th scope="col" class="num">Target Total %</th>
-                <th scope="col" class="num">Target Total Amount €</th>
+                <th id="layer-col" scope="col" rowspan="2">Layer</th>
+                <th id="current-eur-col" scope="col" class="num" rowspan="2">Current €</th>
+                <th id="proposed-eur-col" scope="col" class="num" rowspan="2">Proposed €</th>
+                <th id="delta-eur-col" scope="col" class="num" rowspan="2">Saving Plan Delta €</th>
+                <th id="current-projection-group" scope="colgroup" class="group-col" colspan="2">Current Projection (No Rebalancing)</th>
+                <th id="rebalanced-projection-group" scope="colgroup" class="group-col" colspan="2">Rebalanced Projection</th>
+              </tr>
+              <tr>
+                <th id="current-target-pct-col" scope="col" class="num" abbr="Current %">Current Target %</th>
+                <th id="current-target-amount-col" scope="col" class="num" abbr="Current Total €">Current Target Total Amount €</th>
+                <th id="rebalanced-target-pct-col" scope="col" class="num" abbr="Rebalanced %">Target Total (Rebalanced) %</th>
+                <th id="rebalanced-target-amount-col" scope="col" class="num" abbr="Rebalanced Total €">Target Total Amount (Rebalanced) €</th>
               </tr>
             </thead>
             <tbody>
               <template v-if="loading">
                 <tr class="sr-only">
-                  <td colspan="6">Loading rebalancing proposal...</td>
+                  <td colspan="8">Loading rebalancing proposal...</td>
                 </tr>
                 <tr v-for="n in 3" :key="`proposal-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
                   <td><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
+                  <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
                   <td class="num"><span class="skeleton-block"></span></td>
@@ -303,17 +322,19 @@
               </template>
               <template v-else-if="summary.savingPlanProposal.layers.length === 0">
                 <tr>
-                  <td colspan="6">No rebalancing proposal available.</td>
+                  <td colspan="8">No rebalancing proposal available.</td>
                 </tr>
               </template>
               <template v-else>
                 <tr v-for="row in summary.savingPlanProposal.layers" :key="row.layer">
-                  <th scope="row">{{ row.layerName }}</th>
-                  <td class="num">{{ formatAmount(row.currentAmountEur) }}</td>
-                  <td class="num">{{ formatAmount(row.targetAmountEur) }}</td>
-                  <td class="num">{{ formatAmount(row.deltaEur) }}</td>
-                  <td class="num">{{ formatWeight(row.targetTotalWeightPct) }}</td>
-                  <td class="num">{{ formatAmount(row.targetTotalAmountEur) }}</td>
+                  <th :id="`proposal-layer-${row.layer}`" scope="row">{{ row.layerName }}</th>
+                  <td class="num" :headers="`proposal-layer-${row.layer} current-eur-col`">{{ formatAmount(row.currentAmountEur) }}</td>
+                  <td class="num" :headers="`proposal-layer-${row.layer} proposed-eur-col`">{{ formatAmount(row.targetAmountEur) }}</td>
+                  <td class="num" :headers="`proposal-layer-${row.layer} delta-eur-col`">{{ formatAmount(row.deltaEur) }}</td>
+                  <td class="num" :headers="`proposal-layer-${row.layer} current-projection-group current-target-pct-col`">{{ formatWeight(row.currentTargetTotalWeightPct) }}</td>
+                  <td class="num" :headers="`proposal-layer-${row.layer} current-projection-group current-target-amount-col`">{{ formatAmount(row.currentTargetTotalAmountEur) }}</td>
+                  <td class="num" :headers="`proposal-layer-${row.layer} rebalanced-projection-group rebalanced-target-pct-col`">{{ formatWeight(row.targetTotalWeightPct) }}</td>
+                  <td class="num" :headers="`proposal-layer-${row.layer} rebalanced-projection-group rebalanced-target-amount-col`">{{ formatAmount(row.targetTotalAmountEur) }}</td>
                 </tr>
               </template>
             </tbody>
@@ -941,6 +962,39 @@ onMounted(() => {
 
 .constraint-block {
   margin-top: 0.8rem;
+}
+
+.scroll-hint {
+  margin-bottom: 0.4rem;
+}
+
+.proposal-table-wrap {
+  position: relative;
+}
+
+.proposal-table-wrap:focus {
+  outline: 2px solid #f6c47b;
+  outline-offset: 2px;
+}
+
+.proposal-table-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1rem;
+  height: 100%;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(246, 244, 240, 0), rgba(246, 244, 240, 0.95));
+}
+
+.proposal-table {
+  min-width: 72rem;
+}
+
+.proposal-table .group-col {
+  text-align: center;
+  font-weight: 700;
 }
 
 .skeleton-row td {

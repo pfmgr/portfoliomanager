@@ -15,6 +15,8 @@ public class SavingPlanProposalLayerDto {
 	private final Double targetWeightPct;
 	private final Double targetAmountEur;
 	private final Double deltaEur;
+	private final Double currentTargetTotalWeightPct;
+	private final Double currentTargetTotalAmountEur;
 	private final Double targetTotalWeightPct;
 	private final Double targetTotalAmountEur;
 
@@ -26,6 +28,8 @@ public class SavingPlanProposalLayerDto {
 								@JsonProperty("targetWeightPct") Double targetWeightPct,
 								@JsonProperty("targetAmountEur") Double targetAmountEur,
 								@JsonProperty("deltaEur") Double deltaEur,
+								@JsonProperty("currentTargetTotalWeightPct") Double currentTargetTotalWeightPct,
+								@JsonProperty("currentTargetTotalAmountEur") Double currentTargetTotalAmountEur,
 								@JsonProperty("targetTotalWeightPct") Double targetTotalWeightPct,
 								@JsonProperty("targetTotalAmountEur") Double targetTotalAmountEur) {
 		this.layer = layer;
@@ -35,6 +39,8 @@ public class SavingPlanProposalLayerDto {
 		this.targetWeightPct = targetWeightPct;
 		this.targetAmountEur = targetAmountEur;
 		this.deltaEur = deltaEur;
+		this.currentTargetTotalWeightPct = currentTargetTotalWeightPct;
+		this.currentTargetTotalAmountEur = currentTargetTotalAmountEur;
 		this.targetTotalWeightPct = targetTotalWeightPct;
 		this.targetTotalAmountEur = targetTotalAmountEur;
 	}

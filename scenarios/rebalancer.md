@@ -31,6 +31,28 @@ Rebalancer computes deterministic allocation proposals across portfolio layers a
 - `services/app/frontend/src/views/RebalancerHistoryView.vue`
 - `services/app/frontend/src/views/ProfileConfigurationView.vue`
 
+### Savings plan proposal table semantics
+
+The table `Rebalancing Proposal (Savings plan amounts, EUR)` compares projections without and with
+rebalancing for each layer.
+
+- Columns:
+  - `Layer`
+  - `Current €`
+  - `Proposed €`
+  - `Saving Plan Delta €`
+  - `Current Target %`
+  - `Target Total (Rebalanced) %`
+  - `Current Target Total Amount €`
+  - `Target Total Amount (Rebalanced) €`
+- `Current Target %` and `Current Target Total Amount €` are projected from current holdings plus
+  projected contributions using the current saving plan amounts (no rebalancing adjustments).
+- `Target Total (Rebalanced) %` and `Target Total Amount (Rebalanced) €` are projected from current
+  holdings plus projected contributions using the proposed (rebalanced) saving plan amounts.
+- Projection formulas by layer for horizon `H` months:
+  - `current_target_total_amount = holdings + current_monthly_amount * H`
+  - `rebalanced_target_total_amount = holdings + proposed_monthly_amount * H`
+
 ## Code map
 
 - API: `services/app/backend/src/main/java/my/portfoliomanager/app/api/RebalancerController.java`
