@@ -34,7 +34,7 @@ class AdvisorServiceInstrumentTotalsTest {
 	private static final String JWT_SECRET = UUID.randomUUID().toString();
 
 	@Autowired
-	private AdvisorService advisorService;
+	private RebalancerService rebalancerService;
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -95,7 +95,7 @@ class AdvisorServiceInstrumentTotalsTest {
 
 	@Test
 	void proposalUsesInstrumentTotalsForLayerBudgets() {
-		var summary = advisorService.summary(null);
+		var summary = rebalancerService.summary(null);
 		assertThat(summary.savingPlanProposal()).isNotNull();
 		assertThat(findTargetAmount(summary.savingPlanProposal().getLayers(), 1)).isEqualTo(68.0d);
 		assertThat(findTargetAmount(summary.savingPlanProposal().getLayers(), 2)).isEqualTo(22.0d);

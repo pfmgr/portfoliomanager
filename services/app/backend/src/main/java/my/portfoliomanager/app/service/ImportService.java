@@ -35,6 +35,8 @@ import java.util.Map;
 
 @Service
 public class ImportService {
+	private static final String IMPORT_STATUS_IMPORTED = "imported";
+
 	private final DepotRepository depotRepository;
 	private final InstrumentRepository instrumentRepository;
 	private final SnapshotRepository snapshotRepository;
@@ -86,7 +88,7 @@ public class ImportService {
 				.orElseThrow(() -> new IllegalArgumentException("Depot not found"));
 
 		Position first = positions.get(0);
-		if (!forceReimport && importFileRepository.findByDepotCodeAndFileHashAndStatus(normalizedDepot, fileHash, "imported").isPresent()) {
+		if (!forceReimport && importFileRepository.findByDepotCodeAndFileHashAndStatus(normalizedDepot, fileHash, IMPORT_STATUS_IMPORTED).isPresent()) {
 			snapshotRepository.findByDepotIdAndAsOfDateAndSourceAndFileHash(depot.getDepotId(), first.asOfDate(),
 							first.source(), fileHash)
 					.ifPresent(snapshot -> {
@@ -100,7 +102,7 @@ public class ImportService {
 			Snapshot snapshot = upsertSnapshot(depot, first, fileHash);
 			int positionsImported = upsertSnapshotPositions(snapshot.getSnapshotId(), positions);
 
-		upsertImportFile(normalizedDepot, filename, fileHash, first, "imported", null);
+		upsertImportFile(normalizedDepot, filename, fileHash, first, IMPORT_STATUS_IMPORTED, null);
 
 		depot.setActiveSnapshotId(snapshot.getSnapshotId());
 		depotRepository.save(depot);
@@ -120,7 +122,7 @@ public class ImportService {
 			}
 		}
 
-		return new ImportResultDto(upsertResult.created, "imported", snapshot.getSnapshotId(), positionsImported,
+		return new ImportResultDto(upsertResult.created, IMPORT_STATUS_IMPORTED, snapshot.getSnapshotId(), positionsImported,
 				rulesAppliedCount);
 	}
 
@@ -198,16 +200,14 @@ public class ImportService {
 		if (pruneMissing && !isins.isEmpty()) {
 			instrumentRepository.markDeletedForDepot(positions.get(0).depotCode(), isins);
 		}
-		return new UpsertResult(created, toSave);
+		return new UpsertResult(created);
 	}
 
 	private static class UpsertResult {
 		private final int created;
-		private final List<Instrument> instruments;
 
-		private UpsertResult(int created, List<Instrument> instruments) {
+		private UpsertResult(int created) {
 			this.created = created;
-			this.instruments = instruments;
 		}
 	}
 

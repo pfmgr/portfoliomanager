@@ -46,8 +46,8 @@ import java.util.Objects;
 import java.util.Set;
 
 @Service
-public class AdvisorService {
-	private static final Logger logger = LoggerFactory.getLogger(AdvisorService.class);
+public class RebalancerService {
+	private static final Logger logger = LoggerFactory.getLogger(RebalancerService.class);
 	private static final int INSTRUMENT_HIGHLIGHT_LIMIT = 8;
 	private static final int INSTRUMENT_WEIGHT_LIMIT = 5;
 	private static final int DEFAULT_PROJECTION_HORIZON_MONTHS = 12;
@@ -134,7 +134,7 @@ public class AdvisorService {
 			List<InstrumentDiscard> discards) {
 	}
 
-	public AdvisorService(JdbcTemplate jdbcTemplate,
+	public RebalancerService(JdbcTemplate jdbcTemplate,
 					  LlmNarrativeService llmNarrativeService,
 					  InstrumentRebalanceService instrumentRebalanceService,
 					  AssessorInstrumentSuggestionService instrumentSuggestionService,

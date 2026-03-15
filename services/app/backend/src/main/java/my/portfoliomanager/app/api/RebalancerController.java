@@ -7,7 +7,7 @@ import my.portfoliomanager.app.dto.ReclassificationDto;
 import my.portfoliomanager.app.dto.RebalancerRunJobResponseDto;
 import my.portfoliomanager.app.dto.RebalancerRunRequestDto;
 import my.portfoliomanager.app.rules.RulesetDefinition;
-import my.portfoliomanager.app.service.AdvisorService;
+import my.portfoliomanager.app.service.RebalancerService;
 import my.portfoliomanager.app.service.ClassificationService;
 import my.portfoliomanager.app.service.RebalancerJobService;
 import my.portfoliomanager.app.service.RulesetService;
@@ -25,16 +25,16 @@ import java.util.List;
 @RequestMapping("/api/rebalancer")
 public class RebalancerController {
 	private final RebalancerJobService rebalancerJobService;
-	private final AdvisorService advisorService;
+	private final RebalancerService rebalancerService;
 	private final ClassificationService classificationService;
 	private final RulesetService rulesetService;
 
 	public RebalancerController(RebalancerJobService rebalancerJobService,
-								AdvisorService advisorService,
+								RebalancerService rebalancerService,
 								ClassificationService classificationService,
 								RulesetService rulesetService) {
 		this.rebalancerJobService = rebalancerJobService;
-		this.advisorService = advisorService;
+		this.rebalancerService = rebalancerService;
 		this.classificationService = classificationService;
 		this.rulesetService = rulesetService;
 	}
@@ -51,12 +51,12 @@ public class RebalancerController {
 
 	@GetMapping("/runs")
 	public List<AdvisorRunDto> listRuns() {
-		return advisorService.listRuns();
+		return rebalancerService.listRuns();
 	}
 
 	@GetMapping("/runs/{runId}")
 	public AdvisorRunDetailDto runDetail(@PathVariable long runId) {
-		return advisorService.getRun(runId);
+		return rebalancerService.getRun(runId);
 	}
 
 	@GetMapping("/reclassifications")

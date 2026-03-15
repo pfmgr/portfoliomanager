@@ -30,13 +30,13 @@ public class RebalancerJobService {
 	private static final Duration JOB_TTL = Duration.ofMinutes(30);
 	private static final int MAX_CONCURRENT_JOBS = 2;
 
-	private final AdvisorService advisorService;
+	private final RebalancerService rebalancerService;
 	private final Map<String, JobState> jobs = new ConcurrentHashMap<>();
 	private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 	private final Semaphore concurrency = new Semaphore(MAX_CONCURRENT_JOBS);
 
-	public RebalancerJobService(AdvisorService advisorService) {
-		this.advisorService = advisorService;
+	public RebalancerJobService(RebalancerService rebalancerService) {
+		this.rebalancerService = rebalancerService;
 	}
 
 	public RebalancerRunJobResponseDto start(RebalancerRunRequestDto request) {
@@ -99,10 +99,10 @@ public class RebalancerJobService {
 			}
 		}
 		if (saveRun) {
-			AdvisorRunDetailDto savedRun = advisorService.saveRun(asOf);
+			AdvisorRunDetailDto savedRun = rebalancerService.saveRun(asOf);
 			return new RebalancerRunResponseDto(savedRun == null ? null : savedRun.summary(), savedRun);
 		}
-		AdvisorSummaryDto summary = advisorService.summary(asOf);
+		AdvisorSummaryDto summary = rebalancerService.summary(asOf);
 		return new RebalancerRunResponseDto(summary, null);
 	}
 

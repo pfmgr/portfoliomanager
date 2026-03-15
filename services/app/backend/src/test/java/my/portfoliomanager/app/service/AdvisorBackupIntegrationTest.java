@@ -32,7 +32,7 @@ class AdvisorBackupIntegrationTest {
 	private BackupService backupService;
 
 	@Autowired
-	private AdvisorService advisorService;
+	private RebalancerService rebalancerService;
 
 	@Autowired
 	private TestDatabaseCleaner databaseCleaner;
@@ -58,7 +58,7 @@ class AdvisorBackupIntegrationTest {
 			backupService.importBackup(file);
 		}
 
-		AdvisorSummaryDto summary = advisorService.summary(null);
+		AdvisorSummaryDto summary = rebalancerService.summary(null);
 		SavingPlanProposalDto proposal = summary.savingPlanProposal();
 		assertThat(proposal).isNotNull();
 		assertThat(proposal.getInstrumentProposals()).isNotEmpty();
