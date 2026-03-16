@@ -39,6 +39,9 @@ public class KnowledgeBaseService {
     private static final int MAX_BULK_ISINS = 200;
     private static final int MAX_QUERY_LENGTH = 120;
     private static final String EDIT_SOURCE = "KB_EXTRACTION";
+    private static final String ERROR_DOSSIER_NOT_FOUND = "Dossier not found";
+    private static final String ERROR_EXTRACTION_NOT_FOUND = "Extraction not found";
+    private static final String SORT_UPDATED_AT = "updatedAt";
     private final InstrumentRepository instrumentRepository;
     private final InstrumentDossierRepository dossierRepository;
     private final InstrumentDossierExtractionRepository extractionRepository;
@@ -306,7 +309,7 @@ public class KnowledgeBaseService {
 
     public InstrumentDossierResponseDto getDossier(Long dossierId) {
         InstrumentDossier dossier = dossierRepository.findById(dossierId)
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         return toResponse(dossier);
     }
 
@@ -314,7 +317,7 @@ public class KnowledgeBaseService {
         String normalizedIsin = normalizeIsin(isin);
         List<InstrumentDossier> versions = dossierRepository.findByIsinOrderByVersionDesc(normalizedIsin);
         if (versions == null || versions.isEmpty()) {
-            throw new IllegalArgumentException("Dossier not found");
+            throw new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND);
         }
         InstrumentDossier latest = versions.get(0);
         List<KnowledgeBaseDossierVersionDto> history = versions.stream()
@@ -342,7 +345,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierResponseDto updateDossier(Long dossierId, InstrumentDossierUpdateRequest request, String updatedBy) {
         InstrumentDossier dossier = dossierRepository.findById(dossierId)
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         JsonNode citations = ensureCitations(request.citations());
         String content = normalizeContent(request.contentMd());
         if (request.displayName() != null) {
@@ -364,7 +367,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierExtractionResponseDto runExtraction(Long dossierId) {
         InstrumentDossier dossier = dossierRepository.findById(dossierId)
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         LocalDateTime now = LocalDateTime.now();
         InstrumentDossierExtraction extraction = new InstrumentDossierExtraction();
         extraction.setDossierId(dossierId);
@@ -413,7 +416,7 @@ public class KnowledgeBaseService {
     @Transactional
     public KnowledgeBaseMissingMetricsResponseDto completeMissingMetrics(Long dossierId, String actor) {
         InstrumentDossier dossier = dossierRepository.findById(dossierId)
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         String isin = dossier.getIsin();
         InstrumentDossierExtraction latestExtraction = extractionRepository.findByDossierIdOrderByCreatedAtDesc(dossierId)
                 .stream()
@@ -473,7 +476,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierExtractionResponseDto approveExtraction(Long extractionId, String approvedBy) {
         InstrumentDossierExtraction extraction = extractionRepository.findById(extractionId)
-                .orElseThrow(() -> new IllegalArgumentException("Extraction not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_EXTRACTION_NOT_FOUND));
         boolean applyOverrides = configService.getSnapshot().applyExtractionsToOverrides();
         InstrumentDossierExtraction saved = approveExtractionInternal(extraction, approvedBy, false, applyOverrides);
         return toResponse(saved);
@@ -482,7 +485,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierExtractionResponseDto approveExtraction(Long extractionId, String approvedBy, boolean autoApproved) {
         InstrumentDossierExtraction extraction = extractionRepository.findById(extractionId)
-                .orElseThrow(() -> new IllegalArgumentException("Extraction not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_EXTRACTION_NOT_FOUND));
         boolean applyOverrides = configService.getSnapshot().applyExtractionsToOverrides();
         InstrumentDossierExtraction saved = approveExtractionInternal(extraction, approvedBy, autoApproved, applyOverrides);
         return toResponse(saved);
@@ -494,7 +497,7 @@ public class KnowledgeBaseService {
                                                                     boolean autoApproved,
                                                                     boolean applyOverrides) {
         InstrumentDossierExtraction extraction = extractionRepository.findById(extractionId)
-                .orElseThrow(() -> new IllegalArgumentException("Extraction not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_EXTRACTION_NOT_FOUND));
         InstrumentDossierExtraction saved = approveExtractionInternal(extraction, approvedBy, autoApproved, applyOverrides);
         return toResponse(saved);
     }
@@ -502,7 +505,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierResponseDto approveDossier(Long dossierId, String approvedBy) {
         InstrumentDossier dossier = dossierRepository.findById(dossierId)
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         InstrumentDossier saved = approveDossierInternal(dossier, approvedBy, false);
         return toResponse(saved);
     }
@@ -510,7 +513,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierResponseDto approveDossier(Long dossierId, String approvedBy, boolean autoApproved) {
         InstrumentDossier dossier = dossierRepository.findById(dossierId)
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         InstrumentDossier saved = approveDossierInternal(dossier, approvedBy, autoApproved);
         return toResponse(saved);
     }
@@ -518,7 +521,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierResponseDto rejectDossier(Long dossierId, String rejectedBy) {
         InstrumentDossier dossier = dossierRepository.findById(dossierId)
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         if (dossier.getStatus() == DossierStatus.APPROVED) {
             throw new IllegalArgumentException("Approved dossiers must be superseded instead of rejected");
         }
@@ -531,7 +534,7 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierExtractionResponseDto rejectExtraction(Long extractionId, String rejectedBy) {
         InstrumentDossierExtraction extraction = extractionRepository.findById(extractionId)
-                .orElseThrow(() -> new IllegalArgumentException("Extraction not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_EXTRACTION_NOT_FOUND));
         if (extraction.getStatus() != DossierExtractionStatus.CREATED
                 && extraction.getStatus() != DossierExtractionStatus.PENDING_REVIEW) {
             throw new IllegalArgumentException("Only pending extractions can be rejected");
@@ -548,12 +551,12 @@ public class KnowledgeBaseService {
     @Transactional
     public InstrumentDossierExtractionResponseDto applyExtraction(Long extractionId, String appliedBy) {
         InstrumentDossierExtraction extraction = extractionRepository.findById(extractionId)
-                .orElseThrow(() -> new IllegalArgumentException("Extraction not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_EXTRACTION_NOT_FOUND));
         if (extraction.getStatus() != DossierExtractionStatus.APPROVED) {
             throw new IllegalArgumentException("Only APPROVED extractions can be applied");
         }
         InstrumentDossier dossier = dossierRepository.findById(extraction.getDossierId())
-                .orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+                .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         String isin = dossier.getIsin();
         requireInstrument(isin);
         InstrumentDossierExtractionPayload payload = parsePayload(extraction.getExtractedJson());
@@ -1777,13 +1780,13 @@ public class KnowledgeBaseService {
             canonicalSortBy = "isin";
         } else if ("status".equalsIgnoreCase(normalizedSortBy)) {
             canonicalSortBy = "status";
-        } else if ("updatedAt".equalsIgnoreCase(normalizedSortBy)) {
-            canonicalSortBy = "updatedAt";
+        } else if (SORT_UPDATED_AT.equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = SORT_UPDATED_AT;
         } else {
             throw new IllegalArgumentException("Invalid sort field.");
         }
 
-        String defaultDirection = "updatedAt".equals(canonicalSortBy) ? "desc" : "asc";
+        String defaultDirection = SORT_UPDATED_AT.equals(canonicalSortBy) ? "desc" : "asc";
         String normalizedSortDirection = sortDirection == null || sortDirection.isBlank()
                 ? defaultDirection
                 : sortDirection.trim().toLowerCase(Locale.ROOT);

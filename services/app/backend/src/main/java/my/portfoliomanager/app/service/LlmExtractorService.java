@@ -72,6 +72,27 @@ public class LlmExtractorService implements ExtractorService {
 	private static final Pattern RISK_SECTION_PATTERN =
 			Pattern.compile("(?m)^##\\s+risk\\b", Pattern.CASE_INSENSITIVE);
 	private static final String THEME_OVERRIDE_MISSING_REASON = "resolved_by_theme_policy_override";
+	private static final String FIELD_INSTRUMENT_TYPE = "instrument_type";
+	private static final String FIELD_ASSET_CLASS = "asset_class";
+	private static final String FIELD_SUB_CLASS = "sub_class";
+	private static final String FIELD_LAYER = "layer";
+	private static final String FIELD_LAYER_NOTES = "layer_notes";
+	private static final String FIELD_ONGOING_CHARGES_PCT = "ongoing_charges_pct";
+	private static final String FIELD_BENCHMARK_INDEX = "benchmark_index";
+	private static final String FIELD_FINANCIALS = "financials";
+	private static final String FIELD_VALUATION = "valuation";
+	private static final String FIELD_SUMMARY_RISK_INDICATOR = "summary_risk_indicator";
+	private static final String FIELD_SECTORS = "sectors";
+	private static final String FIELD_LAYER_NOTES_COMPACT = "layernotes";
+	private static final String FIELD_ETF_ONGOING_CHARGES_PCT = "etf.ongoing_charges_pct";
+	private static final String FIELD_ETF_BENCHMARK_INDEX = "etf.benchmark_index";
+	private static final String FIELD_RISK_SRI_VALUE = "risk.summary_risk_indicator.value";
+	private static final String FIELD_WEIGHT = "weight";
+	private static final String FIELD_WEIGHT_PCT_SNAKE = "weight_pct";
+	private static final String FIELD_WEIGHT_PCT_CAMEL = "weightPct";
+	private static final String WARNING_INVALID_WEIGHT_PCT_PREFIX = "Invalid weight_pct value (";
+	private static final String WARNING_INVALID_WEIGHT_PCT_SUFFIX = "); expected 0..100, set to null.";
+	private static final String WARNING_INVALID_PREFIX = "Invalid ";
 
 	public LlmExtractorService(KnowledgeBaseLlmClient llmClient,
 						   ObjectMapper objectMapper,
@@ -171,31 +192,31 @@ public class LlmExtractorService implements ExtractorService {
 		}
 
 		String name = textOrNull(data, "name", "display_name", "displayName");
-		String instrumentType = textOrNull(data, "instrument_type", "instrumentType");
-		String assetClass = textOrNull(data, "asset_class", "assetClass");
-		String subClass = textOrNull(data, "sub_class", "subClass");
+		String instrumentType = textOrNull(data, FIELD_INSTRUMENT_TYPE, "instrumentType");
+		String assetClass = textOrNull(data, FIELD_ASSET_CLASS, "assetClass");
+		String subClass = textOrNull(data, FIELD_SUB_CLASS, "subClass");
 		String gicsSector = textOrNull(data, "gics_sector", "gicsSector");
 		String gicsIndustryGroup = textOrNull(data, "gics_industry_group", "gicsIndustryGroup");
 		String gicsIndustry = textOrNull(data, "gics_industry", "gicsIndustry");
 		String gicsSubIndustry = textOrNull(data, "gics_sub_industry", "gicsSubIndustry");
-		Integer layer = integerOrNull(data, "layer");
+		Integer layer = integerOrNull(data, FIELD_LAYER);
 		if (layer != null && (layer < 1 || layer > 5)) {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
 					"Invalid layer value (" + layer + "); expected 1..5, set to null."
 			));
 			layer = null;
 		}
-		String layerNotes = textOrNull(data, "layer_notes", "layerNotes");
+		String layerNotes = textOrNull(data, FIELD_LAYER_NOTES, "layerNotes");
 
 		JsonNode etfNode = objectOrNull(data, "etf");
-		BigDecimal ongoingChargesPct = decimalOrNull(etfNode, "ongoing_charges_pct", "ongoingChargesPct");
+		BigDecimal ongoingChargesPct = decimalOrNull(etfNode, FIELD_ONGOING_CHARGES_PCT, "ongoingChargesPct");
 		if (ongoingChargesPct != null && ongoingChargesPct.compareTo(BigDecimal.ZERO) < 0) {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
-					"Invalid ongoing_charges_pct value (" + ongoingChargesPct + "); expected >= 0, set to null."
+					WARNING_INVALID_PREFIX + FIELD_ONGOING_CHARGES_PCT + " value (" + ongoingChargesPct + "); expected >= 0, set to null."
 			));
 			ongoingChargesPct = null;
 		}
-		String benchmarkIndex = textOrNull(etfNode, "benchmark_index", "benchmarkIndex");
+		String benchmarkIndex = textOrNull(etfNode, FIELD_BENCHMARK_INDEX, "benchmarkIndex");
 		ThemeLayerDecision themeDecision = forceThemeLayerIfNeeded(
 				layer,
 				instrumentType,
@@ -216,7 +237,7 @@ public class LlmExtractorService implements ExtractorService {
 		Integer sriValue = extractSri(riskNode);
 		if (sriValue != null && (sriValue < 1 || sriValue > 7)) {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
-					"Invalid summary_risk_indicator.value (" + sriValue + "); expected 1..7, set to null."
+					WARNING_INVALID_PREFIX + FIELD_SUMMARY_RISK_INDICATOR + ".value (" + sriValue + "); expected 1..7, set to null."
 			));
 			sriValue = null;
 		}
@@ -227,16 +248,16 @@ public class LlmExtractorService implements ExtractorService {
 		List<InstrumentDossierExtractionPayload.HoldingPayload> topHoldings = parseTopHoldings(data, warnings);
 		topHoldings = sanitizeEtfHoldings(topHoldings, instrumentType, layer, warnings);
 		InstrumentDossierExtractionPayload.FinancialsPayload financials = parsePayload(
-				data == null ? null : data.get("financials"),
+				data == null ? null : data.get(FIELD_FINANCIALS),
 				InstrumentDossierExtractionPayload.FinancialsPayload.class,
 				warnings,
-				"financials"
+				FIELD_FINANCIALS
 		);
 		InstrumentDossierExtractionPayload.ValuationPayload valuation = parsePayload(
-				data == null ? null : data.get("valuation"),
+				data == null ? null : data.get(FIELD_VALUATION),
 				InstrumentDossierExtractionPayload.ValuationPayload.class,
 				warnings,
-				"valuation"
+				FIELD_VALUATION
 		);
 		PeCurrentAsOfFallbackResult fallbackResult = applyPeCurrentAsOfFallback(dossier, valuation, warnings);
 		valuation = fallbackResult.valuation();
@@ -700,40 +721,40 @@ public class LlmExtractorService implements ExtractorService {
 		if (normalized.startsWith("financials.")) {
 			normalized = normalized.substring("financials.".length());
 		}
-		switch (normalized) {
+			switch (normalized) {
 			case "name" -> {
 				return payload.name() != null;
 			}
-			case "instrument_type" -> {
+			case FIELD_INSTRUMENT_TYPE -> {
 				return payload.instrumentType() != null;
 			}
-			case "asset_class" -> {
+			case FIELD_ASSET_CLASS -> {
 				return payload.assetClass() != null;
 			}
-			case "sub_class" -> {
+			case FIELD_SUB_CLASS -> {
 				return payload.subClass() != null;
 			}
-			case "layer" -> {
+			case FIELD_LAYER -> {
 				return payload.layer() != null;
 			}
-			case "layer_notes" -> {
+			case FIELD_LAYER_NOTES -> {
 				return payload.layerNotes() != null;
 			}
-			case "etf.ongoing_charges_pct", "ongoing_charges_pct", "ter" -> {
+			case FIELD_ETF_ONGOING_CHARGES_PCT, FIELD_ONGOING_CHARGES_PCT, "ter" -> {
 				return payload.etf() != null && payload.etf().ongoingChargesPct() != null;
 			}
-			case "etf.benchmark_index", "benchmark_index" -> {
+			case FIELD_ETF_BENCHMARK_INDEX, FIELD_BENCHMARK_INDEX -> {
 				return payload.etf() != null && payload.etf().benchmarkIndex() != null;
 			}
-			case "risk.summary_risk_indicator.value", "summary_risk_indicator", "sri" -> {
+			case FIELD_RISK_SRI_VALUE, FIELD_SUMMARY_RISK_INDICATOR, "sri" -> {
 				return payload.risk() != null
 						&& payload.risk().summaryRiskIndicator() != null
 						&& payload.risk().summaryRiskIndicator().value() != null;
 			}
-			case "financials" -> {
+			case FIELD_FINANCIALS -> {
 				return payload.financials() != null;
 			}
-			case "valuation" -> {
+			case FIELD_VALUATION -> {
 				return payload.valuation() != null;
 			}
 			case "revenue" -> {
@@ -822,12 +843,12 @@ public class LlmExtractorService implements ExtractorService {
 		if (riskNode == null) {
 			return null;
 		}
-		JsonNode sriNode = objectOrNull(riskNode, "summary_risk_indicator", "summaryRiskIndicator");
+		JsonNode sriNode = objectOrNull(riskNode, FIELD_SUMMARY_RISK_INDICATOR, "summaryRiskIndicator");
 		Integer value = integerOrNull(sriNode, "value");
 		if (value != null) {
 			return value;
 		}
-		return integerOrNull(riskNode, "summary_risk_indicator", "summaryRiskIndicator", "sri");
+		return integerOrNull(riskNode, FIELD_SUMMARY_RISK_INDICATOR, "summaryRiskIndicator", "sri");
 	}
 
 	private InstrumentDossierExtractionPayload.SourcePayload toSource(JsonNode node) {
@@ -871,16 +892,16 @@ public class LlmExtractorService implements ExtractorService {
 	) {
 		List<InstrumentDossierExtractionPayload.MissingFieldPayload> missing = new ArrayList<>();
 		addMissing(missing, "name", name);
-		addMissing(missing, "instrument_type", instrumentType);
-		addMissing(missing, "asset_class", assetClass);
-		addMissing(missing, "sub_class", subClass);
-		addMissing(missing, "layer", layer);
-		addMissing(missing, "layer_notes", layerNotes);
-		addMissing(missing, "etf.ongoing_charges_pct", ongoingChargesPct);
-		addMissing(missing, "etf.benchmark_index", benchmarkIndex);
-		addMissing(missing, "risk.summary_risk_indicator.value", summaryRiskIndicator);
-		addMissing(missing, "financials", financials);
-		addMissing(missing, "valuation", valuation);
+		addMissing(missing, FIELD_INSTRUMENT_TYPE, instrumentType);
+		addMissing(missing, FIELD_ASSET_CLASS, assetClass);
+		addMissing(missing, FIELD_SUB_CLASS, subClass);
+		addMissing(missing, FIELD_LAYER, layer);
+		addMissing(missing, FIELD_LAYER_NOTES, layerNotes);
+		addMissing(missing, FIELD_ETF_ONGOING_CHARGES_PCT, ongoingChargesPct);
+		addMissing(missing, FIELD_ETF_BENCHMARK_INDEX, benchmarkIndex);
+		addMissing(missing, FIELD_RISK_SRI_VALUE, summaryRiskIndicator);
+		addMissing(missing, FIELD_FINANCIALS, financials);
+		addMissing(missing, FIELD_VALUATION, valuation);
 		boolean isEtf = isEtfType(instrumentTypeHint);
 		boolean isSingleStock = isSingleStockType(instrumentTypeHint);
 		if (isSingleStock) {
@@ -890,7 +911,7 @@ public class LlmExtractorService implements ExtractorService {
 			addMissing(missing, "gics_sub_industry", gicsSubIndustry);
 		}
 		if (isEtf) {
-			addMissing(missing, "sectors", sectors);
+			addMissing(missing, FIELD_SECTORS, sectors);
 		}
 		return missing;
 	}
@@ -1018,7 +1039,7 @@ public class LlmExtractorService implements ExtractorService {
 			if (hasRegions && field.equals("regions")) {
 				continue;
 			}
-			if (hasSectors && field.equals("sectors")) {
+			if (hasSectors && field.equals(FIELD_SECTORS)) {
 				continue;
 			}
 			if (isEtf && field.startsWith("gics_")) {
@@ -1041,12 +1062,12 @@ public class LlmExtractorService implements ExtractorService {
 		}
 		return switch (normalizedField) {
 			case "ter",
-					"ongoing_charges_pct",
+					FIELD_ONGOING_CHARGES_PCT,
 					"ongoing charges pct",
 					"ongoing charges",
 					"ongoing charge",
 					"total expense ratio",
-					"benchmark_index",
+					FIELD_BENCHMARK_INDEX,
 					"benchmark index" -> true;
 			default -> false;
 		};
@@ -1061,7 +1082,7 @@ public class LlmExtractorService implements ExtractorService {
 		}
 		if (!node.isObject()) {
 			warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
-					"Invalid " + label + " payload; expected object, set to null."
+					WARNING_INVALID_PREFIX + label + " payload; expected object, set to null."
 			));
 			return null;
 		}
@@ -1222,7 +1243,7 @@ public class LlmExtractorService implements ExtractorService {
 	private ThematicKeywordMatch findThematicKeywordMatch(String name,
 									  String subClass,
 									  String benchmarkIndex) {
-		ThematicKeywordMatch match = findThematicKeywordMatch("benchmark_index", benchmarkIndex);
+		ThematicKeywordMatch match = findThematicKeywordMatch(FIELD_BENCHMARK_INDEX, benchmarkIndex);
 		if (match != null) {
 			return match;
 		}
@@ -1230,7 +1251,7 @@ public class LlmExtractorService implements ExtractorService {
 		if (match != null) {
 			return match;
 		}
-		match = findThematicKeywordMatch("sub_class", subClass);
+		match = findThematicKeywordMatch(FIELD_SUB_CLASS, subClass);
 		if (match != null) {
 			return match;
 		}
@@ -1297,9 +1318,9 @@ public class LlmExtractorService implements ExtractorService {
 				continue;
 			}
 			String normalizedField = item.field().toLowerCase(Locale.ROOT).trim();
-			if (normalizedField.equals("layer")
-					|| normalizedField.equals("layer_notes")
-					|| normalizedField.equals("layernotes")) {
+			if (normalizedField.equals(FIELD_LAYER)
+					|| normalizedField.equals(FIELD_LAYER_NOTES)
+					|| normalizedField.equals(FIELD_LAYER_NOTES_COMPACT)) {
 				String reason = appendMissingReason(item.reason(), THEME_OVERRIDE_MISSING_REASON);
 				updated.add(new InstrumentDossierExtractionPayload.MissingFieldPayload(item.field(), reason));
 				changed = true;
@@ -1517,7 +1538,7 @@ public class LlmExtractorService implements ExtractorService {
 	private List<InstrumentDossierExtractionPayload.SectorExposurePayload> parseSectors(
 			JsonNode data,
 			List<InstrumentDossierExtractionPayload.WarningPayload> warnings) {
-		JsonNode array = arrayOrNull(data, "sectors", "sector_allocations", "sectorAllocations");
+		JsonNode array = arrayOrNull(data, FIELD_SECTORS, "sector_allocations", "sectorAllocations");
 		return parseSectorWeights(array, warnings);
 	}
 
@@ -1562,10 +1583,10 @@ public class LlmExtractorService implements ExtractorService {
 				continue;
 			}
 			String name = textOrNull(item, "name", "region");
-			BigDecimal weight = decimalOrNull(item, "weight_pct", "weightPct", "weight");
+			BigDecimal weight = decimalOrNull(item, FIELD_WEIGHT_PCT_SNAKE, FIELD_WEIGHT_PCT_CAMEL, FIELD_WEIGHT);
 			if (weight != null && (weight.compareTo(BigDecimal.ZERO) < 0 || weight.compareTo(new BigDecimal("100")) > 0)) {
 				warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
-						"Invalid weight_pct value (" + weight + "); expected 0..100, set to null."
+						WARNING_INVALID_WEIGHT_PCT_PREFIX + weight + WARNING_INVALID_WEIGHT_PCT_SUFFIX
 				));
 				weight = null;
 			}
@@ -1589,10 +1610,10 @@ public class LlmExtractorService implements ExtractorService {
 				continue;
 			}
 			String name = textOrNull(item, "name", "sector");
-			BigDecimal weight = decimalOrNull(item, "weight_pct", "weightPct", "weight");
+			BigDecimal weight = decimalOrNull(item, FIELD_WEIGHT_PCT_SNAKE, FIELD_WEIGHT_PCT_CAMEL, FIELD_WEIGHT);
 			if (weight != null && (weight.compareTo(BigDecimal.ZERO) < 0 || weight.compareTo(new BigDecimal("100")) > 0)) {
 				warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
-						"Invalid weight_pct value (" + weight + "); expected 0..100, set to null."
+						WARNING_INVALID_WEIGHT_PCT_PREFIX + weight + WARNING_INVALID_WEIGHT_PCT_SUFFIX
 				));
 				weight = null;
 			}
@@ -1616,10 +1637,10 @@ public class LlmExtractorService implements ExtractorService {
 				continue;
 			}
 			String name = textOrNull(item, "name", "holding", "issuer");
-			BigDecimal weight = decimalOrNull(item, "weight_pct", "weightPct", "weight");
+			BigDecimal weight = decimalOrNull(item, FIELD_WEIGHT_PCT_SNAKE, FIELD_WEIGHT_PCT_CAMEL, FIELD_WEIGHT);
 			if (weight != null && (weight.compareTo(BigDecimal.ZERO) < 0 || weight.compareTo(new BigDecimal("100")) > 0)) {
 				warnings.add(new InstrumentDossierExtractionPayload.WarningPayload(
-						"Invalid weight_pct value (" + weight + "); expected 0..100, set to null."
+						WARNING_INVALID_WEIGHT_PCT_PREFIX + weight + WARNING_INVALID_WEIGHT_PCT_SUFFIX
 				));
 				weight = null;
 			}

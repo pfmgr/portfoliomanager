@@ -35,6 +35,15 @@ import java.util.Optional;
 @Service
 public class LayerTargetConfigService {
 	private static final String DEFAULT_PROFILE_KEY = "BALANCED";
+	private static final String FIELD_PROFILES = "profiles";
+	private static final String FIELD_ENABLED = "enabled";
+	private static final String FIELD_LAYER_TARGETS = "layer_targets";
+	private static final String FIELD_ACCEPTABLE_VARIANCE_PCT = "acceptable_variance_pct";
+	private static final String FIELD_MINIMUM_SAVING_PLAN_SIZE = "minimum_saving_plan_size";
+	private static final String FIELD_MINIMUM_REBALANCING_AMOUNT = "minimum_rebalancing_amount";
+	private static final String CONSTRAINT_CORE_MIN = "core_min";
+	private static final String CONSTRAINT_LAYER5_MAX = "layer5_max";
+	private static final String CONSTRAINT_LAYER4_MAX = "layer4_max";
 	private static final BigDecimal DEFAULT_VARIANCE_PCT = new BigDecimal("3.0");
 	private static final int DEFAULT_MINIMUM_SAVING_PLAN_SIZE = 15;
 	private static final int DEFAULT_MINIMUM_REBALANCING_AMOUNT = 10;
@@ -279,12 +288,12 @@ public class LayerTargetConfigService {
 		try {
 			JsonNode root = jsonMapper.readTree(json);
 
-			if (root.isObject() && !root.has("profiles")) {
+			if (root.isObject() && !root.has(FIELD_PROFILES)) {
 				return parseLegacyConfig(root, updatedAt);
 			}
 
 			String activeProfile = extractText(root, "active_profile", DEFAULT_PROFILE_KEY);
-			Map<String, LayerTargetProfile> profiles = parseProfiles(root.path("profiles"));
+			Map<String, LayerTargetProfile> profiles = parseProfiles(root.path(FIELD_PROFILES));
 			if (profiles.isEmpty()) {
 				profiles = DEFAULT_PROFILES;
 			} else {
@@ -313,7 +322,7 @@ public class LayerTargetConfigService {
 
 	private LayerTargetConfigModel parseLegacyConfig(JsonNode root, OffsetDateTime updatedAt) {
 		Map<Integer, BigDecimal> legacyTargets = parseLayerTargets(root);
-		BigDecimal variance = parseVariance(root.path("acceptable_variance_pct"));
+		BigDecimal variance = parseVariance(root.path(FIELD_ACCEPTABLE_VARIANCE_PCT));
 		if (legacyTargets.isEmpty()) {
 			legacyTargets = DEFAULT_PROFILES.get(DEFAULT_PROFILE_KEY).getLayerTargets();
 		}
@@ -343,7 +352,7 @@ public class LayerTargetConfigService {
 			JsonNode profileNode = entry.getValue();
 			String displayName = extractText(profileNode, "display_name", key);
 			String description = extractText(profileNode, "description", "");
-			Map<Integer, BigDecimal> targetMap = parseLayerTargets(profileNode.path("layer_targets"));
+			Map<Integer, BigDecimal> targetMap = parseLayerTargets(profileNode.path(FIELD_LAYER_TARGETS));
 			if (targetMap.isEmpty()) {
 				targetMap = DEFAULT_PROFILES.containsKey(key) ?
 						DEFAULT_PROFILES.get(key).getLayerTargets() :
@@ -351,18 +360,18 @@ public class LayerTargetConfigService {
 			} else {
 				targetMap = normalizeTargets(targetMap);
 			}
-			BigDecimal variance = parseVariance(profileNode.path("acceptable_variance_pct"));
+			BigDecimal variance = parseVariance(profileNode.path(FIELD_ACCEPTABLE_VARIANCE_PCT));
 			if (variance == null) {
 				variance = DEFAULT_VARIANCE_PCT;
 			}
-			Integer minimumSavingPlanSize = parseMinimumSavingPlanSize(profileNode.path("minimum_saving_plan_size"));
+			Integer minimumSavingPlanSize = parseMinimumSavingPlanSize(profileNode.path(FIELD_MINIMUM_SAVING_PLAN_SIZE));
 			if (minimumSavingPlanSize == null) {
 				minimumSavingPlanSize = DEFAULT_PROFILES.containsKey(key)
 						? DEFAULT_PROFILES.get(key).getMinimumSavingPlanSize()
 						: DEFAULT_MINIMUM_SAVING_PLAN_SIZE;
 			}
 			minimumSavingPlanSize = minimumSavingPlanSizeOrDefault(minimumSavingPlanSize);
-			Integer minimumRebalancingAmount = parseMinimumRebalancingAmount(profileNode.path("minimum_rebalancing_amount"));
+			Integer minimumRebalancingAmount = parseMinimumRebalancingAmount(profileNode.path(FIELD_MINIMUM_REBALANCING_AMOUNT));
 			if (minimumRebalancingAmount == null) {
 				minimumRebalancingAmount = DEFAULT_PROFILES.containsKey(key)
 						? DEFAULT_PROFILES.get(key).getMinimumRebalancingAmount()
@@ -468,11 +477,11 @@ public class LayerTargetConfigService {
 		if (node == null || node.isMissingNode()) {
 			return null;
 		}
-		Map<Integer, BigDecimal> targets = parseLayerTargets(node.path("layer_targets"));
-		boolean enabled = node.has("enabled") ? node.path("enabled").asBoolean(false) : !targets.isEmpty();
-		BigDecimal variance = parseVariance(node.path("acceptable_variance_pct"));
-		Integer minimumSavingPlanSize = parseMinimumSavingPlanSize(node.path("minimum_saving_plan_size"));
-		Integer minimumRebalancingAmount = parseMinimumRebalancingAmount(node.path("minimum_rebalancing_amount"));
+		Map<Integer, BigDecimal> targets = parseLayerTargets(node.path(FIELD_LAYER_TARGETS));
+		boolean enabled = node.has(FIELD_ENABLED) ? node.path(FIELD_ENABLED).asBoolean(false) : !targets.isEmpty();
+		BigDecimal variance = parseVariance(node.path(FIELD_ACCEPTABLE_VARIANCE_PCT));
+		Integer minimumSavingPlanSize = parseMinimumSavingPlanSize(node.path(FIELD_MINIMUM_SAVING_PLAN_SIZE));
+		Integer minimumRebalancingAmount = parseMinimumRebalancingAmount(node.path(FIELD_MINIMUM_REBALANCING_AMOUNT));
 		String legacy = extractText(node, "legacy_import", null);
 		if (!enabled) {
 			return new LayerTargetCustomOverrides(false, Map.of(), null, null, null, legacy);
@@ -831,7 +840,7 @@ public class LayerTargetConfigService {
 	private String writeConfigJson(LayerTargetConfigModel config) {
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("active_profile", config.getActiveProfile());
-		payload.put("profiles", buildProfilesPayload(config.getProfiles()));
+		payload.put(FIELD_PROFILES, buildProfilesPayload(config.getProfiles()));
 		payload.put("layer_names", buildLayerNamesPayload(config.getLayerNames()));
 		payload.put("max_saving_plans_per_layer", buildMaxSavingPlansPayload(config.getMaxSavingPlansPerLayer()));
 		payload.put("custom_overrides", buildOverridesPayload(config.getCustomOverrides()));
@@ -852,13 +861,13 @@ public class LayerTargetConfigService {
 			Map<String, Object> profileData = new LinkedHashMap<>();
 			profileData.put("display_name", profile.getDisplayName());
 			profileData.put("description", profile.getDescription());
-			profileData.put("layer_targets", buildLayerTargetsPayload(profile.getLayerTargets()));
-			profileData.put("acceptable_variance_pct", profile.getAcceptableVariancePct());
+			profileData.put(FIELD_LAYER_TARGETS, buildLayerTargetsPayload(profile.getLayerTargets()));
+			profileData.put(FIELD_ACCEPTABLE_VARIANCE_PCT, profile.getAcceptableVariancePct());
 			if (profile.getMinimumSavingPlanSize() != null) {
-				profileData.put("minimum_saving_plan_size", profile.getMinimumSavingPlanSize());
+				profileData.put(FIELD_MINIMUM_SAVING_PLAN_SIZE, profile.getMinimumSavingPlanSize());
 			}
 			if (profile.getMinimumRebalancingAmount() != null) {
-				profileData.put("minimum_rebalancing_amount", profile.getMinimumRebalancingAmount());
+				profileData.put(FIELD_MINIMUM_REBALANCING_AMOUNT, profile.getMinimumRebalancingAmount());
 			}
 			if (profile.getProjectionHorizonMonths() != null) {
 				profileData.put("projection_horizon_months", profile.getProjectionHorizonMonths());
@@ -943,21 +952,21 @@ public class LayerTargetConfigService {
 	private Map<String, Object> buildOverridesPayload(LayerTargetCustomOverrides overrides) {
 		Map<String, Object> payload = new LinkedHashMap<>();
 		if (overrides == null) {
-			payload.put("enabled", false);
+			payload.put(FIELD_ENABLED, false);
 			return payload;
 		}
-		payload.put("enabled", overrides.isEnabled());
+		payload.put(FIELD_ENABLED, overrides.isEnabled());
 		if (overrides.getLayerTargets() != null && !overrides.getLayerTargets().isEmpty()) {
-			payload.put("layer_targets", buildLayerTargetsPayload(overrides.getLayerTargets()));
+			payload.put(FIELD_LAYER_TARGETS, buildLayerTargetsPayload(overrides.getLayerTargets()));
 		}
 		if (overrides.getAcceptableVariancePct() != null) {
-			payload.put("acceptable_variance_pct", overrides.getAcceptableVariancePct());
+			payload.put(FIELD_ACCEPTABLE_VARIANCE_PCT, overrides.getAcceptableVariancePct());
 		}
 		if (overrides.getMinimumSavingPlanSize() != null) {
-			payload.put("minimum_saving_plan_size", overrides.getMinimumSavingPlanSize());
+			payload.put(FIELD_MINIMUM_SAVING_PLAN_SIZE, overrides.getMinimumSavingPlanSize());
 		}
 		if (overrides.getMinimumRebalancingAmount() != null) {
-			payload.put("minimum_rebalancing_amount", overrides.getMinimumRebalancingAmount());
+			payload.put(FIELD_MINIMUM_REBALANCING_AMOUNT, overrides.getMinimumRebalancingAmount());
 		}
 		if (overrides.getLegacyImport() != null) {
 			payload.put("legacy_import", overrides.getLegacyImport());
@@ -1369,15 +1378,15 @@ public class LayerTargetConfigService {
 				DEFAULT_PROJECTION_BLEND_MIN,
 				DEFAULT_PROJECTION_BLEND_MAX,
 				Map.of(
-						"core_min", new BigDecimal("0.70"),
-						"layer5_max", new BigDecimal("0.03"),
-						"layer4_max", new BigDecimal("0.05")
+						CONSTRAINT_CORE_MIN, new BigDecimal("0.70"),
+						CONSTRAINT_LAYER5_MAX, new BigDecimal("0.03"),
+						CONSTRAINT_LAYER4_MAX, new BigDecimal("0.05")
 				),
 				createRiskThresholdsByLayer(25, 41),
 				createRiskThresholds(25, 41)
 		));
-		profiles.put("BALANCED", new LayerTargetProfile(
-				"BALANCED",
+		profiles.put(DEFAULT_PROFILE_KEY, new LayerTargetProfile(
+				DEFAULT_PROFILE_KEY,
 				"Balanced",
 				"Balanced mix of core and satellite themes.",
 				createLayerTargets(0.70, 0.20, 0.08, 0.02, 0.00),
@@ -1388,9 +1397,9 @@ public class LayerTargetConfigService {
 				DEFAULT_PROJECTION_BLEND_MIN,
 				DEFAULT_PROJECTION_BLEND_MAX,
 				Map.of(
-						"core_min", new BigDecimal("0.70"),
-						"layer5_max", new BigDecimal("0.03"),
-						"layer4_max", new BigDecimal("0.05")
+						CONSTRAINT_CORE_MIN, new BigDecimal("0.70"),
+						CONSTRAINT_LAYER5_MAX, new BigDecimal("0.03"),
+						CONSTRAINT_LAYER4_MAX, new BigDecimal("0.05")
 				),
 				createRiskThresholdsByLayer(30, 51),
 				createRiskThresholds(30, 51)
@@ -1407,9 +1416,9 @@ public class LayerTargetConfigService {
 				DEFAULT_PROJECTION_BLEND_MIN,
 				DEFAULT_PROJECTION_BLEND_MAX,
 				Map.of(
-						"core_min", new BigDecimal("0.70"),
-						"layer5_max", new BigDecimal("0.03"),
-						"layer4_max", new BigDecimal("0.10")
+						CONSTRAINT_CORE_MIN, new BigDecimal("0.70"),
+						CONSTRAINT_LAYER5_MAX, new BigDecimal("0.03"),
+						CONSTRAINT_LAYER4_MAX, new BigDecimal("0.10")
 				),
 				createRiskThresholdsByLayer(35, 59),
 				createRiskThresholds(35, 59)
@@ -1426,9 +1435,9 @@ public class LayerTargetConfigService {
 				DEFAULT_PROJECTION_BLEND_MIN,
 				DEFAULT_PROJECTION_BLEND_MAX,
 				Map.of(
-						"core_min", new BigDecimal("0.60"),
-						"layer5_max", new BigDecimal("0.03"),
-						"layer4_max", new BigDecimal("0.20")
+						CONSTRAINT_CORE_MIN, new BigDecimal("0.60"),
+						CONSTRAINT_LAYER5_MAX, new BigDecimal("0.03"),
+						CONSTRAINT_LAYER4_MAX, new BigDecimal("0.20")
 				),
 				createRiskThresholdsByLayer(38, 63),
 				createRiskThresholds(38, 63)
@@ -1445,9 +1454,9 @@ public class LayerTargetConfigService {
 				DEFAULT_PROJECTION_BLEND_MIN,
 				DEFAULT_PROJECTION_BLEND_MAX,
 				Map.of(
-						"core_min", new BigDecimal("0.60"),
-						"layer5_max", new BigDecimal("0.03"),
-						"layer4_max", new BigDecimal("0.20")
+						CONSTRAINT_CORE_MIN, new BigDecimal("0.60"),
+						CONSTRAINT_LAYER5_MAX, new BigDecimal("0.03"),
+						CONSTRAINT_LAYER4_MAX, new BigDecimal("0.20")
 				),
 				createRiskThresholdsByLayer(40, 66),
 				createRiskThresholds(40, 66)
