@@ -28,12 +28,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(classes = my.portfoliomanager.app.AppApplication.class)
 @ActiveProfiles("test")
-@Import(AdvisorServiceTest.TestConfig.class)
-class AdvisorServiceTest {
+@Import(RebalancerServiceTest.TestConfig.class)
+class RebalancerServiceTest {
 	private static final String JWT_SECRET = UUID.randomUUID().toString();
 
 	@Autowired
-	private AdvisorService advisorService;
+	private RebalancerService rebalancerService;
 
 	@Autowired
 	private LayerTargetConfigService layerTargetConfigService;
@@ -79,7 +79,7 @@ class AdvisorServiceTest {
 
 	@Test
 	void summaryProvidesLayerAllocation() {
-		var summary = advisorService.summary(null);
+		var summary = rebalancerService.summary(null);
 		assertThat(summary.layerAllocations()).isNotEmpty();
 		assertThat(summary.assetClassAllocations()).isNotEmpty();
 		assertThat(summary.topPositions()).isNotEmpty();
@@ -112,7 +112,7 @@ class AdvisorServiceTest {
 
 	@Test
 	void summaryAsOfUsesSnapshotHistory() {
-		var summary = advisorService.summary(LocalDate.now());
+		var summary = rebalancerService.summary(LocalDate.now());
 		assertThat(summary.layerAllocations()).isNotEmpty();
 	}
 
@@ -120,7 +120,7 @@ class AdvisorServiceTest {
 	void summaryUsesEffectiveInstrumentLayersAndAssetClasses() {
 		jdbcTemplate.update("insert into instrument_overrides (isin, layer, asset_class) values ('DE000B', 4, 'Themes')");
 
-		var summary = advisorService.summary(null);
+		var summary = rebalancerService.summary(null);
 
 		assertThat(summary.layerAllocations())
 				.anyMatch(allocation -> "4".equals(allocation.label()) && allocation.valueEur() == 2000.0d);
@@ -167,7 +167,7 @@ class AdvisorServiceTest {
 		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (13, 1, 'L3', 80.00, 'monthly', true)");
 		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (14, 1, 'L4', 20.00, 'monthly', true)");
 
-		var summary = advisorService.summary(null);
+		var summary = rebalancerService.summary(null);
 		assertThat(summary.savingPlanProposal()).isNotNull();
 		var layers = summary.savingPlanProposal().getLayers();
 		double totalTarget = layers.stream()
@@ -201,7 +201,7 @@ class AdvisorServiceTest {
 		jdbcTemplate.update("delete from sparplans");
 		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (3, 1, 'DE000S', 10.00, 'monthly', true)");
 
-		var summary = advisorService.summary(null);
+		var summary = rebalancerService.summary(null);
 
 		assertThat(summary.savingPlanSummary().monthlyTotalAmountEur()).isEqualTo(10.0d);
 		assertThat(summary.savingPlanProposal()).isNotNull();
@@ -242,7 +242,7 @@ class AdvisorServiceTest {
 				null
 		);
 		layerTargetConfigService.saveConfig(request12);
-		var summary12 = advisorService.summary(null);
+		var summary12 = rebalancerService.summary(null);
 		assertThat(summary12.savingPlanProposal()).isNotNull();
 		double delta12 = distributionDelta(summary12.savingPlanProposal());
 
@@ -261,7 +261,7 @@ class AdvisorServiceTest {
 				null
 		);
 		layerTargetConfigService.saveConfig(request120);
-		var summary120 = advisorService.summary(null);
+		var summary120 = rebalancerService.summary(null);
 		assertThat(summary120.savingPlanProposal()).isNotNull();
 		double delta120 = distributionDelta(summary120.savingPlanProposal());
 

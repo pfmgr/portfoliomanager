@@ -20,6 +20,16 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     private static final Logger logger = LoggerFactory.getLogger(OpenAiLlmClient.class);
     private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofMinutes(5);
     private static final Duration DEFAULT_READ_TIMEOUT = Duration.ofMinutes(5);
+    private static final String MODEL_KEY = "model";
+    private static final String MESSAGES_KEY = "messages";
+    private static final String ROLE_KEY = "role";
+    private static final String CONTENT_KEY = "content";
+    private static final String ROLE_SYSTEM = "system";
+    private static final String ROLE_USER = "user";
+    private static final String RESPONSE_ORIGIN_PREFIX = "openai(model=";
+    private static final String REASONING_KEY = "reasoning";
+    private static final String EFFORT_KEY = "effort";
+    private static final String UNKNOWN_VALUE = "unknown";
     public static final List<String> allowedWebSearchDomains = List.of("justetf.com", "ishares.com", "vanguard.com", "ssga.com",
             "spdrs.com", "amundietf.com", "wisdomtree.eu", "invesco.com", "vaneck.com",
             "xtrackers.com", "blackrock.com", "statestreet.com", "lyxoretf.com", "openfigi.com",
@@ -50,9 +60,9 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 
     @Override
     public LlmSuggestion suggestReclassification(String context) {
-        Map<String, Object> request = Map.of("model", model, "messages",
-                List.of(Map.of("role", "system", "content", "Provide reclassification suggestion only."),
-                        Map.of("role", "user", "content", context)));
+        Map<String, Object> request = Map.of(MODEL_KEY, model, MESSAGES_KEY,
+                List.of(Map.of(ROLE_KEY, ROLE_SYSTEM, CONTENT_KEY, "Provide reclassification suggestion only."),
+                        Map.of(ROLE_KEY, ROLE_USER, CONTENT_KEY, context)));
         return getSuggestionFromChatCompletionsAPI(request);
     }
 
@@ -73,16 +83,16 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         if (!(message instanceof Map<?, ?> msgMap)) {
             return new LlmSuggestion("", "Invalid message");
         }
-        Object content = msgMap.get("content");
+        Object content = msgMap.get(CONTENT_KEY);
         return new LlmSuggestion(content == null ? "" : content.toString(), "openai");
     }
 
     @Override
     public LlmSuggestion suggestSavingPlanProposal(String context) {
-        Map<String, Object> request = Map.of("model", model, "messages",
-                List.of(Map.of("role", "system", "content",
+        Map<String, Object> request = Map.of(MODEL_KEY, model, MESSAGES_KEY,
+                List.of(Map.of(ROLE_KEY, ROLE_SYSTEM, CONTENT_KEY,
                                 "Provide a short savingPlan proposal narrative/explanation in plain text only."),
-                        Map.of("role", "user", "content", context)));
+                        Map.of(ROLE_KEY, ROLE_USER, CONTENT_KEY, context)));
         return getSuggestionFromChatCompletionsAPI(request);
     }
 
@@ -92,7 +102,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
             KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, null);
             return new LlmSuggestion(response.output(), response.model());
         } catch (LlmRequestException ex) {
-            return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
+            return llmErrorSuggestion(ex);
         }
     }
 
@@ -102,7 +112,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
             KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, null, schemaName, schema);
             return new LlmSuggestion(response.output(), response.model());
         } catch (LlmRequestException ex) {
-            return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
+            return llmErrorSuggestion(ex);
         }
     }
 
@@ -112,7 +122,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
             KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, reasoningEffort);
             return new LlmSuggestion(response.output(), response.model());
         } catch (LlmRequestException ex) {
-            return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
+            return llmErrorSuggestion(ex);
         }
     }
 
@@ -125,7 +135,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
             KnowledgeBaseLlmResponse response = runWebSearch(context, allowedWebSearchDomains, reasoningEffort, schemaName, schema);
             return new LlmSuggestion(response.output(), response.model());
         } catch (LlmRequestException ex) {
-            return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
+            return llmErrorSuggestion(ex);
         }
     }
 
@@ -135,7 +145,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
             KnowledgeBaseLlmResponse response = runJsonPrompt(context);
             return new LlmSuggestion(response.output(), response.model());
         } catch (LlmRequestException ex) {
-            return new LlmSuggestion("", "openai(model=" + model + "): " + ex.getMessage());
+            return llmErrorSuggestion(ex);
         }
     }
 
@@ -180,12 +190,12 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
                                                        String schemaName,
                                                        Map<String, Object> schema) {
         Map<String, Object> request = new HashMap<>();
-        request.put("model", model);
+        request.put(MODEL_KEY, model);
         request.put("input", List.of(
-                Map.of("role", "system", "content", "Respond in JSON only. Do not wrap in Markdown code fences."),
-                Map.of("role", "user", "content", prompt)
+                Map.of(ROLE_KEY, ROLE_SYSTEM, CONTENT_KEY, "Respond in JSON only. Do not wrap in Markdown code fences."),
+                Map.of(ROLE_KEY, ROLE_USER, CONTENT_KEY, prompt)
         ));
-        request.put("reasoning", Map.of("effort", "low"));
+        request.put(REASONING_KEY, Map.of(EFFORT_KEY, "low"));
         if (schemaName != null && schema != null) {
             request.put("text", Map.of("format", Map.of(
                     "type", "json_schema",
@@ -205,13 +215,13 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         List<String> domains = allowedDomains == null || allowedDomains.isEmpty() ? allowedWebSearchDomains : allowedDomains;
         String effort = normalizeReasoningEffort(reasoningEffort);
         Map<String, Object> request = new HashMap<>();
-        request.put("model", model);
+        request.put(MODEL_KEY, model);
         request.put("input", List.of(
-                Map.of("role", "system", "content", "Respond in JSON only. Do not wrap in Markdown code fences."),
-                Map.of("role", "user", "content", prompt)
+                Map.of(ROLE_KEY, ROLE_SYSTEM, CONTENT_KEY, "Respond in JSON only. Do not wrap in Markdown code fences."),
+                Map.of(ROLE_KEY, ROLE_USER, CONTENT_KEY, prompt)
         ));
         request.put("tools", List.of(Map.of("type", "web_search", "filters", Map.of("allowed_domains", domains))));
-        request.put("reasoning", Map.of("effort", effort));
+        request.put(REASONING_KEY, Map.of(EFFORT_KEY, effort));
         if (schemaName != null && schema != null) {
             request.put("text", Map.of("format", Map.of(
                     "type", "json_schema",
@@ -269,32 +279,43 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         }
         StringBuilder combined = new StringBuilder();
         for (Object outputItem : outputList) {
-            if (!(outputItem instanceof Map<?, ?> outputMap)) {
-                continue;
-            }
-            Object content = outputMap.get("content");
-            if (!(content instanceof List<?> contentList)) {
-                continue;
-            }
-            for (Object contentItem : contentList) {
-                if (!(contentItem instanceof Map<?, ?> contentMap)) {
-                    continue;
-                }
-                Object type = contentMap.get("type");
-                if (type != null && !"output_text".equals(type.toString())) {
-                    continue;
-                }
-                Object text = contentMap.get("text");
-                if (text == null) {
-                    continue;
-                }
-                if (!combined.isEmpty()) {
-                    combined.append("\n");
-                }
-                combined.append(text);
-            }
+            appendOutputText(combined, outputItem);
         }
         return combined.toString();
+    }
+
+    private void appendOutputText(StringBuilder combined, Object outputItem) {
+        if (!(outputItem instanceof Map<?, ?> outputMap)) {
+            return;
+        }
+        Object content = outputMap.get(CONTENT_KEY);
+        if (!(content instanceof List<?> contentList)) {
+            return;
+        }
+        for (Object contentItem : contentList) {
+            appendContentText(combined, contentItem);
+        }
+    }
+
+    private void appendContentText(StringBuilder combined, Object contentItem) {
+        if (!(contentItem instanceof Map<?, ?> contentMap)) {
+            return;
+        }
+        if (!isOutputTextType(contentMap.get("type"))) {
+            return;
+        }
+        Object text = contentMap.get("text");
+        if (text == null) {
+            return;
+        }
+        if (!combined.isEmpty()) {
+            combined.append("\n");
+        }
+        combined.append(text);
+    }
+
+    private boolean isOutputTextType(Object type) {
+        return type == null || "output_text".equals(type.toString());
     }
 
     private boolean isRetryable(RestClientResponseException ex) {
@@ -317,7 +338,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 
     private void logResponseError(RestClientResponseException ex, Map<String, Object> request) {
         String contentType = ex.getResponseHeaders() == null || ex.getResponseHeaders().getContentType() == null
-                ? "unknown"
+                ? UNKNOWN_VALUE
                 : ex.getResponseHeaders().getContentType().toString();
         int bodyLength = ex.getResponseBodyAsByteArray() == null ? 0 : ex.getResponseBodyAsByteArray().length;
         String effort = extractReasoningEffort(request);
@@ -334,14 +355,18 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 
     private String extractReasoningEffort(Map<String, Object> request) {
         if (request == null) {
-            return "unknown";
+            return UNKNOWN_VALUE;
         }
-        Object reasoning = request.get("reasoning");
+        Object reasoning = request.get(REASONING_KEY);
         if (!(reasoning instanceof Map<?, ?> map)) {
-            return "unknown";
+            return UNKNOWN_VALUE;
         }
-        Object effort = map.get("effort");
-        return effort == null ? "unknown" : effort.toString();
+        Object effort = map.get(EFFORT_KEY);
+        return effort == null ? UNKNOWN_VALUE : effort.toString();
+    }
+
+    private LlmSuggestion llmErrorSuggestion(LlmRequestException ex) {
+        return new LlmSuggestion("", RESPONSE_ORIGIN_PREFIX + model + "): " + ex.getMessage());
     }
 
     private String safeMessage(Exception ex) {

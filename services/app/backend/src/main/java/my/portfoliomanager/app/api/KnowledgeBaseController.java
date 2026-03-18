@@ -44,6 +44,8 @@ import java.util.Locale;
 @RequestMapping("/api/kb")
 @Tag(name = "Knowledge Base")
 public class KnowledgeBaseController {
+	private static final String SYSTEM_USER = "system";
+
 	private final KnowledgeBaseService knowledgeBaseService;
 	private final KnowledgeBaseLlmActionService actionService;
 	private final KnowledgeBaseAvailabilityService availabilityService;
@@ -100,18 +102,18 @@ public class KnowledgeBaseController {
 	@PostMapping("/dossiers")
 	@Operation(summary = "Create dossier")
 	public InstrumentDossierResponseDto createDossier(@Valid @RequestBody InstrumentDossierCreateRequest request,
-												  Principal principal) {
+											  Principal principal) {
 		availabilityService.assertEnabled();
-		String createdBy = principal == null ? "system" : principal.getName();
+		String createdBy = actorName(principal);
 		return knowledgeBaseService.createDossier(request, createdBy);
 	}
 
 	@PostMapping("/dossiers/bulk-research")
 	@Operation(summary = "Run bulk KB research")
 	public KnowledgeBaseLlmActionDto bulkResearch(@Valid @RequestBody KnowledgeBaseBulkResearchRequestDto request,
-												 Principal principal) {
+											 Principal principal) {
 		availabilityService.assertLlmAvailable();
-		String actor = principal == null ? "system" : principal.getName();
+		String actor = actorName(principal);
 		return actionService.startBulkResearch(request.isins(), request.autoApprove(), request.applyToOverrides(), actor,
 				KnowledgeBaseLlmActionTrigger.USER);
 	}
@@ -128,11 +130,7 @@ public class KnowledgeBaseController {
 	public KnowledgeBaseLlmActionDto refreshDossier(@PathVariable("isin") String isin,
 										@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
 										Principal principal) {
-		availabilityService.assertLlmAvailable();
-		String actor = principal == null ? "system" : principal.getName();
-		Boolean autoApprove = request == null ? null : request.autoApprove();
-		Boolean force = request == null ? null : request.force();
-		return actionService.startRefreshSingle(isin, actor, autoApprove, force, KnowledgeBaseLlmActionTrigger.USER);
+		return startRefreshSingle(isin, request, principal);
 	}
 
 	@PostMapping("/alternatives/{isin:[A-Z0-9]{12}}")
@@ -141,7 +139,7 @@ public class KnowledgeBaseController {
 													  @RequestBody(required = false) KnowledgeBaseAlternativesRequestDto request,
 													  Principal principal) {
 		availabilityService.assertWebsearchAvailable();
-		String actor = principal == null ? "system" : principal.getName();
+		String actor = actorName(principal);
 		Boolean autoApprove = request == null ? null : request.autoApprove();
 		return actionService.startAlternatives(isin, autoApprove, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
@@ -151,7 +149,7 @@ public class KnowledgeBaseController {
 	public KnowledgeBaseLlmActionDto refreshBatch(@RequestBody(required = false) KnowledgeBaseRefreshBatchRequestDto request,
 												  Principal principal) {
 		availabilityService.assertLlmAvailable();
-		String actor = principal == null ? "system" : principal.getName();
+		String actor = actorName(principal);
 		return actionService.startRefreshBatch(request, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
@@ -160,11 +158,7 @@ public class KnowledgeBaseController {
 	public KnowledgeBaseLlmActionDto refreshSingle(@PathVariable("isin") String isin,
 									   @RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
 									   Principal principal) {
-		availabilityService.assertLlmAvailable();
-		String actor = principal == null ? "system" : principal.getName();
-		Boolean autoApprove = request == null ? null : request.autoApprove();
-		Boolean force = request == null ? null : request.force();
-		return actionService.startRefreshSingle(isin, actor, autoApprove, force, KnowledgeBaseLlmActionTrigger.USER);
+		return startRefreshSingle(isin, request, principal);
 	}
 
 	@PostMapping("/dossiers/websearch")
@@ -179,7 +173,7 @@ public class KnowledgeBaseController {
 	public InstrumentDossierBulkWebsearchJobResponseDto startBulkWebsearchDraft(@Valid @RequestBody InstrumentDossierBulkWebsearchRequest request,
 													Principal principal) {
 		availabilityService.assertWebsearchAvailable();
-		String createdBy = principal == null ? "system" : principal.getName();
+		String createdBy = actorName(principal);
 		return bulkWebsearchJobService.start(request.isins(), createdBy);
 	}
 
@@ -214,10 +208,10 @@ public class KnowledgeBaseController {
 	@PutMapping("/dossiers/{id:\\d+}")
 	@Operation(summary = "Update dossier")
 	public InstrumentDossierResponseDto updateDossier(@PathVariable("id") Long dossierId,
-												  @Valid @RequestBody InstrumentDossierUpdateRequest request,
-												  Principal principal) {
+										  @Valid @RequestBody InstrumentDossierUpdateRequest request,
+										  Principal principal) {
 		availabilityService.assertEnabled();
-		String updatedBy = principal == null ? "system" : principal.getName();
+		String updatedBy = actorName(principal);
 		return knowledgeBaseService.updateDossier(dossierId, request, updatedBy);
 	}
 
@@ -225,7 +219,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Approve dossier")
 	public InstrumentDossierResponseDto approveDossier(@PathVariable("id") Long dossierId, Principal principal) {
 		availabilityService.assertEnabled();
-		String approvedBy = principal == null ? "system" : principal.getName();
+		String approvedBy = actorName(principal);
 		return knowledgeBaseService.approveDossier(dossierId, approvedBy);
 	}
 
@@ -233,7 +227,7 @@ public class KnowledgeBaseController {
 	@Operation(summary = "Reject dossier")
 	public InstrumentDossierResponseDto rejectDossier(@PathVariable("id") Long dossierId, Principal principal) {
 		availabilityService.assertEnabled();
-		String rejectedBy = principal == null ? "system" : principal.getName();
+		String rejectedBy = actorName(principal);
 		return knowledgeBaseService.rejectDossier(dossierId, rejectedBy);
 	}
 
@@ -242,16 +236,16 @@ public class KnowledgeBaseController {
 	public KnowledgeBaseLlmActionDto runExtraction(@PathVariable("id") Long dossierId,
 								   Principal principal) {
 		availabilityService.assertExtractionAvailable();
-		String actor = principal == null ? "system" : principal.getName();
+		String actor = actorName(principal);
 		return actionService.startExtraction(dossierId, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
 	@PostMapping("/dossiers/{id:\\d+}/complete-missing-metrics")
 	@Operation(summary = "Complete missing metrics for dossier")
 	public KnowledgeBaseLlmActionDto completeMissingMetrics(@PathVariable("id") Long dossierId,
-														   Principal principal) {
+												   Principal principal) {
 		availabilityService.assertLlmAvailable();
-		String actor = principal == null ? "system" : principal.getName();
+		String actor = actorName(principal);
 		return actionService.startMissingMetrics(dossierId, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
@@ -267,7 +261,7 @@ public class KnowledgeBaseController {
 	public InstrumentDossierExtractionResponseDto approveExtraction(@PathVariable("id") Long extractionId,
 													Principal principal) {
 		availabilityService.assertEnabled();
-		String approvedBy = principal == null ? "system" : principal.getName();
+		String approvedBy = actorName(principal);
 		return knowledgeBaseService.approveExtraction(extractionId, approvedBy);
 	}
 
@@ -276,7 +270,7 @@ public class KnowledgeBaseController {
 	public InstrumentDossierExtractionResponseDto rejectExtraction(@PathVariable("id") Long extractionId,
 												  Principal principal) {
 		availabilityService.assertEnabled();
-		String rejectedBy = principal == null ? "system" : principal.getName();
+		String rejectedBy = actorName(principal);
 		return knowledgeBaseService.rejectExtraction(extractionId, rejectedBy);
 	}
 
@@ -285,7 +279,21 @@ public class KnowledgeBaseController {
 	public InstrumentDossierExtractionResponseDto applyExtraction(@PathVariable("id") Long extractionId,
 												  Principal principal) {
 		availabilityService.assertEnabled();
-		String appliedBy = principal == null ? "system" : principal.getName();
+		String appliedBy = actorName(principal);
 		return knowledgeBaseService.applyExtraction(extractionId, appliedBy);
+	}
+
+	private KnowledgeBaseLlmActionDto startRefreshSingle(String isin,
+										KnowledgeBaseRefreshRequestDto request,
+										Principal principal) {
+		availabilityService.assertLlmAvailable();
+		String actor = actorName(principal);
+		Boolean autoApprove = request == null ? null : request.autoApprove();
+		Boolean force = request == null ? null : request.force();
+		return actionService.startRefreshSingle(isin, actor, autoApprove, force, KnowledgeBaseLlmActionTrigger.USER);
+	}
+
+	private String actorName(Principal principal) {
+		return principal == null ? SYSTEM_USER : principal.getName();
 	}
 }

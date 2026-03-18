@@ -13,58 +13,80 @@ public class RulesetValidator {
 			errors.add("Ruleset is empty");
 			return errors;
 		}
+		validateTopLevel(definition, errors);
+		if (definition.getRules() == null) {
+			errors.add("rules must be provided");
+			return errors;
+		}
+		for (RuleDefinition rule : definition.getRules()) {
+			validateRule(rule, errors);
+		}
+		return errors;
+	}
+
+	private void validateTopLevel(RulesetDefinition definition, List<String> errors) {
 		if (definition.getSchemaVersion() != 1) {
 			errors.add("schema_version must be 1");
 		}
 		if (definition.getName() == null || definition.getName().isBlank()) {
 			errors.add("name is required");
 		}
-		if (definition.getDefaults() != null && definition.getDefaults().getLayer() != null) {
-			Integer layer = definition.getDefaults().getLayer();
-			if (layer < 1 || layer > 5) {
-				errors.add("defaults.layer must be between 1 and 5");
-			}
+		if (definition.getDefaults() == null || definition.getDefaults().getLayer() == null) {
+			return;
 		}
-		if (definition.getRules() == null) {
-			errors.add("rules must be provided");
-			return errors;
+		if (!isValidLayer(definition.getDefaults().getLayer())) {
+			errors.add("defaults.layer must be between 1 and 5");
 		}
-		for (RuleDefinition rule : definition.getRules()) {
-			if (rule.getId() == null || rule.getId().isBlank()) {
-				errors.add("rule.id is required");
-			}
-			if (rule.getMatch() == null) {
-				errors.add("rule.match is required");
-			} else {
-				String operator = rule.getMatch().getOperator();
-				if (operator == null || !OPERATORS.contains(operator)) {
-					errors.add("rule.match.operator must be one of " + OPERATORS);
-				} else {
-					if (operator.equals("IN") || operator.equals("CONTAINS_ANY")) {
-						if (rule.getMatch().getValues() == null || rule.getMatch().getValues().isEmpty()) {
-							errors.add("rule.match.values must not be empty for " + operator);
-						}
-					} else {
-						if (rule.getMatch().getValue() == null || rule.getMatch().getValue().isBlank()) {
-							errors.add("rule.match.value must not be empty for " + operator);
-						}
-					}
-				}
-				if (rule.getMatch().getField() == null || rule.getMatch().getField().isBlank()) {
-					errors.add("rule.match.field is required");
-				}
-			}
-			if (rule.getActions() == null) {
-				errors.add("rule.actions is required");
-			} else {
-				if (rule.getActions().getLayer() != null) {
-					Integer layer = rule.getActions().getLayer();
-					if (layer < 1 || layer > 5) {
-						errors.add("rule.actions.layer must be between 1 and 5");
-					}
-				}
-			}
+	}
+
+	private void validateRule(RuleDefinition rule, List<String> errors) {
+		if (rule.getId() == null || rule.getId().isBlank()) {
+			errors.add("rule.id is required");
 		}
-		return errors;
+		validateMatch(rule.getMatch(), errors);
+		validateActions(rule.getActions(), errors);
+	}
+
+	private void validateMatch(MatchDefinition match, List<String> errors) {
+		if (match == null) {
+			errors.add("rule.match is required");
+			return;
+		}
+		String operator = match.getOperator();
+		if (operator == null || !OPERATORS.contains(operator)) {
+			errors.add("rule.match.operator must be one of " + OPERATORS);
+		} else {
+			validateMatchValues(match, operator, errors);
+		}
+		if (match.getField() == null || match.getField().isBlank()) {
+			errors.add("rule.match.field is required");
+		}
+	}
+
+	private void validateMatchValues(MatchDefinition match, String operator, List<String> errors) {
+		if ("IN".equals(operator) || "CONTAINS_ANY".equals(operator)) {
+			if (match.getValues() == null || match.getValues().isEmpty()) {
+				errors.add("rule.match.values must not be empty for " + operator);
+			}
+			return;
+		}
+		if (match.getValue() == null || match.getValue().isBlank()) {
+			errors.add("rule.match.value must not be empty for " + operator);
+		}
+	}
+
+	private void validateActions(ActionsDefinition actions, List<String> errors) {
+		if (actions == null) {
+			errors.add("rule.actions is required");
+			return;
+		}
+		Integer layer = actions.getLayer();
+		if (layer != null && !isValidLayer(layer)) {
+			errors.add("rule.actions.layer must be between 1 and 5");
+		}
+	}
+
+	private boolean isValidLayer(Integer layer) {
+		return layer != null && layer >= 1 && layer <= 5;
 	}
 }

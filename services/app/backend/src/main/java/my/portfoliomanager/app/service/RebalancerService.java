@@ -23,6 +23,7 @@ import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,11 +42,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Service
-public class AdvisorService {
-	private static final Logger logger = LoggerFactory.getLogger(AdvisorService.class);
+public class RebalancerService {
+	private static final Logger logger = LoggerFactory.getLogger(RebalancerService.class);
 	private static final int INSTRUMENT_HIGHLIGHT_LIMIT = 8;
 	private static final int INSTRUMENT_WEIGHT_LIMIT = 5;
 	private static final int DEFAULT_PROJECTION_HORIZON_MONTHS = 12;
@@ -56,6 +58,17 @@ public class AdvisorService {
 	private static final int DEFAULT_MIN_INSTRUMENT_AMOUNT = 25;
 	private static final String REASON_GAP_SUGGESTION = "KB_GAP_SUGGESTION";
 	private static final String WARNING_RISK_NOT_ACCEPTABLE = "RISK_NOT_ACCEPTABLE";
+	private static final String COLUMN_RUN_ID = "run_id";
+	private static final String COLUMN_AS_OF_DATE = "as_of_date";
+	private static final String COLUMN_VALUE_EUR = "value_eur";
+	private static final String COLUMN_LAYER = "layer";
+	private static final String REASON_MIN_REBALANCE_AMOUNT = "MIN_REBALANCE_AMOUNT";
+	private static final String LABEL_LAYER_PREFIX = "Layer ";
+	private static final String DISCARD_ISIN_PREFIX = "{isin=";
+	private static final String DISCARD_NAME_PREFIX = ", name=";
+	private static final String CONSTRAINT_CORE_MIN = "core_min";
+	private static final String CONSTRAINT_LAYER4_MAX = "layer4_max";
+	private static final String CONSTRAINT_LAYER5_MAX = "layer5_max";
 
 	private final JdbcTemplate jdbcTemplate;
 	private final ObjectMapper summaryMapper;
@@ -76,7 +89,52 @@ public class AdvisorService {
 			values (?, cast(? as jsonb), cast(? as jsonb), ?, ?)
 			""";
 
-	public AdvisorService(JdbcTemplate jdbcTemplate,
+	private record NarrativeContext(
+			SavingPlanMetrics metrics,
+			LayerTargetEffectiveConfig targetConfig,
+			Map<Integer, Double> actualDistribution,
+			Map<Integer, Double> targetDistribution,
+			Map<Integer, Double> proposedDistribution,
+			boolean withinTolerance,
+			List<ConstraintResultDto> constraints,
+			boolean minimumSavingPlanRebalanced,
+			boolean minimumSavingPlanIncreaseLayerOne,
+			Integer minimumSavingPlanSize,
+			BigDecimal proposedLayerOneAmount,
+			List<InstrumentDiscard> instrumentDiscards,
+			List<InstrumentProposalDto> instrumentProposals,
+			List<InstrumentRebalanceService.LayerWeightingSummary> instrumentWeightingSummaries,
+			boolean minimumRebalancingApplied,
+			Integer minimumRebalancingAmount,
+			List<Integer> minimumRebalancingLayers) {
+	}
+
+	private record ProposalComputation(
+			Map<Integer, BigDecimal> targetWeights,
+			Map<Integer, BigDecimal> actualDistribution,
+			Map<Integer, BigDecimal> proposalAmounts,
+			Map<Integer, BigDecimal> deviations,
+			Map<Integer, Double> actualDistributionPct,
+			Map<Integer, Double> targetDistributionPct,
+			boolean effectiveWithinTolerance,
+			boolean minimumSavingPlanRebalanced,
+			boolean minimumSavingPlanIncreaseLayerOne,
+			boolean minimumRebalancingTriggered,
+			List<ConstraintResultDto> constraintResults,
+			MinimumRebalancingAdjustment minimumRebalancingAdjustment) {
+	}
+
+	private record InstrumentComputation(
+			List<InstrumentProposalDto> proposals,
+			InstrumentProposalGatingDto gating,
+			List<InstrumentRebalanceService.LayerWeightingSummary> weightingSummaries,
+			boolean minimumRebalancingTriggered,
+			List<String> warnings,
+			List<String> warningCodes,
+			List<InstrumentDiscard> discards) {
+	}
+
+	public RebalancerService(JdbcTemplate jdbcTemplate,
 					  LlmNarrativeService llmNarrativeService,
 					  InstrumentRebalanceService instrumentRebalanceService,
 					  AssessorInstrumentSuggestionService instrumentSuggestionService,
@@ -96,7 +154,7 @@ public class AdvisorService {
 
 	public AdvisorSummaryDto summary(LocalDate asOf) {
 		double total = sumTotal(asOf);
-		List<AllocationDto> layers = loadAllocations(asOf, "layer", total);
+		List<AllocationDto> layers = loadAllocations(asOf, COLUMN_LAYER, total);
 		List<AllocationDto> assetClasses = loadAllocations(asOf, "asset_class", total);
 		List<PositionDto> topPositions = loadTopPositions(asOf, total);
 		SavingPlanMetrics savingPlanMetrics = loadSavingPlanMetrics();
@@ -123,7 +181,7 @@ public class AdvisorService {
 		KeyHolder keyHolder = new GeneratedKeyHolder();
 		String insertSql = isPostgres() ? ADVISOR_RUN_INSERT_SQL_POSTGRES : ADVISOR_RUN_INSERT_SQL;
 		jdbcTemplate.update(connection -> {
-			var statement = connection.prepareStatement(insertSql, new String[] { "run_id" });
+			var statement = connection.prepareStatement(insertSql, new String[] { COLUMN_RUN_ID });
 			if (resolvedAsOf == null) {
 				statement.setNull(1, java.sql.Types.DATE);
 			} else {
@@ -147,9 +205,9 @@ public class AdvisorService {
 				order by created_at desc
 				""";
 		return jdbcTemplate.query(sql, (rs, rowNum) -> new AdvisorRunDto(
-				rs.getLong("run_id"),
+				rs.getLong(COLUMN_RUN_ID),
 				toOffsetDateTime(rs.getObject("created_at")),
-				rs.getDate("as_of_date") == null ? null : rs.getDate("as_of_date").toLocalDate(),
+				rs.getDate(COLUMN_AS_OF_DATE) == null ? null : rs.getDate(COLUMN_AS_OF_DATE).toLocalDate(),
 				parseDepotScope(rs.getString("depot_scope"))
 		));
 	}
@@ -161,9 +219,9 @@ public class AdvisorService {
 				where run_id = ?
 				""";
 		return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> new AdvisorRunDetailDto(
-				rs.getLong("run_id"),
+				rs.getLong(COLUMN_RUN_ID),
 				toOffsetDateTime(rs.getObject("created_at")),
-				rs.getDate("as_of_date") == null ? null : rs.getDate("as_of_date").toLocalDate(),
+				rs.getDate(COLUMN_AS_OF_DATE) == null ? null : rs.getDate(COLUMN_AS_OF_DATE).toLocalDate(),
 				parseDepotScope(rs.getString("depot_scope")),
 				rs.getString("narrative_md"),
 				parseSummaryJson(rs.getString("summary_json"))
@@ -188,15 +246,15 @@ public class AdvisorService {
 				+ "group by " + column + " order by value_eur desc";
 		return asOf == null
 				? jdbcTemplate.query(sql, (rs, rowNum) -> new AllocationDto(
-								rs.getString("label"),
-								rs.getDouble("value_eur"),
-								percentage(rs.getDouble("value_eur"), total)
-						))
+							rs.getString("label"),
+							rs.getDouble(COLUMN_VALUE_EUR),
+							percentage(rs.getDouble(COLUMN_VALUE_EUR), total)
+					))
 				: jdbcTemplate.query(sql, (rs, rowNum) -> new AllocationDto(
-								rs.getString("label"),
-								rs.getDouble("value_eur"),
-								percentage(rs.getDouble("value_eur"), total)
-						), Date.valueOf(asOf));
+							rs.getString("label"),
+							rs.getDouble(COLUMN_VALUE_EUR),
+							percentage(rs.getDouble(COLUMN_VALUE_EUR), total)
+					), Date.valueOf(asOf));
 	}
 
 	private List<PositionDto> loadTopPositions(LocalDate asOf, double total) {
@@ -208,17 +266,17 @@ public class AdvisorService {
 				+ "order by value_eur desc limit 10";
 		return asOf == null
 				? jdbcTemplate.query(sql, (rs, rowNum) -> new PositionDto(
-								rs.getString("isin"),
-								rs.getString("name"),
-								rs.getDouble("value_eur"),
-								percentage(rs.getDouble("value_eur"), total)
-						))
+							rs.getString("isin"),
+							rs.getString("name"),
+							rs.getDouble(COLUMN_VALUE_EUR),
+							percentage(rs.getDouble(COLUMN_VALUE_EUR), total)
+					))
 				: jdbcTemplate.query(sql, (rs, rowNum) -> new PositionDto(
-								rs.getString("isin"),
-								rs.getString("name"),
-								rs.getDouble("value_eur"),
-								percentage(rs.getDouble("value_eur"), total)
-						), Date.valueOf(asOf));
+							rs.getString("isin"),
+							rs.getString("name"),
+							rs.getDouble(COLUMN_VALUE_EUR),
+							percentage(rs.getDouble(COLUMN_VALUE_EUR), total)
+					), Date.valueOf(asOf));
 	}
 
 	private String joinSnapshots(LocalDate asOf) {
@@ -242,33 +300,29 @@ public class AdvisorService {
 
 	private List<SnapshotScope> loadSnapshotScopes(LocalDate asOf) {
 		if (asOf == null) {
-			String sql = """
-					select s.snapshot_id, s.as_of_date, d.depot_code
-					from depots d
-					join snapshots s on s.snapshot_id = d.active_snapshot_id
-					order by d.depot_code
-					""";
+			String sql = "select s.snapshot_id, s.as_of_date, d.depot_code "
+					+ "from depots d "
+					+ "join snapshots s on s.snapshot_id = d.active_snapshot_id "
+					+ "order by d.depot_code";
 			return jdbcTemplate.query(sql, (rs, rowNum) -> new SnapshotScope(
 					rs.getLong("snapshot_id"),
-					rs.getDate("as_of_date").toLocalDate(),
+					rs.getDate(COLUMN_AS_OF_DATE).toLocalDate(),
 					rs.getString("depot_code")
 			));
 		}
-		String sql = """
-				select s.snapshot_id, s.as_of_date, d.depot_code
-				from snapshots s
-				join depots d on d.depot_id = s.depot_id
-				join (
-					select depot_id, max(as_of_date) as max_date
-					from snapshots
-					where as_of_date <= ?
-					group by depot_id
-				) md on s.depot_id = md.depot_id and s.as_of_date = md.max_date
-				order by d.depot_code
-				""";
+		String sql = "select s.snapshot_id, s.as_of_date, d.depot_code "
+				+ "from snapshots s "
+				+ "join depots d on d.depot_id = s.depot_id "
+				+ "join ("
+				+ "select depot_id, max(as_of_date) as max_date "
+				+ "from snapshots "
+				+ "where as_of_date <= ? "
+				+ "group by depot_id"
+				+ ") md on s.depot_id = md.depot_id and s.as_of_date = md.max_date "
+				+ "order by d.depot_code";
 		return jdbcTemplate.query(sql, (rs, rowNum) -> new SnapshotScope(
 				rs.getLong("snapshot_id"),
-				rs.getDate("as_of_date").toLocalDate(),
+				rs.getDate(COLUMN_AS_OF_DATE).toLocalDate(),
 				rs.getString("depot_code")
 		), Date.valueOf(asOf));
 	}
@@ -276,7 +330,7 @@ public class AdvisorService {
 	private LocalDate resolveMaxSnapshotDate(List<SnapshotScope> scopes) {
 		return scopes.stream()
 				.map(SnapshotScope::asOfDate)
-				.filter(date -> date != null)
+				.filter(Objects::nonNull)
 				.max(LocalDate::compareTo)
 				.orElse(null);
 	}
@@ -371,7 +425,7 @@ public class AdvisorService {
 		List<SavingPlanRow> rows = jdbcTemplate.query(sql, (rs, rowNum) -> new SavingPlanRow(
 				toBigDecimal(rs.getObject("amount_eur")),
 				rs.getString("frequency"),
-				rs.getInt("layer")
+				rs.getInt(COLUMN_LAYER)
 		));
 
 		BigDecimal activeTotal = BigDecimal.ZERO;
@@ -424,7 +478,7 @@ public class AdvisorService {
 				rs.getString("isin"),
 				rs.getString("name"),
 				toBigDecimal(rs.getObject("amount_eur")),
-				normalizeLayer(rs.getInt("layer")),
+				normalizeLayer(rs.getInt(COLUMN_LAYER)),
 				rs.getObject("last_changed", LocalDate.class)
 		));
 	}
@@ -436,34 +490,27 @@ public class AdvisorService {
 				+ "join instruments_effective ie on ie.isin = sp.isin "
 				+ joinSnapshots(asOf)
 				+ "group by ie.layer";
-			if (asOf == null) {
-				jdbcTemplate.query(sql, rs -> {
-					Integer layer = rs.getObject("layer") == null ? null : rs.getInt("layer");
-					if (layer == null) {
-						return;
-					}
-					BigDecimal value = toBigDecimal(rs.getObject("value_eur"));
-					if (value == null) {
-						value = BigDecimal.ZERO;
-					}
-					int normalized = normalizeLayer(layer);
-					holdings.put(normalized, holdings.getOrDefault(normalized, BigDecimal.ZERO).add(value));
-				});
-				return holdings;
-			}
-			jdbcTemplate.query(sql, rs -> {
-				Integer layer = rs.getObject("layer") == null ? null : rs.getInt("layer");
-				if (layer == null) {
-					return;
-				}
-				BigDecimal value = toBigDecimal(rs.getObject("value_eur"));
-				if (value == null) {
-					value = BigDecimal.ZERO;
-				}
-				int normalized = normalizeLayer(layer);
-				holdings.put(normalized, holdings.getOrDefault(normalized, BigDecimal.ZERO).add(value));
-			}, Date.valueOf(asOf));
+		if (asOf == null) {
+			jdbcTemplate.query(sql, (RowCallbackHandler) rs ->
+					addHoldingRow(holdings, rs.getObject(COLUMN_LAYER), rs.getObject(COLUMN_VALUE_EUR)));
 			return holdings;
+		}
+		jdbcTemplate.query(sql,
+				(RowCallbackHandler) rs -> addHoldingRow(holdings, rs.getObject(COLUMN_LAYER), rs.getObject(COLUMN_VALUE_EUR)),
+				Date.valueOf(asOf));
+		return holdings;
+	}
+
+	private void addHoldingRow(Map<Integer, BigDecimal> holdings, Object layerRaw, Object valueRaw) {
+		if (layerRaw == null) {
+			return;
+		}
+		int normalized = normalizeLayer(((Number) layerRaw).intValue());
+		BigDecimal value = toBigDecimal(valueRaw);
+		if (value == null) {
+			value = BigDecimal.ZERO;
+		}
+		holdings.put(normalized, holdings.getOrDefault(normalized, BigDecimal.ZERO).add(value));
 	}
 
 	private SavingPlanSummaryDto toSavingPlanSummary(SavingPlanMetrics metrics) {
@@ -507,216 +554,240 @@ public class AdvisorService {
 	private SavingPlanProposalDto buildSavingPlanProposal(SavingPlanMetrics metrics,
 									 LayerTargetEffectiveConfig targetConfig,
 									 Map<Integer, BigDecimal> holdingsByLayer) {
-		if (metrics == null || targetConfig == null) {
+		if (!isProposalInputValid(metrics, targetConfig)) {
 			return null;
 		}
 		BigDecimal monthlyTotal = metrics.monthlyTotal();
-		if (monthlyTotal.signum() <= 0) {
+		ProposalComputation computation = computeProposalComputation(metrics, targetConfig, holdingsByLayer);
+		if (computation == null) {
 			return null;
 		}
-		Map<Integer, BigDecimal> targetWeights = normalizeTargetWeights(targetConfig.effectiveLayerTargets());
-		BigDecimal targetTotal = targetWeights.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-		if (targetTotal.signum() <= 0) {
-			return null;
-		}
-
-		Map<Integer, BigDecimal> actualDistribution = computeDistribution(metrics.monthlyByLayer(), monthlyTotal);
-		Map<Integer, BigDecimal> roundedTargets = buildProjectedTargets(
-				metrics,
-				targetWeights,
-				holdingsByLayer,
-				targetConfig.projectionHorizonMonths(),
-				targetConfig.acceptableVariancePct(),
-				targetConfig.projectionBlendMin(),
-				targetConfig.projectionBlendMax()
+		InstrumentComputation instrumentComputation = computeInstrumentComputation(metrics, targetConfig, computation);
+		Map<Integer, BigDecimal> proposalAmounts = reconcileProposalAmountsWithInstruments(
+				computation.proposalAmounts(),
+				instrumentComputation.proposals(),
+				monthlyTotal
 		);
-		Map<Integer, BigDecimal> projectedDistribution = computeDistribution(roundedTargets, monthlyTotal);
-		boolean withinTolerance = isWithinTolerance(actualDistribution, projectedDistribution, targetConfig.acceptableVariancePct());
-		MinimumSavingPlanAdjustment minimumSavingPlanAdjustment = applyMinimumSavingPlanSize(roundedTargets, targetConfig.minimumSavingPlanSize());
-		boolean minimumSavingPlanRebalanced = minimumSavingPlanAdjustment.rebalanced();
-		boolean minimumSavingPlanIncreaseLayerOne = minimumSavingPlanAdjustment.increasedLayerOneToMinimum();
-		boolean effectiveWithinTolerance = withinTolerance && !minimumSavingPlanRebalanced;
-		Map<Integer, BigDecimal> proposalAmounts = effectiveWithinTolerance
-				? metrics.monthlyByLayer()
-				: minimumSavingPlanAdjustment.adjustedAmounts();
-		MinimumRebalancingAdjustment minimumRebalancingAdjustment = applyMinimumRebalancingAmount(
-				proposalAmounts,
-				metrics.monthlyByLayer(),
-				targetConfig.minimumRebalancingAmount()
-		);
-		boolean minimumRebalancingApplied = minimumRebalancingAdjustment.applied();
-		proposalAmounts = minimumRebalancingAdjustment.adjustedAmounts();
-		MinimumSavingPlanImpact minimumSavingPlanImpact = reconcileMinimumSavingPlanImpact(roundedTargets, minimumSavingPlanAdjustment, proposalAmounts);
-		minimumSavingPlanRebalanced = minimumSavingPlanImpact.rebalanced();
-		minimumSavingPlanIncreaseLayerOne = minimumSavingPlanImpact.increasedLayerOne();
-		effectiveWithinTolerance = withinTolerance && !minimumSavingPlanRebalanced;
-		Map<Integer, BigDecimal> deviations = computeDeviations(actualDistribution, targetWeights);
-		List<ConstraintResultDto> constraintResults = evaluateConstraints(actualDistribution,
-				targetConfig.selectedProfile().getConstraints(),
-				targetConfig.layerNames());
-
-		Map<Integer, Double> actualDistributionPct = toPercentageMap(actualDistribution);
-		Map<Integer, Double> targetDistributionPct = toPercentageMap(targetWeights);
-
-		List<SavingPlanInstrument> savingPlanInstruments = loadSavingPlanInstruments();
-		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(targetConfig);
-		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer =
-				resolveRiskThresholdsByLayer(targetConfig, riskThresholds);
-		InstrumentRebalanceService.InstrumentProposalResult instrumentResult = instrumentRebalanceService
-				.buildInstrumentProposals(savingPlanInstruments, proposalAmounts, targetConfig.minimumSavingPlanSize(),
-						targetConfig.minimumRebalancingAmount(), effectiveWithinTolerance, riskThresholds,
-						riskThresholdsByLayer);
-		List<InstrumentProposalDto> instrumentProposals = instrumentResult == null
-				? new ArrayList<>()
-				: new ArrayList<>(instrumentResult.proposals());
-		InstrumentProposalGatingDto instrumentGating = instrumentResult == null ? null : instrumentResult.gating();
-		List<InstrumentRebalanceService.LayerWeightingSummary> instrumentWeightingSummaries = instrumentResult == null
-				? List.of()
-				: instrumentResult.weightingSummaries();
-		List<InstrumentRebalanceService.InstrumentWarning> warningDetails = instrumentResult == null
-				? new ArrayList<>()
-				: new ArrayList<>(instrumentResult.warnings());
-		List<InstrumentProposalDto> gapProposals = buildGapInstrumentProposals(metrics, proposalAmounts,
-				targetConfig, savingPlanInstruments, instrumentGating);
-		if (!gapProposals.isEmpty()) {
-			instrumentProposals.addAll(gapProposals);
-			removeLayerWarningsForGapSuggestions(warningDetails, gapProposals);
-		}
-		appendRiskWarnings(warningDetails, savingPlanInstruments, targetConfig, instrumentGating);
-		instrumentProposals.sort((left, right) -> {
-			Integer leftLayer = left == null ? null : left.getLayer();
-			Integer rightLayer = right == null ? null : right.getLayer();
-			if (leftLayer == null && rightLayer != null) {
-				return 1;
-			}
-			if (leftLayer != null && rightLayer == null) {
-				return -1;
-			}
-			if (leftLayer != null && rightLayer != null) {
-				int compare = Integer.compare(leftLayer, rightLayer);
-				if (compare != 0) {
-					return compare;
-				}
-			}
-			String leftIsin = left == null ? null : left.getIsin();
-			String rightIsin = right == null ? null : right.getIsin();
-			if (leftIsin == null && rightIsin != null) {
-				return 1;
-			}
-			if (leftIsin != null && rightIsin == null) {
-				return -1;
-			}
-			if (leftIsin == null) {
-				return 0;
-			}
-			return leftIsin.compareTo(rightIsin);
-		});
-		List<String> instrumentWarnings = warningDetails.isEmpty()
-				? List.of()
-				: warningDetails.stream().map(InstrumentRebalanceService.InstrumentWarning::message).toList();
-		List<String> instrumentWarningCodes = warningDetails.isEmpty()
-				? List.of()
-				: warningDetails.stream().map(InstrumentRebalanceService.InstrumentWarning::code).toList();
-		List<InstrumentDiscard> instrumentDiscards = buildInstrumentDiscards(instrumentProposals);
-		boolean minimumRebalancingTriggered = minimumRebalancingApplied || hasReasonCode(instrumentProposals, "MIN_REBALANCE_AMOUNT");
-		proposalAmounts = reconcileProposalAmountsWithInstruments(proposalAmounts, instrumentProposals, monthlyTotal);
+		proposalAmounts = safeLayerAmounts(proposalAmounts);
+		boolean minimumRebalancingTriggered = instrumentComputation.minimumRebalancingTriggered();
 		BigDecimal proposalTotal = sumAmounts(proposalAmounts);
 		Map<Integer, BigDecimal> proposedDistribution = computeDistribution(proposalAmounts, proposalTotal);
 		Map<Integer, Double> proposedDistributionPct = toPercentageMap(proposedDistribution);
 		Map<Integer, Double> layerBudgets = toAmountMap(proposalAmounts);
-
-		List<String> notes = new ArrayList<>(buildToleranceNotes(effectiveWithinTolerance, targetConfig.acceptableVariancePct()));
-		if (!llmEnabled && minimumSavingPlanIncreaseLayerOne) {
-			notes.add(buildMinimumSavingPlanIncreaseNotice(targetConfig.minimumSavingPlanSize()));
-		}
-		if (!llmEnabled && minimumRebalancingTriggered) {
-			notes.add(buildMinimumRebalancingNotice(targetConfig.minimumRebalancingAmount()));
-		}
-		String recommendation = buildRecommendation(effectiveWithinTolerance, minimumSavingPlanRebalanced,
+		List<String> notes = buildProposalNotes(targetConfig, computation, minimumRebalancingTriggered);
+		String recommendation = buildRecommendation(computation.effectiveWithinTolerance(), computation.minimumSavingPlanRebalanced(),
 				minimumRebalancingTriggered, targetConfig.minimumRebalancingAmount());
-		String narrative = composeNarrative(metrics, targetConfig, actualDistributionPct, targetDistributionPct,
-				proposedDistributionPct, effectiveWithinTolerance, constraintResults, minimumSavingPlanRebalanced,
-				minimumSavingPlanIncreaseLayerOne, targetConfig.minimumSavingPlanSize(), proposalAmounts.getOrDefault(1, BigDecimal.ZERO),
-				instrumentDiscards, instrumentProposals, instrumentWeightingSummaries, minimumRebalancingTriggered,
-				targetConfig.minimumRebalancingAmount(), minimumRebalancingAdjustment.skippedLayers());
-		List<SavingPlanProposalLayerDto> layers = buildProposalLayers(metrics, targetConfig, actualDistribution,
-				targetWeights, proposalAmounts, monthlyTotal, holdingsByLayer);
+		NarrativeContext narrativeContext = new NarrativeContext(
+				metrics,
+				targetConfig,
+				computation.actualDistributionPct(),
+				computation.targetDistributionPct(),
+				proposedDistributionPct,
+				computation.effectiveWithinTolerance(),
+				computation.constraintResults(),
+				computation.minimumSavingPlanRebalanced(),
+				computation.minimumSavingPlanIncreaseLayerOne(),
+				targetConfig.minimumSavingPlanSize(),
+				proposalAmounts.getOrDefault(1, BigDecimal.ZERO),
+				instrumentComputation.discards(),
+				instrumentComputation.proposals(),
+				instrumentComputation.weightingSummaries(),
+				minimumRebalancingTriggered,
+				targetConfig.minimumRebalancingAmount(),
+				computation.minimumRebalancingAdjustment().skippedLayers()
+		);
+		String narrative = composeNarrative(narrativeContext);
+		List<SavingPlanProposalLayerDto> layers = buildProposalLayers(metrics, targetConfig, computation.actualDistribution(),
+				computation.targetWeights(), proposalAmounts, holdingsByLayer);
 
-		double targetWeightTotalPct = toWeightPct(targetWeights.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add));
+		BigDecimal targetWeightSum = computation.targetWeights().values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+		double targetWeightTotalPct = targetWeightSum.multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP).doubleValue();
 
 		return new SavingPlanProposalDto(
 				toAmount(monthlyTotal),
 				targetWeightTotalPct,
-				effectiveWithinTolerance ? "actual" : "targets",
+				computation.effectiveWithinTolerance() ? "actual" : "targets",
 				narrative,
 				notes,
 				layers,
-				actualDistributionPct,
-				targetDistributionPct,
+				computation.actualDistributionPct(),
+				computation.targetDistributionPct(),
 				proposedDistributionPct,
 				layerBudgets,
-				instrumentProposals,
-				instrumentWarnings,
-				instrumentWarningCodes,
-				instrumentGating,
-				toPercentagePoints(deviations),
-				effectiveWithinTolerance,
-				constraintResults,
+				instrumentComputation.proposals(),
+				instrumentComputation.warnings(),
+				instrumentComputation.warningCodes(),
+				instrumentComputation.gating(),
+				toPercentageMap(computation.deviations()),
+				computation.effectiveWithinTolerance(),
+				computation.constraintResults(),
 				recommendation,
 				targetConfig.selectedProfileKey(),
 				targetConfig.selectedProfile().getDisplayName()
 		);
 	}
 
-	private String composeNarrative(SavingPlanMetrics metrics,
-									LayerTargetEffectiveConfig targetConfig,
-									Map<Integer, Double> actualDistribution,
-									Map<Integer, Double> targetDistribution,
-									Map<Integer, Double> proposedDistribution,
-									boolean withinTolerance,
-									List<ConstraintResultDto> constraints,
-									boolean minimumSavingPlanRebalanced,
-									boolean minimumSavingPlanIncreaseLayerOne,
-									Integer minimumSavingPlanSize,
-									BigDecimal proposedLayerOneAmount,
-									List<InstrumentDiscard> instrumentDiscards,
-									List<InstrumentProposalDto> instrumentProposals,
-									List<InstrumentRebalanceService.LayerWeightingSummary> instrumentWeightingSummaries,
-									boolean minimumRebalancingApplied,
-									Integer minimumRebalancingAmount,
-									List<Integer> minimumRebalancingLayers) {
-		if (llmEnabled) {
-			return loadLlmNarrative(metrics, targetConfig, actualDistribution, targetDistribution, proposedDistribution, withinTolerance,
-					constraints, minimumSavingPlanRebalanced, minimumSavingPlanIncreaseLayerOne, minimumSavingPlanSize, proposedLayerOneAmount,
-					instrumentDiscards, instrumentProposals, instrumentWeightingSummaries, minimumRebalancingApplied,
-					minimumRebalancingAmount, minimumRebalancingLayers);
-		}
-		return buildFallbackNarrative(withinTolerance, actualDistribution, targetDistribution, targetConfig.acceptableVariancePct(),
-				targetConfig.projectionHorizonMonths(), targetConfig.layerNames(), constraints, minimumSavingPlanRebalanced,
-				minimumSavingPlanIncreaseLayerOne, minimumSavingPlanSize, minimumRebalancingApplied, minimumRebalancingAmount);
+	private boolean isProposalInputValid(SavingPlanMetrics metrics, LayerTargetEffectiveConfig targetConfig) {
+		return metrics != null
+				&& targetConfig != null
+				&& metrics.monthlyTotal() != null
+				&& metrics.monthlyTotal().signum() > 0;
 	}
 
-	private String loadLlmNarrative(SavingPlanMetrics metrics,
-									LayerTargetEffectiveConfig targetConfig,
-									Map<Integer, Double> actualDistribution,
-									Map<Integer, Double> targetDistribution,
-									Map<Integer, Double> proposedDistribution,
-									boolean withinTolerance,
-									List<ConstraintResultDto> constraints,
-									boolean minimumSavingPlanRebalanced,
-									boolean minimumSavingPlanIncreaseLayerOne,
-									Integer minimumSavingPlanSize,
-									BigDecimal proposedLayerOneAmount,
-									List<InstrumentDiscard> instrumentDiscards,
-									List<InstrumentProposalDto> instrumentProposals,
-									List<InstrumentRebalanceService.LayerWeightingSummary> instrumentWeightingSummaries,
-									boolean minimumRebalancingApplied,
-									Integer minimumRebalancingAmount,
-									List<Integer> minimumRebalancingLayers) {
-		String prompt = buildLlmPrompt(metrics, targetConfig, actualDistribution, targetDistribution, proposedDistribution, withinTolerance,
-				constraints, minimumSavingPlanRebalanced, minimumSavingPlanIncreaseLayerOne, minimumSavingPlanSize, proposedLayerOneAmount,
-				instrumentDiscards, instrumentProposals, instrumentWeightingSummaries, minimumRebalancingApplied,
-				minimumRebalancingAmount, minimumRebalancingLayers);
+	private ProposalComputation computeProposalComputation(SavingPlanMetrics metrics,
+											LayerTargetEffectiveConfig targetConfig,
+											Map<Integer, BigDecimal> holdingsByLayer) {
+		Map<Integer, BigDecimal> targetWeights = normalizeTargetWeights(targetConfig.effectiveLayerTargets());
+		BigDecimal targetTotal = targetWeights.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+		if (targetTotal.signum() <= 0) {
+			return null;
+		}
+		BigDecimal monthlyTotal = metrics.monthlyTotal();
+		Map<Integer, BigDecimal> monthlyByLayer = safeLayerAmounts(metrics.monthlyByLayer());
+		Map<Integer, BigDecimal> actualDistribution = computeDistribution(monthlyByLayer, monthlyTotal);
+		Map<Integer, BigDecimal> roundedTargets = buildProjectedTargets(metrics, targetWeights, holdingsByLayer,
+				targetConfig.projectionHorizonMonths(), targetConfig.acceptableVariancePct(),
+				targetConfig.projectionBlendMin(), targetConfig.projectionBlendMax());
+		Map<Integer, BigDecimal> projectedDistribution = computeDistribution(roundedTargets, monthlyTotal);
+		boolean withinTolerance = isWithinTolerance(actualDistribution, projectedDistribution, targetConfig.acceptableVariancePct());
+		MinimumSavingPlanAdjustment minimumSavingPlanAdjustment = applyMinimumSavingPlanSize(roundedTargets, targetConfig.minimumSavingPlanSize());
+		Map<Integer, BigDecimal> proposalAmounts = withinTolerance && !minimumSavingPlanAdjustment.rebalanced()
+				? monthlyByLayer
+				: minimumSavingPlanAdjustment.adjustedAmounts();
+		MinimumRebalancingAdjustment minimumRebalancingAdjustment = applyMinimumRebalancingAmount(
+				proposalAmounts,
+				monthlyByLayer,
+				targetConfig.minimumRebalancingAmount()
+		);
+		proposalAmounts = safeLayerAmounts(minimumRebalancingAdjustment.adjustedAmounts());
+		MinimumSavingPlanImpact minimumSavingPlanImpact = reconcileMinimumSavingPlanImpact(roundedTargets, minimumSavingPlanAdjustment, proposalAmounts);
+		boolean minimumSavingPlanRebalanced = minimumSavingPlanImpact.rebalanced();
+		boolean effectiveWithinTolerance = withinTolerance && !minimumSavingPlanRebalanced;
+		Map<Integer, BigDecimal> deviations = computeDeviations(actualDistribution, targetWeights);
+		List<ConstraintResultDto> constraintResults = evaluateConstraints(actualDistribution,
+				targetConfig.selectedProfile().getConstraints(), targetConfig.layerNames());
+		Map<Integer, Double> actualDistributionPct = toPercentageMap(actualDistribution);
+		Map<Integer, Double> targetDistributionPct = toPercentageMap(targetWeights);
+		return new ProposalComputation(
+				targetWeights,
+				actualDistribution,
+				proposalAmounts,
+				deviations,
+				actualDistributionPct,
+				targetDistributionPct,
+				effectiveWithinTolerance,
+				minimumSavingPlanRebalanced,
+				minimumSavingPlanImpact.increasedLayerOne(),
+				minimumRebalancingAdjustment.applied(),
+				constraintResults,
+				minimumRebalancingAdjustment
+		);
+	}
+
+	private InstrumentComputation computeInstrumentComputation(SavingPlanMetrics metrics,
+										  LayerTargetEffectiveConfig targetConfig,
+										  ProposalComputation computation) {
+		List<SavingPlanInstrument> savingPlanInstruments = loadSavingPlanInstruments();
+		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(targetConfig);
+		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer = resolveRiskThresholdsByLayer(targetConfig, riskThresholds);
+		InstrumentRebalanceService.InstrumentProposalResult instrumentResult = instrumentRebalanceService.buildInstrumentProposals(
+				savingPlanInstruments,
+				computation.proposalAmounts(),
+				targetConfig.minimumSavingPlanSize(),
+				targetConfig.minimumRebalancingAmount(),
+				computation.effectiveWithinTolerance(),
+				riskThresholds,
+				riskThresholdsByLayer
+		);
+		List<InstrumentProposalDto> instrumentProposals = instrumentResult == null
+				? new ArrayList<>()
+				: new ArrayList<>(instrumentResult.proposals());
+		InstrumentProposalGatingDto instrumentGating = instrumentResult == null ? null : instrumentResult.gating();
+		List<InstrumentRebalanceService.LayerWeightingSummary> weightingSummaries = instrumentResult == null
+				? List.of()
+				: instrumentResult.weightingSummaries();
+		List<InstrumentRebalanceService.InstrumentWarning> warningDetails = instrumentResult == null
+				? new ArrayList<>()
+				: new ArrayList<>(instrumentResult.warnings());
+		List<InstrumentProposalDto> gapProposals = buildGapInstrumentProposals(metrics, computation.proposalAmounts(),
+				targetConfig, savingPlanInstruments, instrumentGating);
+		mergeGapProposals(instrumentProposals, warningDetails, gapProposals);
+		appendRiskWarnings(warningDetails, savingPlanInstruments, targetConfig, instrumentGating);
+		instrumentProposals.sort(this::compareInstrumentProposals);
+		List<String> warnings = warningDetails.stream().map(InstrumentRebalanceService.InstrumentWarning::message).toList();
+		List<String> warningCodes = warningDetails.stream().map(InstrumentRebalanceService.InstrumentWarning::code).toList();
+		return new InstrumentComputation(
+				instrumentProposals,
+				instrumentGating,
+				weightingSummaries,
+				computation.minimumRebalancingTriggered() || hasReasonCode(instrumentProposals, REASON_MIN_REBALANCE_AMOUNT),
+				warnings,
+				warningCodes,
+				buildInstrumentDiscards(instrumentProposals)
+		);
+	}
+
+	private void mergeGapProposals(List<InstrumentProposalDto> instrumentProposals,
+									 List<InstrumentRebalanceService.InstrumentWarning> warningDetails,
+									 List<InstrumentProposalDto> gapProposals) {
+		if (gapProposals.isEmpty()) {
+			return;
+		}
+		instrumentProposals.addAll(gapProposals);
+		removeLayerWarningsForGapSuggestions(warningDetails, gapProposals);
+	}
+
+	private int compareInstrumentProposals(InstrumentProposalDto left, InstrumentProposalDto right) {
+		Integer leftLayer = left == null ? null : left.getLayer();
+		Integer rightLayer = right == null ? null : right.getLayer();
+		int layerCompare = compareNullable(leftLayer, rightLayer);
+		if (layerCompare != 0) {
+			return layerCompare;
+		}
+		String leftIsin = left == null ? null : left.getIsin();
+		String rightIsin = right == null ? null : right.getIsin();
+		return compareNullable(leftIsin, rightIsin);
+	}
+
+	private <T extends Comparable<T>> int compareNullable(T left, T right) {
+		if (left == null && right == null) {
+			return 0;
+		}
+		if (left == null) {
+			return 1;
+		}
+		if (right == null) {
+			return -1;
+		}
+		return left.compareTo(right);
+	}
+
+	private List<String> buildProposalNotes(LayerTargetEffectiveConfig targetConfig,
+									 ProposalComputation computation,
+									 boolean minimumRebalancingTriggered) {
+		List<String> notes = new ArrayList<>(buildToleranceNotes(computation.effectiveWithinTolerance(), targetConfig.acceptableVariancePct()));
+		if (!llmEnabled && computation.minimumSavingPlanIncreaseLayerOne()) {
+			notes.add(buildMinimumSavingPlanIncreaseNotice(targetConfig.minimumSavingPlanSize()));
+		}
+		if (!llmEnabled && minimumRebalancingTriggered) {
+			notes.add(buildMinimumRebalancingNotice(targetConfig.minimumRebalancingAmount()));
+		}
+		return notes;
+	}
+
+	private Map<Integer, BigDecimal> safeLayerAmounts(Map<Integer, BigDecimal> amounts) {
+		return amounts == null ? initLayerAmounts() : amounts;
+	}
+
+	private String composeNarrative(NarrativeContext context) {
+		if (llmEnabled) {
+			return loadLlmNarrative(context);
+		}
+		return buildFallbackNarrative(context);
+	}
+
+	private String loadLlmNarrative(NarrativeContext context) {
+		String prompt = buildLlmPrompt(context);
 		prompt = llmPromptPolicy == null
 				? prompt
 				: llmPromptPolicy.validatePrompt(prompt, LlmPromptPurpose.REBALANCER_NARRATIVE);
@@ -726,23 +797,10 @@ public class AdvisorService {
 		return llmNarrativeService.suggestSavingPlanNarrative(prompt);
 	}
 
-	private String buildLlmPrompt(SavingPlanMetrics metrics,
-							  LayerTargetEffectiveConfig targetConfig,
-							  Map<Integer, Double> actualDistribution,
-							  Map<Integer, Double> targetDistribution,
-							  Map<Integer, Double> proposedDistribution,
-							  boolean withinTolerance,
-							  List<ConstraintResultDto> constraints,
-							  boolean minimumSavingPlanRebalanced,
-							  boolean minimumSavingPlanIncreaseLayerOne,
-							  Integer minimumSavingPlanSize,
-							  BigDecimal proposedLayerOneAmount,
-							  List<InstrumentDiscard> instrumentDiscards,
-							  List<InstrumentProposalDto> instrumentProposals,
-							  List<InstrumentRebalanceService.LayerWeightingSummary> instrumentWeightingSummaries,
-							  boolean minimumRebalancingApplied,
-							  Integer minimumRebalancingAmount,
-							  List<Integer> minimumRebalancingLayers) {
+	private String buildLlmPrompt(NarrativeContext context) {
+		LayerTargetEffectiveConfig targetConfig = context.targetConfig();
+		SavingPlanMetrics metrics = context.metrics();
+		List<InstrumentProposalDto> instrumentProposals = context.instrumentProposals();
 		int horizon = normalizeProjectionHorizonMonths(targetConfig.projectionHorizonMonths());
 		BigDecimal blendFactor = projectionBlendFactor(horizon, targetConfig.projectionBlendMin(), targetConfig.projectionBlendMax());
 		StringBuilder builder = new StringBuilder();
@@ -784,24 +842,24 @@ public class AdvisorService {
 		builder.append("projection_blend_factor=")
 				.append(blendFactor.stripTrailingZeros().toPlainString())
 				.append("\n");
-		builder.append("minimum_saving_plan_size_eur=").append(minimumSavingPlanSize).append("\n");
-		builder.append("minimum_saving_plan_rebalanced=").append(minimumSavingPlanRebalanced).append("\n");
-		builder.append("minimum_saving_plan_increase_layer_one=").append(minimumSavingPlanIncreaseLayerOne).append("\n");
-		builder.append("proposed_layer_one_amount_eur=").append(proposedLayerOneAmount).append("\n");
-		builder.append("minimum_rebalancing_amount_eur=").append(minimumRebalancingAmount).append("\n");
-		builder.append("minimum_rebalancing_applied=").append(minimumRebalancingApplied).append("\n");
-		builder.append("within_tolerance=").append(withinTolerance).append("\n");
+		builder.append("minimum_saving_plan_size_eur=").append(context.minimumSavingPlanSize()).append("\n");
+		builder.append("minimum_saving_plan_rebalanced=").append(context.minimumSavingPlanRebalanced()).append("\n");
+		builder.append("minimum_saving_plan_increase_layer_one=").append(context.minimumSavingPlanIncreaseLayerOne()).append("\n");
+		builder.append("proposed_layer_one_amount_eur=").append(context.proposedLayerOneAmount()).append("\n");
+		builder.append("minimum_rebalancing_amount_eur=").append(context.minimumRebalancingAmount()).append("\n");
+		builder.append("minimum_rebalancing_applied=").append(context.minimumRebalancingApplied()).append("\n");
+		builder.append("within_tolerance=").append(context.withinTolerance()).append("\n");
 		builder.append("monthly_total_amount_eur=").append(metrics.monthlyTotal()).append("\n");
 		builder.append("layer_names=").append(targetConfig.layerNames()).append("\n");
-		builder.append("actual_distribution=").append(actualDistribution).append("\n");
-		builder.append("target_distribution=").append(targetDistribution).append("\n");
-		builder.append("proposed_distribution=").append(proposedDistribution).append("\n");
-		builder.append("constraints=").append(constraintSummaries(constraints)).append("\n");
-		builder.append("instrument_discards=").append(formatInstrumentDiscards(instrumentDiscards)).append("\n");
+		builder.append("actual_distribution=").append(context.actualDistribution()).append("\n");
+		builder.append("target_distribution=").append(context.targetDistribution()).append("\n");
+		builder.append("proposed_distribution=").append(context.proposedDistribution()).append("\n");
+		builder.append("constraints=").append(constraintSummaries(context.constraints())).append("\n");
+		builder.append("instrument_discards=").append(formatInstrumentDiscards(context.instrumentDiscards())).append("\n");
 		builder.append("instrument_proposals_summary=").append(buildInstrumentProposalSummary(instrumentProposals)).append("\n");
 		builder.append("instrument_proposal_highlights=").append(formatInstrumentProposalHighlights(instrumentProposals)).append("\n");
-		builder.append("instrument_weighting_by_layer=").append(formatInstrumentWeightingSummaries(instrumentWeightingSummaries, instrumentProposals)).append("\n");
-		builder.append("minimum_rebalancing_layers=").append(formatMinimumRebalancingLayers(minimumRebalancingLayers, targetConfig.layerNames())).append("\n");
+		builder.append("instrument_weighting_by_layer=").append(formatInstrumentWeightingSummaries(context.instrumentWeightingSummaries(), instrumentProposals)).append("\n");
+		builder.append("minimum_rebalancing_layers=").append(formatMinimumRebalancingLayers(context.minimumRebalancingLayers(), targetConfig.layerNames())).append("\n");
 		builder.append("minimum_rebalancing_instruments=").append(formatMinimumRebalancingInstruments(instrumentProposals)).append("\n");
 		if (hasReasonCode(instrumentProposals, "KB_WEIGHTED")) {
 			builder.append("kb_weighting_method=score = (1 / (1 + TER)) * (1 - redundancy); redundancy is average overlap of benchmark, regions, and top holdings when available; weights are normalized scores.\n");
@@ -818,10 +876,7 @@ public class AdvisorService {
 		}
 		List<InstrumentDiscard> discards = new ArrayList<>();
 		for (InstrumentProposalDto proposal : proposals) {
-			if (proposal == null || proposal.getProposedAmountEur() == null) {
-				continue;
-			}
-			if (proposal.getProposedAmountEur() > 0.0d) {
+			if (proposal == null || proposal.getProposedAmountEur() == null || proposal.getProposedAmountEur() > 0.0d) {
 				continue;
 			}
 			List<String> reasons = mapDiscardReasons(proposal.getReasonCodes());
@@ -843,6 +898,7 @@ public class AdvisorService {
 				case "MIN_AMOUNT_DROPPED" -> labels.add("below minimum saving plan size");
 				case "LAYER_BUDGET_ZERO" -> labels.add("layer budget is zero");
 				default -> {
+					// Keep unknown reason codes for fallback output.
 				}
 			}
 		}
@@ -869,9 +925,9 @@ public class AdvisorService {
 			if (i > 0) {
 				builder.append(", ");
 			}
-			builder.append("{isin=").append(discard.isin());
+			builder.append(DISCARD_ISIN_PREFIX).append(discard.isin());
 			if (discard.name() != null && !discard.name().isBlank()) {
-				builder.append(", name=").append(discard.name());
+				builder.append(DISCARD_NAME_PREFIX).append(discard.name());
 			}
 			builder.append(", reasons=").append(discard.reasons());
 			builder.append("}");
@@ -889,7 +945,7 @@ public class AdvisorService {
 			if (layer == null) {
 				continue;
 			}
-			String label = layerNames == null ? "Layer " + layer : layerNames.getOrDefault(layer, "Layer " + layer);
+			String label = layerNames == null ? LABEL_LAYER_PREFIX + layer : layerNames.getOrDefault(layer, LABEL_LAYER_PREFIX + layer);
 			labels.add(label);
 		}
 		return labels.isEmpty() ? "none" : labels.toString();
@@ -904,10 +960,8 @@ public class AdvisorService {
 			if (proposal == null || proposal.getReasonCodes() == null) {
 				continue;
 			}
-			if (proposal.getReasonCodes().contains("MIN_REBALANCE_AMOUNT")) {
-				if (proposal.getIsin() != null) {
-					isins.add(proposal.getIsin());
-				}
+			if (proposal.getReasonCodes().contains(REASON_MIN_REBALANCE_AMOUNT) && proposal.getIsin() != null) {
+				isins.add(proposal.getIsin());
 			}
 		}
 		if (isins.isEmpty()) {
@@ -923,106 +977,40 @@ public class AdvisorService {
 		if (proposals == null || proposals.isEmpty()) {
 			return "none";
 		}
-		int total = 0;
-		int increases = 0;
-		int decreases = 0;
-		int unchanged = 0;
-		int kbWeighted = 0;
-		int scoreWeighted = 0;
-		int equalWeight = 0;
-		int minDropped = 0;
-		int budgetZero = 0;
-		int noChange = 0;
-		int minRebalance = 0;
-		int gapSuggestions = 0;
+		ProposalSummaryStats stats = new ProposalSummaryStats();
 
 		for (InstrumentProposalDto proposal : proposals) {
 			if (proposal == null) {
 				continue;
 			}
-			total += 1;
-			Double delta = proposal.getDeltaEur();
-			if (isZeroAmount(delta)) {
-				unchanged += 1;
-			} else if (delta != null && delta > 0.0d) {
-				increases += 1;
-			} else {
-				decreases += 1;
-			}
-			List<String> codes = proposal.getReasonCodes();
-			if (codes == null) {
-				continue;
-			}
-			for (String code : codes) {
-				if (code == null) {
-					continue;
-				}
-				switch (code) {
-					case "KB_WEIGHTED" -> kbWeighted += 1;
-					case "SCORE_WEIGHTED" -> scoreWeighted += 1;
-					case "EQUAL_WEIGHT" -> equalWeight += 1;
-					case "MIN_AMOUNT_DROPPED" -> minDropped += 1;
-					case "LAYER_BUDGET_ZERO" -> budgetZero += 1;
-					case "NO_CHANGE_WITHIN_TOLERANCE" -> noChange += 1;
-					case "MIN_REBALANCE_AMOUNT" -> minRebalance += 1;
-					case REASON_GAP_SUGGESTION -> gapSuggestions += 1;
-					default -> {
-					}
-				}
-			}
+			stats.total += 1;
+			updateDeltaCounters(proposal.getDeltaEur(), stats);
+			updateReasonCounters(proposal.getReasonCodes(), stats);
 		}
 
-		return "{total=" + total
-				+ ", increases=" + increases
-				+ ", decreases=" + decreases
-				+ ", unchanged=" + unchanged
-				+ ", kb_weighted=" + kbWeighted
-				+ ", score_weighted=" + scoreWeighted
-				+ ", equal_weight=" + equalWeight
-				+ ", min_dropped=" + minDropped
-				+ ", layer_budget_zero=" + budgetZero
-				+ ", no_change=" + noChange
-				+ ", min_rebalance=" + minRebalance
-				+ ", gap_suggestions=" + gapSuggestions + "}";
+		return "{total=" + stats.total
+				+ ", increases=" + stats.increases
+				+ ", decreases=" + stats.decreases
+				+ ", unchanged=" + stats.unchanged
+				+ ", kb_weighted=" + stats.kbWeighted
+				+ ", score_weighted=" + stats.scoreWeighted
+				+ ", equal_weight=" + stats.equalWeight
+				+ ", min_dropped=" + stats.minDropped
+				+ ", layer_budget_zero=" + stats.budgetZero
+				+ ", no_change=" + stats.noChange
+				+ ", min_rebalance=" + stats.minRebalance
+				+ ", gap_suggestions=" + stats.gapSuggestions + "}";
 	}
 
 	private String formatInstrumentProposalHighlights(List<InstrumentProposalDto> proposals) {
 		if (proposals == null || proposals.isEmpty()) {
 			return "none";
 		}
-		List<InstrumentProposalDto> candidates = new ArrayList<>();
-		for (InstrumentProposalDto proposal : proposals) {
-			if (proposal == null) {
-				continue;
-			}
-			if (isZeroAmount(proposal.getDeltaEur())) {
-				continue;
-			}
-			candidates.add(proposal);
-		}
+		List<InstrumentProposalDto> candidates = collectProposalHighlightCandidates(proposals);
 		if (candidates.isEmpty()) {
 			return "none";
 		}
-		candidates.sort((left, right) -> {
-			double leftDelta = left == null || left.getDeltaEur() == null ? 0.0d : Math.abs(left.getDeltaEur());
-			double rightDelta = right == null || right.getDeltaEur() == null ? 0.0d : Math.abs(right.getDeltaEur());
-			int cmp = Double.compare(rightDelta, leftDelta);
-			if (cmp != 0) {
-				return cmp;
-			}
-			String leftIsin = left == null ? null : left.getIsin();
-			String rightIsin = right == null ? null : right.getIsin();
-			if (leftIsin == null && rightIsin == null) {
-				return 0;
-			}
-			if (leftIsin == null) {
-				return 1;
-			}
-			if (rightIsin == null) {
-				return -1;
-			}
-			return leftIsin.compareTo(rightIsin);
-		});
+		candidates.sort(this::compareProposalHighlights);
 		int limit = Math.min(INSTRUMENT_HIGHLIGHT_LIMIT, candidates.size());
 		StringBuilder builder = new StringBuilder();
 		builder.append("[");
@@ -1031,41 +1019,18 @@ public class AdvisorService {
 			if (i > 0) {
 				builder.append(", ");
 			}
-			builder.append("{isin=").append(proposal.getIsin());
-			String name = normalizePromptText(proposal.getInstrumentName());
-			if (name != null) {
-				builder.append(", name=").append(name);
-			}
-			if (proposal.getLayer() != null) {
-				builder.append(", layer=").append(proposal.getLayer());
-			}
-			builder.append(", current=").append(formatPromptAmount(proposal.getCurrentAmountEur()));
-			builder.append(", proposed=").append(formatPromptAmount(proposal.getProposedAmountEur()));
-			builder.append(", delta=").append(formatPromptAmount(proposal.getDeltaEur()));
-			builder.append(", reasons=").append(formatReasonCodes(proposal.getReasonCodes()));
-			builder.append("}");
+			appendProposalHighlight(builder, proposal);
 		}
 		builder.append("]");
 		return builder.toString();
 	}
 
 	private String formatInstrumentWeightingSummaries(List<InstrumentRebalanceService.LayerWeightingSummary> summaries,
-													  List<InstrumentProposalDto> proposals) {
+												  List<InstrumentProposalDto> proposals) {
 		if (summaries == null || summaries.isEmpty()) {
 			return "none";
 		}
-		Map<String, String> namesByIsin = new HashMap<>();
-		if (proposals != null) {
-			for (InstrumentProposalDto proposal : proposals) {
-				if (proposal == null || proposal.getIsin() == null) {
-					continue;
-				}
-				String name = normalizePromptText(proposal.getInstrumentName());
-				if (name != null) {
-					namesByIsin.put(proposal.getIsin(), name);
-				}
-			}
-		}
+		Map<String, String> namesByIsin = buildNamesByIsin(proposals);
 		StringBuilder builder = new StringBuilder();
 		builder.append("[");
 		int index = 0;
@@ -1076,22 +1041,129 @@ public class AdvisorService {
 			if (index > 0) {
 				builder.append(", ");
 			}
-			builder.append("{layer=").append(summary.layer());
-			builder.append(", instruments=").append(summary.instrumentCount());
-			builder.append(", weighted=").append(summary.weighted());
-			builder.append(", score_weighted=").append(summary.scoreWeighted());
-			List<String> factors = weightingFactors(summary);
-			builder.append(", factors=").append(factors.isEmpty() ? "[]" : factors);
-			String note = weightingNote(summary);
-			if (note != null) {
-				builder.append(", note=").append(note);
-			}
-			builder.append(", weights=").append(formatWeightEntries(summary.weights(), namesByIsin));
-			builder.append("}");
+			appendWeightingSummary(builder, summary, namesByIsin);
 			index++;
 		}
 		builder.append("]");
 		return builder.toString();
+	}
+
+	private void updateDeltaCounters(Double delta, ProposalSummaryStats stats) {
+		if (isZeroAmount(delta)) {
+			stats.unchanged += 1;
+			return;
+		}
+		if (delta > 0.0d) {
+			stats.increases += 1;
+		} else {
+			stats.decreases += 1;
+		}
+	}
+
+	private void updateReasonCounters(List<String> codes, ProposalSummaryStats stats) {
+		if (codes == null) {
+			return;
+		}
+		for (String code : codes) {
+			if (code == null) {
+				continue;
+			}
+			switch (code) {
+				case "KB_WEIGHTED" -> stats.kbWeighted += 1;
+				case "SCORE_WEIGHTED" -> stats.scoreWeighted += 1;
+				case "EQUAL_WEIGHT" -> stats.equalWeight += 1;
+				case "MIN_AMOUNT_DROPPED" -> stats.minDropped += 1;
+				case "LAYER_BUDGET_ZERO" -> stats.budgetZero += 1;
+				case "NO_CHANGE_WITHIN_TOLERANCE" -> stats.noChange += 1;
+				case REASON_MIN_REBALANCE_AMOUNT -> stats.minRebalance += 1;
+				case REASON_GAP_SUGGESTION -> stats.gapSuggestions += 1;
+				default -> {
+					// Ignore non-summary reason codes.
+				}
+			}
+		}
+	}
+
+	private List<InstrumentProposalDto> collectProposalHighlightCandidates(List<InstrumentProposalDto> proposals) {
+		List<InstrumentProposalDto> candidates = new ArrayList<>();
+		for (InstrumentProposalDto proposal : proposals) {
+			if (proposal == null || isZeroAmount(proposal.getDeltaEur())) {
+				continue;
+			}
+			candidates.add(proposal);
+		}
+		return candidates;
+	}
+
+	private int compareProposalHighlights(InstrumentProposalDto left, InstrumentProposalDto right) {
+		double leftDelta = left == null || left.getDeltaEur() == null ? 0.0d : Math.abs(left.getDeltaEur());
+		double rightDelta = right == null || right.getDeltaEur() == null ? 0.0d : Math.abs(right.getDeltaEur());
+		int cmp = Double.compare(rightDelta, leftDelta);
+		if (cmp != 0) {
+			return cmp;
+		}
+		String leftIsin = left == null ? null : left.getIsin();
+		String rightIsin = right == null ? null : right.getIsin();
+		if (leftIsin == null && rightIsin == null) {
+			return 0;
+		}
+		if (leftIsin == null) {
+			return 1;
+		}
+		if (rightIsin == null) {
+			return -1;
+		}
+		return leftIsin.compareTo(rightIsin);
+	}
+
+	private void appendProposalHighlight(StringBuilder builder, InstrumentProposalDto proposal) {
+		builder.append(DISCARD_ISIN_PREFIX).append(proposal.getIsin());
+		String name = normalizePromptText(proposal.getInstrumentName());
+		if (name != null) {
+			builder.append(DISCARD_NAME_PREFIX).append(name);
+		}
+		if (proposal.getLayer() != null) {
+			builder.append(", layer=").append(proposal.getLayer());
+		}
+		builder.append(", current=").append(formatPromptAmount(proposal.getCurrentAmountEur()));
+		builder.append(", proposed=").append(formatPromptAmount(proposal.getProposedAmountEur()));
+		builder.append(", delta=").append(formatPromptAmount(proposal.getDeltaEur()));
+		builder.append(", reasons=").append(formatReasonCodes(proposal.getReasonCodes()));
+		builder.append("}");
+	}
+
+	private Map<String, String> buildNamesByIsin(List<InstrumentProposalDto> proposals) {
+		Map<String, String> namesByIsin = new HashMap<>();
+		if (proposals == null) {
+			return namesByIsin;
+		}
+		for (InstrumentProposalDto proposal : proposals) {
+			if (proposal == null || proposal.getIsin() == null) {
+				continue;
+			}
+			String name = normalizePromptText(proposal.getInstrumentName());
+			if (name != null) {
+				namesByIsin.put(proposal.getIsin(), name);
+			}
+		}
+		return namesByIsin;
+	}
+
+	private void appendWeightingSummary(StringBuilder builder,
+										 InstrumentRebalanceService.LayerWeightingSummary summary,
+										 Map<String, String> namesByIsin) {
+		builder.append("{layer=").append(summary.layer());
+		builder.append(", instruments=").append(summary.instrumentCount());
+		builder.append(", weighted=").append(summary.weighted());
+		builder.append(", score_weighted=").append(summary.scoreWeighted());
+		List<String> factors = weightingFactors(summary);
+		builder.append(", factors=").append(factors.isEmpty() ? "[]" : factors);
+		String note = weightingNote(summary);
+		if (note != null) {
+			builder.append(", note=").append(note);
+		}
+		builder.append(", weights=").append(formatWeightEntries(summary.weights(), namesByIsin));
+		builder.append("}");
 	}
 
 	private List<String> weightingFactors(InstrumentRebalanceService.LayerWeightingSummary summary) {
@@ -1149,10 +1221,10 @@ public class AdvisorService {
 			if (i > 0) {
 				builder.append(", ");
 			}
-			builder.append("{isin=").append(entry.getKey());
+			builder.append(DISCARD_ISIN_PREFIX).append(entry.getKey());
 			String name = namesByIsin.get(entry.getKey());
 			if (name != null) {
-				builder.append(", name=").append(name);
+				builder.append(DISCARD_NAME_PREFIX).append(name);
 			}
 			builder.append(", weight=").append(formatPromptWeight(entry.getValue()));
 			builder.append("}");
@@ -1230,20 +1302,14 @@ public class AdvisorService {
 		return builder.substring(0, builder.length() - 2);
 	}
 
-	private String buildFallbackNarrative(boolean withinTolerance,
-									  Map<Integer, Double> actualDistribution,
-									  Map<Integer, Double> targetDistribution,
-									  BigDecimal variancePct,
-									  Integer projectionHorizonMonths,
-									  Map<Integer, String> layerNames,
-									  List<ConstraintResultDto> constraints,
-									  boolean minimumSavingPlanRebalanced,
-									  boolean minimumSavingPlanIncreaseLayerOne,
-									  Integer minimumSavingPlanSize,
-									  boolean minimumRebalancingApplied,
-									  Integer minimumRebalancingAmount) {
-		int horizon = normalizeProjectionHorizonMonths(projectionHorizonMonths);
-		if (withinTolerance) {
+	private String buildFallbackNarrative(NarrativeContext context) {
+		LayerTargetEffectiveConfig targetConfig = context.targetConfig();
+		Map<Integer, Double> actualDistribution = context.actualDistribution();
+		Map<Integer, Double> targetDistribution = context.targetDistribution();
+		Map<Integer, String> layerNames = targetConfig.layerNames();
+		BigDecimal variancePct = targetConfig.acceptableVariancePct();
+		int horizon = normalizeProjectionHorizonMonths(targetConfig.projectionHorizonMonths());
+		if (context.withinTolerance()) {
 			String toleranceText = variancePct == null ? "3.0" : variancePct.stripTrailingZeros().toPlainString();
 			return "Savings plan structure matches the selected profile within tolerance (<= " + toleranceText + "%). "
 					+ "Projection horizon: " + horizon + " months. Longer horizons keep proposals closer to the current savings plan distribution. "
@@ -1253,32 +1319,32 @@ public class AdvisorService {
 		int layer = findLayerWithMaxDeviation(actualDistribution, targetDistribution);
 		double actual = actualDistribution.getOrDefault(layer, 0.0d);
 		double target = targetDistribution.getOrDefault(layer, 0.0d);
-		String label = layerNames == null ? "Layer " + layer : layerNames.getOrDefault(layer, "Layer " + layer);
+		String label = layerNames == null ? LABEL_LAYER_PREFIX + layer : layerNames.getOrDefault(layer, LABEL_LAYER_PREFIX + layer);
 		String toleranceText = variancePct == null ? "3.0" : variancePct.stripTrailingZeros().toPlainString();
 		StringBuilder builder = new StringBuilder();
 		builder.append(String.format("%s deviates by %.2fpp from the target distribution (tolerance %s%%).", label, Math.abs(actual - target), toleranceText));
-		constraints.stream()
+		context.constraints().stream()
 				.filter(c -> !c.isOk())
 				.findFirst()
 				.ifPresent(violation -> builder.append(" ").append(violation.getDetails()));
-		if (minimumSavingPlanRebalanced) {
+		if (context.minimumSavingPlanRebalanced()) {
 			builder.append(" Amounts were rebalanced to respect the minimum saving plan size");
-			if (minimumSavingPlanSize != null) {
-				builder.append(" of ").append(minimumSavingPlanSize).append(" EUR");
+			if (context.minimumSavingPlanSize() != null) {
+				builder.append(" of ").append(context.minimumSavingPlanSize()).append(" EUR");
 			}
 			builder.append(".");
 		}
-		if (minimumSavingPlanIncreaseLayerOne) {
+		if (context.minimumSavingPlanIncreaseLayerOne()) {
 			builder.append(" Total savings plan amount is below the minimum saving plan size");
-			if (minimumSavingPlanSize != null) {
-				builder.append(" of ").append(minimumSavingPlanSize).append(" EUR");
+			if (context.minimumSavingPlanSize() != null) {
+				builder.append(" of ").append(context.minimumSavingPlanSize()).append(" EUR");
 			}
 			builder.append("; increase Layer 1 accordingly.");
 		}
-		if (minimumRebalancingApplied) {
+		if (context.minimumRebalancingApplied()) {
 			builder.append(" Adjustments below the minimum rebalancing amount");
-			if (minimumRebalancingAmount != null) {
-				builder.append(" of ").append(minimumRebalancingAmount).append(" EUR");
+			if (context.minimumRebalancingAmount() != null) {
+				builder.append(" of ").append(context.minimumRebalancingAmount()).append(" EUR");
 			}
 			builder.append(" are not proposed.");
 		}
@@ -1294,7 +1360,6 @@ public class AdvisorService {
 									   Map<Integer, BigDecimal> actualDistribution,
 									   Map<Integer, BigDecimal> targetWeights,
 									   Map<Integer, BigDecimal> proposalAmounts,
-									   BigDecimal monthlyTotal,
 									   Map<Integer, BigDecimal> holdingsByLayer) {
 		List<SavingPlanProposalLayerDto> layers = new ArrayList<>();
 		Map<Integer, String> layerNames = targetConfig.layerNames();
@@ -1327,7 +1392,7 @@ public class AdvisorService {
 			BigDecimal targetTotalWeight = targetTotalSum.signum() <= 0
 					? BigDecimal.ZERO
 					: targetTotalAmount.divide(targetTotalSum, 6, RoundingMode.HALF_UP);
-			String name = layerNames == null ? "Layer " + layer : layerNames.getOrDefault(layer, "Layer " + layer);
+			String name = layerNames == null ? LABEL_LAYER_PREFIX + layer : layerNames.getOrDefault(layer, LABEL_LAYER_PREFIX + layer);
 			layers.add(new SavingPlanProposalLayerDto(
 					layer,
 					name,
@@ -1350,54 +1415,21 @@ public class AdvisorService {
 									  LayerTargetEffectiveConfig targetConfig,
 									  List<SavingPlanInstrument> savingPlanInstruments,
 									  InstrumentProposalGatingDto instrumentGating) {
-		if (instrumentGating == null
-				|| !instrumentGating.knowledgeBaseEnabled()
-				|| !instrumentGating.kbComplete()) {
+		if (!isGapSuggestionEligible(instrumentGating, metrics, proposalAmounts)) {
 			return List.of();
 		}
-		if (metrics == null || proposalAmounts == null || proposalAmounts.isEmpty()) {
-			return List.of();
-		}
-		Map<Integer, BigDecimal> currentByLayer = metrics.monthlyByLayer() == null
-				? Map.of()
-				: metrics.monthlyByLayer();
-		Map<Integer, BigDecimal> budgets = new LinkedHashMap<>();
-		for (int layer = 1; layer <= 5; layer++) {
-			BigDecimal current = currentByLayer.getOrDefault(layer, BigDecimal.ZERO);
-			BigDecimal proposed = proposalAmounts.getOrDefault(layer, BigDecimal.ZERO);
-			if (current.signum() <= 0 && proposed.signum() > 0) {
-				budgets.put(layer, proposed);
-			}
-		}
+		Map<Integer, BigDecimal> budgets = resolveGapBudgets(metrics, proposalAmounts);
 		if (budgets.isEmpty()) {
 			return List.of();
 		}
 		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(targetConfig);
-		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer =
-				resolveRiskThresholdsByLayer(targetConfig, riskThresholds);
-		int minSaving = targetConfig == null || targetConfig.minimumSavingPlanSize() == null
-				? 1
-				: targetConfig.minimumSavingPlanSize();
-		int minRebalance = targetConfig == null || targetConfig.minimumRebalancingAmount() == null
-				? 1
-				: targetConfig.minimumRebalancingAmount();
+		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer = resolveRiskThresholdsByLayer(targetConfig, riskThresholds);
+		int minSaving = targetConfig == null || targetConfig.minimumSavingPlanSize() == null ? 1 : targetConfig.minimumSavingPlanSize();
+		int minRebalance = targetConfig == null || targetConfig.minimumRebalancingAmount() == null ? 1 : targetConfig.minimumRebalancingAmount();
 		Map<Integer, Integer> maxSavingPlans = resolveMaxSavingPlans();
 		Set<String> existingIsins = new LinkedHashSet<>();
 		List<AssessorEngine.SavingPlanItem> savingPlanItems = new ArrayList<>();
-		if (savingPlanInstruments != null) {
-			for (SavingPlanInstrument instrument : savingPlanInstruments) {
-				if (instrument == null || instrument.isin() == null) {
-					continue;
-				}
-				existingIsins.add(normalizeIsin(instrument.isin()));
-				savingPlanItems.add(new AssessorEngine.SavingPlanItem(
-						normalizeIsin(instrument.isin()),
-						null,
-						instrument.monthlyAmount(),
-						instrument.layer()
-				));
-			}
-		}
+		populateExistingSavingPlanItems(savingPlanInstruments, existingIsins, savingPlanItems);
 		AssessorInstrumentSuggestionService.SuggestionResult suggestions = instrumentSuggestionService.suggest(
 				new AssessorInstrumentSuggestionService.SuggestionRequest(
 					savingPlanItems,
@@ -1417,6 +1449,55 @@ public class AdvisorService {
 		if (suggestions == null || suggestions.savingPlanSuggestions().isEmpty()) {
 			return List.of();
 		}
+		return mapGapSuggestions(suggestions);
+	}
+
+	private boolean isGapSuggestionEligible(InstrumentProposalGatingDto instrumentGating,
+									 SavingPlanMetrics metrics,
+									 Map<Integer, BigDecimal> proposalAmounts) {
+		return instrumentGating != null
+				&& instrumentGating.knowledgeBaseEnabled()
+				&& instrumentGating.kbComplete()
+				&& metrics != null
+				&& proposalAmounts != null
+				&& !proposalAmounts.isEmpty();
+	}
+
+	private Map<Integer, BigDecimal> resolveGapBudgets(SavingPlanMetrics metrics, Map<Integer, BigDecimal> proposalAmounts) {
+		Map<Integer, BigDecimal> currentByLayer = metrics.monthlyByLayer() == null ? Map.of() : metrics.monthlyByLayer();
+		Map<Integer, BigDecimal> budgets = new LinkedHashMap<>();
+		for (int layer = 1; layer <= 5; layer++) {
+			BigDecimal current = currentByLayer.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal proposed = proposalAmounts.getOrDefault(layer, BigDecimal.ZERO);
+			if (current.signum() <= 0 && proposed.signum() > 0) {
+				budgets.put(layer, proposed);
+			}
+		}
+		return budgets;
+	}
+
+	private void populateExistingSavingPlanItems(List<SavingPlanInstrument> savingPlanInstruments,
+												 Set<String> existingIsins,
+												 List<AssessorEngine.SavingPlanItem> savingPlanItems) {
+		if (savingPlanInstruments == null) {
+			return;
+		}
+		for (SavingPlanInstrument instrument : savingPlanInstruments) {
+			if (instrument == null || instrument.isin() == null) {
+				continue;
+			}
+			String normalizedIsin = normalizeIsin(instrument.isin());
+			existingIsins.add(normalizedIsin);
+			savingPlanItems.add(new AssessorEngine.SavingPlanItem(
+					normalizedIsin,
+					null,
+					instrument.monthlyAmount(),
+					instrument.layer()
+			));
+		}
+	}
+
+	private List<InstrumentProposalDto> mapGapSuggestions(AssessorInstrumentSuggestionService.SuggestionResult suggestions) {
 		List<InstrumentProposalDto> proposals = new ArrayList<>();
 		for (AssessorInstrumentSuggestionService.NewInstrumentSuggestion suggestion : suggestions.savingPlanSuggestions()) {
 			if (suggestion == null || suggestion.amount() == null || suggestion.amount().signum() <= 0) {
@@ -1460,50 +1541,72 @@ public class AdvisorService {
 									  List<SavingPlanInstrument> savingPlanInstruments,
 									  LayerTargetEffectiveConfig targetConfig,
 									  InstrumentProposalGatingDto instrumentGating) {
-		if (warningDetails == null || savingPlanInstruments == null || savingPlanInstruments.isEmpty()) {
-			return;
-		}
-		if (instrumentGating != null && (!instrumentGating.knowledgeBaseEnabled() || !instrumentGating.kbComplete())) {
+		if (!canAppendRiskWarnings(warningDetails, savingPlanInstruments, instrumentGating)) {
 			return;
 		}
 		LayerTargetRiskThresholds thresholds = resolveRiskThresholds(targetConfig);
-		Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer =
-				resolveRiskThresholdsByLayer(targetConfig, thresholds);
-		Map<String, Integer> scores = instrumentAssessmentService.assessScores(
-				savingPlanInstruments.stream()
-						.filter(instrument -> instrument != null && instrument.isin() != null)
-						.map(instrument -> normalizeIsin(instrument.isin()))
-						.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)),
-				thresholds,
-				thresholdsByLayer
-		);
+		Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer = resolveRiskThresholdsByLayer(targetConfig, thresholds);
+		Map<String, Integer> scores = assessRiskScores(savingPlanInstruments, thresholds, thresholdsByLayer);
 		if (scores.isEmpty()) {
 			return;
 		}
 		Set<String> warned = new LinkedHashSet<>();
 		for (SavingPlanInstrument instrument : savingPlanInstruments) {
-			if (instrument == null || instrument.isin() == null) {
+			if (!isEligibleForRiskWarning(instrument, warned)) {
 				continue;
 			}
 			String isin = normalizeIsin(instrument.isin());
-			if (isin == null || warned.contains(isin)) {
-				continue;
-			}
 			Integer score = scores.get(isin);
 			LayerTargetRiskThresholds layerThresholds =
 					RiskThresholdsUtil.resolveForLayer(thresholdsByLayer, thresholds, instrument.layer());
 			double cutoff = layerThresholds.getHighMin();
-			if (score != null && score >= cutoff) {
-				String name = instrument.name() == null || instrument.name().isBlank() ? isin : instrument.name();
-				warningDetails.add(new InstrumentRebalanceService.InstrumentWarning(
-						WARNING_RISK_NOT_ACCEPTABLE,
-						String.format("Instrument %s (%s) exceeds acceptable risk for the profile (score %d >= %d).",
-								name, isin, score, (int) Math.ceil(cutoff)),
-						instrument.layer()
-				));
-				warned.add(isin);
+			if (score == null || score < cutoff) {
+				continue;
 			}
+			addRiskWarning(warningDetails, instrument, isin, score, cutoff);
+			warned.add(isin);
 		}
+	}
+
+	private boolean canAppendRiskWarnings(List<InstrumentRebalanceService.InstrumentWarning> warningDetails,
+										   List<SavingPlanInstrument> savingPlanInstruments,
+										   InstrumentProposalGatingDto instrumentGating) {
+		if (warningDetails == null || savingPlanInstruments == null || savingPlanInstruments.isEmpty()) {
+			return false;
+		}
+		return instrumentGating == null || (instrumentGating.knowledgeBaseEnabled() && instrumentGating.kbComplete());
+	}
+
+	private Map<String, Integer> assessRiskScores(List<SavingPlanInstrument> savingPlanInstruments,
+										 LayerTargetRiskThresholds thresholds,
+										 Map<Integer, LayerTargetRiskThresholds> thresholdsByLayer) {
+		Set<String> isins = savingPlanInstruments.stream()
+				.filter(instrument -> instrument != null && instrument.isin() != null)
+				.map(instrument -> normalizeIsin(instrument.isin()))
+				.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+		return instrumentAssessmentService.assessScores(isins, thresholds, thresholdsByLayer);
+	}
+
+	private boolean isEligibleForRiskWarning(SavingPlanInstrument instrument, Set<String> warned) {
+		if (instrument == null || instrument.isin() == null) {
+			return false;
+		}
+		String isin = normalizeIsin(instrument.isin());
+		return isin != null && !warned.contains(isin);
+	}
+
+	private void addRiskWarning(List<InstrumentRebalanceService.InstrumentWarning> warningDetails,
+									 SavingPlanInstrument instrument,
+									 String isin,
+									 Integer score,
+									 double cutoff) {
+		String name = instrument.name() == null || instrument.name().isBlank() ? isin : instrument.name();
+		warningDetails.add(new InstrumentRebalanceService.InstrumentWarning(
+				WARNING_RISK_NOT_ACCEPTABLE,
+				String.format("Instrument %s (%s) exceeds acceptable risk for the profile (score %d >= %d).",
+						name, isin, score, (int) Math.ceil(cutoff)),
+				instrument.layer()
+		));
 	}
 
 	private Map<Integer, Integer> resolveMaxSavingPlans() {
@@ -1584,50 +1687,56 @@ public class AdvisorService {
 	}
 
 	private Map<Integer, BigDecimal> reconcileProposalAmountsWithInstruments(Map<Integer, BigDecimal> proposalAmounts,
-																			 List<InstrumentProposalDto> instrumentProposals,
-																			 BigDecimal expectedTotal) {
-		if (proposalAmounts == null || proposalAmounts.isEmpty() || instrumentProposals == null || instrumentProposals.isEmpty()) {
-			return proposalAmounts;
+																 List<InstrumentProposalDto> instrumentProposals,
+																 BigDecimal expectedTotal) {
+		Map<Integer, BigDecimal> baseAmounts = safeLayerAmounts(proposalAmounts);
+		if (baseAmounts.isEmpty() || instrumentProposals == null || instrumentProposals.isEmpty()) {
+			return baseAmounts;
 		}
+		Map<Integer, BigDecimal> totals = aggregateInstrumentTotals(instrumentProposals);
+		if (totals.isEmpty()) {
+			return baseAmounts;
+		}
+		if (!totalsMatchExpectedTotal(baseAmounts, totals, expectedTotal)) {
+			return baseAmounts;
+		}
+		return applyInstrumentTotals(baseAmounts, totals);
+	}
+
+	private Map<Integer, BigDecimal> aggregateInstrumentTotals(List<InstrumentProposalDto> instrumentProposals) {
 		Map<Integer, BigDecimal> totals = new LinkedHashMap<>();
-		Map<Integer, Integer> counts = new HashMap<>();
 		for (InstrumentProposalDto proposal : instrumentProposals) {
-			if (proposal == null) {
-				continue;
-			}
-			Integer layer = proposal.getLayer();
-			if (layer == null) {
+			if (proposal == null || proposal.getLayer() == null) {
 				continue;
 			}
 			Double amount = proposal.getProposedAmountEur();
 			BigDecimal value = amount == null || amount < 0 ? BigDecimal.ZERO : BigDecimal.valueOf(amount);
-			totals.merge(layer, value, BigDecimal::add);
-			counts.merge(layer, 1, Integer::sum);
+			totals.merge(proposal.getLayer(), value, BigDecimal::add);
 		}
-		if (totals.isEmpty()) {
-			return proposalAmounts;
-		}
+		return totals;
+	}
+
+	private boolean totalsMatchExpectedTotal(Map<Integer, BigDecimal> proposalAmounts,
+										  Map<Integer, BigDecimal> totals,
+										  BigDecimal expectedTotal) {
 		BigDecimal baseline = expectedTotal == null ? sumAmounts(proposalAmounts) : expectedTotal;
 		BigDecimal instrumentTotal = sumAmounts(totals);
-		if (baseline == null) {
-			baseline = sumAmounts(proposalAmounts);
-		}
-		if (instrumentTotal.subtract(baseline).abs().compareTo(new BigDecimal("0.01")) > 0) {
-			return proposalAmounts;
-		}
+		return instrumentTotal.subtract(baseline).abs().compareTo(new BigDecimal("0.01")) <= 0;
+	}
+
+	private Map<Integer, BigDecimal> applyInstrumentTotals(Map<Integer, BigDecimal> proposalAmounts,
+									   Map<Integer, BigDecimal> totals) {
 		Map<Integer, BigDecimal> adjusted = new LinkedHashMap<>(proposalAmounts);
 		boolean updated = false;
 		for (Map.Entry<Integer, BigDecimal> entry : totals.entrySet()) {
 			Integer layer = entry.getKey();
-			if (counts.getOrDefault(layer, 0) < 1) {
-				continue;
-			}
 			BigDecimal existing = adjusted.getOrDefault(layer, BigDecimal.ZERO);
 			BigDecimal value = entry.getValue();
-			if (existing.compareTo(value) != 0) {
-				adjusted.put(layer, value);
-				updated = true;
+			if (existing.compareTo(value) == 0) {
+				continue;
 			}
+			adjusted.put(layer, value);
+			updated = true;
 		}
 		return updated ? Map.copyOf(adjusted) : proposalAmounts;
 	}
@@ -1802,14 +1911,6 @@ public class AdvisorService {
 		return result;
 	}
 
-	private Map<Integer, Double> toPercentagePoints(Map<Integer, BigDecimal> values) {
-		Map<Integer, Double> result = new LinkedHashMap<>();
-		for (int layer = 1; layer <= 5; layer++) {
-			result.put(layer, toWeightPct(values.getOrDefault(layer, BigDecimal.ZERO)));
-		}
-		return result;
-	}
-
 	private boolean isWithinTolerance(Map<Integer, BigDecimal> actual, Map<Integer, BigDecimal> target, BigDecimal variancePct) {
 		BigDecimal tolerance = variancePct == null ? new BigDecimal("3.0") : variancePct;
 		tolerance = tolerance.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
@@ -1836,26 +1937,26 @@ public class AdvisorService {
 		BigDecimal layer4Actual = distribution.getOrDefault(4, BigDecimal.ZERO);
 		BigDecimal layer5Actual = distribution.getOrDefault(5, BigDecimal.ZERO);
 
-		if (constraints.containsKey("core_min")) {
-			BigDecimal threshold = constraints.get("core_min");
+		if (constraints.containsKey(CONSTRAINT_CORE_MIN)) {
+			BigDecimal threshold = constraints.get(CONSTRAINT_CORE_MIN);
 			boolean ok = coreActual.compareTo(threshold) >= 0;
 			String details = String.format("Global Core + Core-Plus = %s (min %s)",
 					formatPercentage(coreActual), formatPercentage(threshold));
-			result.add(new ConstraintResultDto("core_min", ok, details));
+			result.add(new ConstraintResultDto(CONSTRAINT_CORE_MIN, ok, details));
 		}
-		if (constraints.containsKey("layer4_max")) {
-			BigDecimal threshold = constraints.get("layer4_max");
+		if (constraints.containsKey(CONSTRAINT_LAYER4_MAX)) {
+			BigDecimal threshold = constraints.get(CONSTRAINT_LAYER4_MAX);
 			boolean ok = layer4Actual.compareTo(threshold) <= 0;
 			String name = names.getOrDefault(4, "Layer 4");
 			String details = String.format("%s = %s (max %s)", name, formatPercentage(layer4Actual), formatPercentage(threshold));
-			result.add(new ConstraintResultDto("layer4_max", ok, details));
+			result.add(new ConstraintResultDto(CONSTRAINT_LAYER4_MAX, ok, details));
 		}
-		if (constraints.containsKey("layer5_max")) {
-			BigDecimal threshold = constraints.get("layer5_max");
+		if (constraints.containsKey(CONSTRAINT_LAYER5_MAX)) {
+			BigDecimal threshold = constraints.get(CONSTRAINT_LAYER5_MAX);
 			boolean ok = layer5Actual.compareTo(threshold) <= 0;
 			String name = names.getOrDefault(5, "Layer 5");
 			String details = String.format("%s = %s (max %s)", name, formatPercentage(layer5Actual), formatPercentage(threshold));
-			result.add(new ConstraintResultDto("layer5_max", ok, details));
+			result.add(new ConstraintResultDto(CONSTRAINT_LAYER5_MAX, ok, details));
 		}
 		return result;
 	}
@@ -1894,9 +1995,7 @@ public class AdvisorService {
 		if (monthlyTotal.signum() <= 0) {
 			return fallback;
 		}
-		Map<Integer, BigDecimal> currentAmounts = metrics.monthlyByLayer() == null
-				? initLayerAmounts()
-				: metrics.monthlyByLayer();
+		Map<Integer, BigDecimal> currentAmounts = metrics.monthlyByLayer() == null ? initLayerAmounts() : metrics.monthlyByLayer();
 		Map<Integer, BigDecimal> currentWeights = computeDistribution(currentAmounts, monthlyTotal);
 		Map<Integer, BigDecimal> holdings = normalizeHoldingsByLayer(holdingsByLayer);
 		BigDecimal holdingsTotal = sumAmounts(holdings);
@@ -1904,59 +2003,99 @@ public class AdvisorService {
 			return fallback;
 		}
 		int horizon = normalizeProjectionHorizonMonths(projectionHorizonMonths);
+		GapComputation gaps = computeProjectedGaps(targetWeights, holdings, holdingsTotal, monthlyTotal, horizon, variancePct);
+		Map<Integer, BigDecimal> weights = resolveProjectedWeights(gaps.gapWeights(), gaps.gapTotal(), currentWeights, horizon, projectionBlendMin, projectionBlendMax);
+		if (sumAmounts(weights).signum() <= 0) {
+			return fallback;
+		}
+		Map<Integer, BigDecimal> desired = projectDesiredAmounts(weights, monthlyTotal);
+		return roundProposalTargets(desired, monthlyTotal);
+	}
+
+	private record GapComputation(Map<Integer, BigDecimal> gapWeights, BigDecimal gapTotal) {
+	}
+
+	private GapComputation computeProjectedGaps(Map<Integer, BigDecimal> targetWeights,
+										 Map<Integer, BigDecimal> holdings,
+										 BigDecimal holdingsTotal,
+										 BigDecimal monthlyTotal,
+										 int horizon,
+										 BigDecimal variancePct) {
 		BigDecimal projectedTotal = holdingsTotal.add(monthlyTotal.multiply(BigDecimal.valueOf(horizon)));
 		BigDecimal varianceFraction = varianceFraction(variancePct);
 		Map<Integer, BigDecimal> gaps = initLayerAmounts();
 		BigDecimal gapTotal = BigDecimal.ZERO;
 		for (int layer = 1; layer <= 5; layer++) {
-			BigDecimal targetWeight = targetWeights.getOrDefault(layer, BigDecimal.ZERO);
-			BigDecimal targetValue = projectedTotal.multiply(targetWeight);
-			BigDecimal holding = holdings.getOrDefault(layer, BigDecimal.ZERO);
-			BigDecimal gap = targetValue.subtract(holding);
-			if (gap.signum() > 0) {
-				BigDecimal currentWeight = holding.divide(holdingsTotal, 6, RoundingMode.HALF_UP);
-				if (currentWeight.compareTo(targetWeight.add(varianceFraction)) > 0) {
-					gap = BigDecimal.ZERO;
-				}
-			} else {
-				gap = BigDecimal.ZERO;
-			}
+			BigDecimal gap = computeLayerGap(layer, targetWeights, holdings, holdingsTotal, projectedTotal, varianceFraction);
 			gaps.put(layer, gap);
 			gapTotal = gapTotal.add(gap);
 		}
+		return new GapComputation(computeGapWeights(gaps, gapTotal), gapTotal);
+	}
+
+	private BigDecimal computeLayerGap(int layer,
+							  Map<Integer, BigDecimal> targetWeights,
+							  Map<Integer, BigDecimal> holdings,
+							  BigDecimal holdingsTotal,
+							  BigDecimal projectedTotal,
+							  BigDecimal varianceFraction) {
+		BigDecimal targetWeight = targetWeights.getOrDefault(layer, BigDecimal.ZERO);
+		BigDecimal targetValue = projectedTotal.multiply(targetWeight);
+		BigDecimal holding = holdings.getOrDefault(layer, BigDecimal.ZERO);
+		BigDecimal gap = targetValue.subtract(holding);
+		if (gap.signum() <= 0) {
+			return BigDecimal.ZERO;
+		}
+		BigDecimal currentWeight = holding.divide(holdingsTotal, 6, RoundingMode.HALF_UP);
+		return currentWeight.compareTo(targetWeight.add(varianceFraction)) > 0 ? BigDecimal.ZERO : gap;
+	}
+
+	private Map<Integer, BigDecimal> computeGapWeights(Map<Integer, BigDecimal> gaps, BigDecimal gapTotal) {
 		Map<Integer, BigDecimal> gapWeights = initLayerAmounts();
-		if (gapTotal.signum() > 0) {
-			for (int layer = 1; layer <= 5; layer++) {
-				BigDecimal gap = gaps.getOrDefault(layer, BigDecimal.ZERO);
-				BigDecimal weight = gap.signum() == 0
-						? BigDecimal.ZERO
-						: gap.divide(gapTotal, 6, RoundingMode.HALF_UP);
-				gapWeights.put(layer, weight);
-			}
-		}
-		Map<Integer, BigDecimal> weights;
 		if (gapTotal.signum() <= 0) {
-			weights = normalizeTargetWeights(currentWeights);
-		} else {
-			BigDecimal blendFactor = projectionBlendFactor(horizon, projectionBlendMin, projectionBlendMax);
-			weights = blendWeights(gapWeights, currentWeights, blendFactor);
+			return gapWeights;
 		}
-		if (sumAmounts(weights).signum() <= 0) {
-			return fallback;
+		for (int layer = 1; layer <= 5; layer++) {
+			BigDecimal gap = gaps.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal weight = gap.signum() == 0 ? BigDecimal.ZERO : gap.divide(gapTotal, 6, RoundingMode.HALF_UP);
+			gapWeights.put(layer, weight);
 		}
+		return gapWeights;
+	}
+
+	private Map<Integer, BigDecimal> resolveProjectedWeights(Map<Integer, BigDecimal> gapWeights,
+										 BigDecimal gapTotal,
+										 Map<Integer, BigDecimal> currentWeights,
+										 int horizon,
+										 BigDecimal projectionBlendMin,
+										 BigDecimal projectionBlendMax) {
+		if (gapTotal.signum() <= 0) {
+			return normalizeTargetWeights(currentWeights);
+		}
+		BigDecimal blendFactor = projectionBlendFactor(horizon, projectionBlendMin, projectionBlendMax);
+		return blendWeights(gapWeights, currentWeights, blendFactor);
+	}
+
+	private Map<Integer, BigDecimal> projectDesiredAmounts(Map<Integer, BigDecimal> weights, BigDecimal monthlyTotal) {
 		Map<Integer, BigDecimal> desired = new HashMap<>();
 		for (int layer = 1; layer <= 5; layer++) {
 			BigDecimal weight = weights.getOrDefault(layer, BigDecimal.ZERO);
 			desired.put(layer, monthlyTotal.multiply(weight));
 		}
-		return roundProposalTargets(desired, monthlyTotal);
+		return desired;
 	}
 
 	private Map<Integer, BigDecimal> buildRuleBasedTargets(SavingPlanMetrics metrics, Map<Integer, BigDecimal> targetWeights) {
 		Map<Integer, BigDecimal> fallback = new HashMap<>();
+		if (targetWeights == null || targetWeights.isEmpty()) {
+			return fallback;
+		}
+		BigDecimal monthlyTotal = metrics == null || metrics.monthlyTotal() == null
+				? BigDecimal.ZERO
+				: metrics.monthlyTotal();
 		for (int layer = 1; layer <= 5; layer++) {
 			BigDecimal targetWeight = targetWeights.getOrDefault(layer, BigDecimal.ZERO);
-			fallback.put(layer, targetWeight.multiply(metrics.monthlyTotal()));
+			fallback.put(layer, targetWeight.multiply(monthlyTotal));
 		}
 		return fallback;
 	}
@@ -1968,8 +2107,16 @@ public class AdvisorService {
 		BigDecimal totalRounded = total.setScale(0, RoundingMode.HALF_UP);
 		Map<Integer, BigDecimal> rounded = new HashMap<>();
 		Map<Integer, BigDecimal> fractions = new HashMap<>();
-		BigDecimal sum = BigDecimal.ZERO;
+		BigDecimal sum = seedRoundedTargets(desiredTargets, rounded, fractions);
+		int diff = sum.subtract(totalRounded).intValue();
+		adjustRoundedTargetDiff(rounded, fractions, diff);
+		return rounded;
+	}
 
+	private BigDecimal seedRoundedTargets(Map<Integer, BigDecimal> desiredTargets,
+											   Map<Integer, BigDecimal> rounded,
+											   Map<Integer, BigDecimal> fractions) {
+		BigDecimal sum = BigDecimal.ZERO;
 		for (int layer = 1; layer <= 5; layer++) {
 			BigDecimal desired = desiredTargets.getOrDefault(layer, BigDecimal.ZERO);
 			if (desired.signum() < 0) {
@@ -1982,78 +2129,111 @@ public class AdvisorService {
 			fractions.put(layer, fraction);
 			sum = sum.add(ceil);
 		}
+		return sum;
+	}
 
-		int diff = sum.subtract(totalRounded).intValue();
+	private void adjustRoundedTargetDiff(Map<Integer, BigDecimal> rounded,
+											Map<Integer, BigDecimal> fractions,
+											int diff) {
 		if (diff > 0) {
-			List<Integer> layers = sortLayersByFraction(fractions, true);
-			int index = 0;
-			while (diff > 0 && !layers.isEmpty()) {
-				int layer = layers.get(index % layers.size());
-				BigDecimal current = rounded.get(layer);
-				if (current.signum() > 0) {
-					rounded.put(layer, current.subtract(BigDecimal.ONE));
-					diff -= 1;
-				}
-				index++;
-			}
-		} else if (diff < 0) {
-			List<Integer> layers = sortLayersByFraction(fractions, false);
-			int index = 0;
-			while (diff < 0 && !layers.isEmpty()) {
-				int layer = layers.get(index % layers.size());
-				rounded.put(layer, rounded.get(layer).add(BigDecimal.ONE));
-				diff += 1;
-				index++;
-			}
+			applyPositiveRoundingDiff(rounded, sortLayersByFraction(fractions, true), diff);
+			return;
 		}
-		return rounded;
+		if (diff < 0) {
+			applyNegativeRoundingDiff(rounded, sortLayersByFraction(fractions, false), diff);
+		}
+	}
+
+	private void applyPositiveRoundingDiff(Map<Integer, BigDecimal> rounded, List<Integer> layers, int diff) {
+		int index = 0;
+		int remaining = diff;
+		while (remaining > 0 && !layers.isEmpty()) {
+			int layer = layers.get(index % layers.size());
+			BigDecimal current = rounded.get(layer);
+			if (current.signum() > 0) {
+				rounded.put(layer, current.subtract(BigDecimal.ONE));
+				remaining -= 1;
+			}
+			index++;
+		}
+	}
+
+	private void applyNegativeRoundingDiff(Map<Integer, BigDecimal> rounded, List<Integer> layers, int diff) {
+		int index = 0;
+		int remaining = diff;
+		while (remaining < 0 && !layers.isEmpty()) {
+			int layer = layers.get(index % layers.size());
+			rounded.put(layer, rounded.get(layer).add(BigDecimal.ONE));
+			remaining += 1;
+			index++;
+		}
 	}
 
 	private MinimumSavingPlanAdjustment applyMinimumSavingPlanSize(Map<Integer, BigDecimal> proposalAmounts,
-																   Integer minimumSavingPlanSize) {
+											   Integer minimumSavingPlanSize) {
 		if (proposalAmounts == null || minimumSavingPlanSize == null || minimumSavingPlanSize < 1) {
 			return new MinimumSavingPlanAdjustment(proposalAmounts, List.of(), false, false);
 		}
+		Map<Integer, BigDecimal> adjusted = copyLayerAmounts(proposalAmounts);
+		List<Integer> zeroedLayers = new ArrayList<>();
+		BigDecimal minimum = new BigDecimal(minimumSavingPlanSize);
+		rebalanceBelowMinimumLayers(adjusted, minimum, zeroedLayers);
+		boolean increasedLayerOne = enforceMinimumForSingleLayerOne(adjusted, minimum);
+		boolean rebalanced = hasAnyRebalanceChange(proposalAmounts, adjusted);
+		return new MinimumSavingPlanAdjustment(Map.copyOf(adjusted), List.copyOf(zeroedLayers), rebalanced, increasedLayerOne);
+	}
+
+	private Map<Integer, BigDecimal> copyLayerAmounts(Map<Integer, BigDecimal> proposalAmounts) {
 		Map<Integer, BigDecimal> adjusted = new LinkedHashMap<>();
 		for (int layer = 1; layer <= 5; layer++) {
 			adjusted.put(layer, proposalAmounts.getOrDefault(layer, BigDecimal.ZERO));
 		}
-		List<Integer> zeroedLayers = new ArrayList<>();
-		BigDecimal minimum = new BigDecimal(minimumSavingPlanSize);
+		return adjusted;
+	}
+
+	private void rebalanceBelowMinimumLayers(Map<Integer, BigDecimal> adjusted,
+											BigDecimal minimum,
+											List<Integer> zeroedLayers) {
 		for (int layer = 5; layer >= 2; layer--) {
 			BigDecimal amount = adjusted.getOrDefault(layer, BigDecimal.ZERO);
-			if (amount.signum() > 0 && amount.compareTo(minimum) < 0) {
-				adjusted.put(layer, BigDecimal.ZERO);
-				zeroedLayers.add(layer);
-				adjusted.put(layer - 1, adjusted.getOrDefault(layer - 1, BigDecimal.ZERO).add(amount));
+			if (amount.signum() <= 0 || amount.compareTo(minimum) >= 0) {
+				continue;
 			}
+			adjusted.put(layer, BigDecimal.ZERO);
+			zeroedLayers.add(layer);
+			adjusted.put(layer - 1, adjusted.getOrDefault(layer - 1, BigDecimal.ZERO).add(amount));
 		}
-		boolean increasedLayerOne = false;
-		BigDecimal layerOneAmount = adjusted.getOrDefault(1, BigDecimal.ZERO);
-		boolean onlyLayerOne = true;
+	}
+
+	private boolean enforceMinimumForSingleLayerOne(Map<Integer, BigDecimal> adjusted, BigDecimal minimum) {
 		int nonZeroLayers = 0;
+		boolean onlyLayerOne = true;
 		for (int layer = 1; layer <= 5; layer++) {
-			if (adjusted.getOrDefault(layer, BigDecimal.ZERO).signum() > 0) {
-				nonZeroLayers += 1;
-				if (layer != 1) {
-					onlyLayerOne = false;
-				}
+			if (adjusted.getOrDefault(layer, BigDecimal.ZERO).signum() <= 0) {
+				continue;
+			}
+			nonZeroLayers += 1;
+			if (layer != 1) {
+				onlyLayerOne = false;
 			}
 		}
+		BigDecimal layerOneAmount = adjusted.getOrDefault(1, BigDecimal.ZERO);
 		if (nonZeroLayers == 1 && onlyLayerOne && layerOneAmount.signum() > 0 && layerOneAmount.compareTo(minimum) < 0) {
 			adjusted.put(1, minimum);
-			increasedLayerOne = true;
+			return true;
 		}
-		boolean rebalanced = false;
+		return false;
+	}
+
+	private boolean hasAnyRebalanceChange(Map<Integer, BigDecimal> originalAmounts, Map<Integer, BigDecimal> adjustedAmounts) {
 		for (int layer = 1; layer <= 5; layer++) {
-			BigDecimal original = proposalAmounts.getOrDefault(layer, BigDecimal.ZERO);
-			BigDecimal updated = adjusted.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal original = originalAmounts.getOrDefault(layer, BigDecimal.ZERO);
+			BigDecimal updated = adjustedAmounts.getOrDefault(layer, BigDecimal.ZERO);
 			if (original.compareTo(updated) != 0) {
-				rebalanced = true;
-				break;
+				return true;
 			}
 		}
-		return new MinimumSavingPlanAdjustment(Map.copyOf(adjusted), List.copyOf(zeroedLayers), rebalanced, increasedLayerOne);
+		return false;
 	}
 
 	private MinimumSavingPlanImpact reconcileMinimumSavingPlanImpact(Map<Integer, BigDecimal> originalTargets,
@@ -2249,20 +2429,6 @@ public class AdvisorService {
 		return layer;
 	}
 
-	private Integer toLayer(Object raw) {
-		if (raw instanceof Number number) {
-			return number.intValue();
-		}
-		if (raw instanceof String text) {
-			try {
-				return Integer.parseInt(text.trim());
-			} catch (NumberFormatException ignored) {
-				return null;
-			}
-		}
-		return null;
-	}
-
 	private BigDecimal toBigDecimal(Object value) {
 		if (value == null) {
 			return null;
@@ -2302,6 +2468,21 @@ public class AdvisorService {
 			return null;
 		}
 		return fraction.multiply(new BigDecimal("100")).setScale(2, RoundingMode.HALF_UP).doubleValue();
+	}
+
+	private static final class ProposalSummaryStats {
+		private int total;
+		private int increases;
+		private int decreases;
+		private int unchanged;
+		private int kbWeighted;
+		private int scoreWeighted;
+		private int equalWeight;
+		private int minDropped;
+		private int budgetZero;
+		private int noChange;
+		private int minRebalance;
+		private int gapSuggestions;
 	}
 
 	private record MinimumSavingPlanAdjustment(Map<Integer, BigDecimal> adjustedAmounts,

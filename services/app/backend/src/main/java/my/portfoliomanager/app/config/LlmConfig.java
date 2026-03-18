@@ -23,15 +23,18 @@ public class LlmConfig {
 	private static final String DEFAULT_PROVIDER = "openai";
 	private static final String DEFAULT_BASE_URL = "https://api.openai.com/v1";
 	private static final String DEFAULT_MODEL = "gpt-5-mini";
+	private static final String ACTION_WEBSEARCH = "websearch";
+	private static final String ACTION_EXTRACTION = "extraction";
+	private static final String ACTION_NARRATIVE = "narrative";
 	private static final int MIN_TIMEOUT_SECONDS = 300;
 	private static final List<String> LOCAL_HOSTS = List.of("localhost", "127.0.0.1", "::1", "0.0.0.0");
 
 	@Bean
 	@ConditionalOnMissingBean(LlmClient.class)
 	public LlmClient llmClient(AppProperties properties) {
-		ResolvedActionConfig websearch = resolveActionConfig(properties, actionConfig(properties, "websearch"), "websearch");
-		ResolvedActionConfig extraction = resolveActionConfig(properties, actionConfig(properties, "extraction"), "extraction");
-		ResolvedActionConfig narrative = resolveActionConfig(properties, actionConfig(properties, "narrative"), "narrative");
+		ResolvedActionConfig websearch = resolveActionConfig(properties, actionConfig(properties, ACTION_WEBSEARCH), ACTION_WEBSEARCH);
+		ResolvedActionConfig extraction = resolveActionConfig(properties, actionConfig(properties, ACTION_EXTRACTION), ACTION_EXTRACTION);
+		ResolvedActionConfig narrative = resolveActionConfig(properties, actionConfig(properties, ACTION_NARRATIVE), ACTION_NARRATIVE);
 
 		LlmClient websearchClient = createActionClient(websearch);
 		LlmClient extractionClient = createActionClient(extraction);
@@ -41,12 +44,14 @@ public class LlmConfig {
 				websearchClient,
 				extractionClient,
 				narrativeClient,
-				websearch.enabled(),
-				extraction.enabled(),
-				narrative.enabled(),
-				websearch.externalProvider(),
-				extraction.externalProvider(),
-				narrative.externalProvider()
+				new ActionRoutedLlmClient.RoutingConfig(
+						websearch.enabled(),
+						extraction.enabled(),
+						narrative.enabled(),
+						websearch.externalProvider(),
+						extraction.externalProvider(),
+						narrative.externalProvider()
+				)
 		);
 	}
 
@@ -65,9 +70,9 @@ public class LlmConfig {
 			return null;
 		}
 		return switch (actionName) {
-			case "websearch" -> properties.llm().websearch();
-			case "extraction" -> properties.llm().extraction();
-			case "narrative" -> properties.llm().narrative();
+			case ACTION_WEBSEARCH -> properties.llm().websearch();
+			case ACTION_EXTRACTION -> properties.llm().extraction();
+			case ACTION_NARRATIVE -> properties.llm().narrative();
 			default -> null;
 		};
 	}
@@ -81,7 +86,7 @@ public class LlmConfig {
 					reason);
 			return new NoopLlmClient();
 		}
-		if (!"openai".equals(config.provider())) {
+		if (!DEFAULT_PROVIDER.equals(config.provider())) {
 			logger.warn("Unsupported LLM provider '{}' for {} action. Currently only openai is supported; action disabled.",
 					config.provider(), config.actionName());
 			return new NoopLlmClient();
@@ -97,8 +102,8 @@ public class LlmConfig {
 	}
 
 	private ResolvedActionConfig resolveActionConfig(AppProperties properties,
-										  AppProperties.Llm.Action action,
-										  String actionName) {
+									  AppProperties.Llm.Action action,
+									  String actionName) {
 		AppProperties.Llm llm = properties == null ? null : properties.llm();
 		AppProperties.Llm.OpenAi global = llm == null ? null : llm.openai();
 
@@ -125,23 +130,8 @@ public class LlmConfig {
 		int connectTimeoutSeconds = timeoutOrDefault(global == null ? null : global.connectTimeoutSeconds());
 		int readTimeoutSeconds = timeoutOrDefault(global == null ? null : global.readTimeoutSeconds());
 
-		String disableReason = null;
-		boolean enabled;
-		if (isDisabledProvider(provider)) {
-			enabled = false;
-			disableReason = "provider disabled";
-		} else if (!"openai".equals(provider)) {
-			enabled = false;
-			disableReason = "provider unsupported";
-		} else if (!isValidBaseUrl(baseUrl)) {
-			enabled = false;
-			disableReason = "invalid base url";
-		} else if (apiKey == null || apiKey.isBlank()) {
-			enabled = false;
-			disableReason = "missing api key";
-		} else {
-			enabled = true;
-		}
+		String disableReason = resolveDisableReason(provider, baseUrl, apiKey);
+		boolean enabled = disableReason == null;
 
 		boolean explicitExternal = llm != null && Boolean.TRUE.equals(llm.externalProvider());
 		boolean externalProvider = enabled && (explicitExternal || !isLocalBaseUrl(baseUrl));
@@ -158,6 +148,22 @@ public class LlmConfig {
 				externalProvider,
 				disableReason
 		);
+	}
+
+	private String resolveDisableReason(String provider, String baseUrl, String apiKey) {
+		if (isDisabledProvider(provider)) {
+			return "provider disabled";
+		}
+		if (!DEFAULT_PROVIDER.equals(provider)) {
+			return "provider unsupported";
+		}
+		if (!isValidBaseUrl(baseUrl)) {
+			return "invalid base url";
+		}
+		if (apiKey == null || apiKey.isBlank()) {
+			return "missing api key";
+		}
+		return null;
 	}
 
 	private int timeoutOrDefault(Integer rawSeconds) {

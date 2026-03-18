@@ -23,6 +23,8 @@ import java.security.Principal;
 @RestController
 @RequestMapping("/api/overrides")
 public class OverridesController {
+	private static final String SYSTEM_USER = "system";
+
 	private final OverridesService overridesService;
 
 	public OverridesController(OverridesService overridesService) {
@@ -40,7 +42,7 @@ public class OverridesController {
 
 	@PostMapping(path = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	public OverridesImportResultDto importCsv(@RequestParam("file") MultipartFile file, Principal principal) {
-		String editedBy = principal == null ? "system" : principal.getName();
+		String editedBy = actorName(principal);
 		return overridesService.importCsv(file, editedBy);
 	}
 
@@ -48,13 +50,17 @@ public class OverridesController {
 	public void upsertOverride(@PathVariable String isin,
 							   @Valid @RequestBody InstrumentOverrideRequest request,
 							   Principal principal) {
-		String editedBy = principal == null ? "system" : principal.getName();
+		String editedBy = actorName(principal);
 		overridesService.upsertOverride(isin, request, editedBy);
 	}
 
 	@DeleteMapping("/{isin}")
 	public void deleteOverride(@PathVariable String isin, Principal principal) {
-		String editedBy = principal == null ? "system" : principal.getName();
+		String editedBy = actorName(principal);
 		overridesService.deleteOverride(isin, editedBy);
+	}
+
+	private String actorName(Principal principal) {
+		return principal == null ? SYSTEM_USER : principal.getName();
 	}
 }

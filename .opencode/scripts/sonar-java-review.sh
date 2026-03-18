@@ -11,8 +11,7 @@ PROJECT_KEY=""
 SRC_PATH=""
 TESTS_PATH=""
 KEEP_RUNNING=false
-TOKEN_NAME=""
-SONAR_TOKEN=""
+SONAR_TOKEN="${SONAR_TOKEN:-${SONAR_ADMIN_TOKEN:-}}"
 DEFAULT_QUALITY_GATE="${SONAR_DEFAULT_QUALITY_GATE:-PortfolioManager Default}"
 
 while [[ $# -gt 0 ]]; do
@@ -107,11 +106,6 @@ if [[ "${PROJECT_DIR}" != /* ]]; then
 fi
 
 cleanup() {
-  if [[ -n "${SONAR_TOKEN}" && -n "${TOKEN_NAME}" && -n "${SONAR_URL:-}" ]]; then
-    curl -s -u "${SONAR_LOGIN}:${SONAR_PASSWORD}" -X POST \
-      "${SONAR_URL}/api/user_tokens/revoke" \
-      --data-urlencode "name=${TOKEN_NAME}" >/dev/null 2>&1 || true
-  fi
   if [[ "${KEEP_RUNNING}" != "true" ]]; then
     "${STOP_SCRIPT}" --quiet || true
   fi
@@ -127,6 +121,7 @@ if [[ -z "${START_OUTPUT}" ]]; then
 fi
 
 SONAR_URL="$(printf '%s' "${START_OUTPUT}" | grep '^SONAR_URL=' | cut -d= -f2-)"
+START_TOKEN="$(printf '%s' "${START_OUTPUT}" | grep '^SONAR_TOKEN=' | cut -d= -f2-)"
 if [[ -z "${SONAR_URL}" ]]; then
   if [[ -f "${RUNTIME_ENV}" ]]; then
     set -a
@@ -137,23 +132,31 @@ if [[ -z "${SONAR_URL}" ]]; then
   fi
 fi
 
+if [[ -z "${SONAR_TOKEN}" ]]; then
+  SONAR_TOKEN="${START_TOKEN:-}"
+fi
+
+if [[ -z "${SONAR_TOKEN}" && -f "${RUNTIME_ENV}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${RUNTIME_ENV}"
+  set +a
+  SONAR_TOKEN="${SONAR_TOKEN:-${SONAR_ADMIN_TOKEN:-}}"
+fi
+
 if [[ -z "${SONAR_URL}" ]]; then
   echo "Unable to determine SonarQube URL." >&2
   exit 12
 fi
 
-SONAR_LOGIN="admin"
-SONAR_PASSWORD="admin"
-
-TOKEN_NAME="review_$(date +%s%N)_$RANDOM"
-TOKEN_JSON="$(curl -s -u "${SONAR_LOGIN}:${SONAR_PASSWORD}" -X POST "${SONAR_URL}/api/user_tokens/generate" --data-urlencode "name=${TOKEN_NAME}")"
-SONAR_TOKEN="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
-print(json.loads(payload).get("token","")) if payload else print("")' "${TOKEN_JSON}" 2>/dev/null || true)"
-
 if [[ -z "${SONAR_TOKEN}" ]]; then
-  echo "Unable to generate SonarQube token using admin/admin." >&2
+  echo "SONAR_TOKEN (or SONAR_ADMIN_TOKEN) must be configured for SonarQube API access." >&2
   exit 11
 fi
+
+sonar_api() {
+  curl -sf -H "Authorization: Bearer ${SONAR_TOKEN}" "$@"
+}
 
 log "Running SonarQube scan on ${PROJECT_DIR}..."
 
@@ -191,7 +194,7 @@ if ! docker run --rm \
 fi
 
 if [[ -n "${DEFAULT_QUALITY_GATE}" ]]; then
-  if ! curl -sf -u "${SONAR_LOGIN}:${SONAR_PASSWORD}" -X POST \
+  if ! sonar_api -X POST \
     "${SONAR_URL}/api/qualitygates/select" \
     --data-urlencode "projectKey=${PROJECT_KEY}" \
     --data-urlencode "gateName=${DEFAULT_QUALITY_GATE}" >/dev/null; then
@@ -200,7 +203,7 @@ if [[ -n "${DEFAULT_QUALITY_GATE}" ]]; then
 fi
 
 log "Fetching quality gate status..."
-STATUS_JSON="$(curl -s -u "${SONAR_LOGIN}:${SONAR_PASSWORD}" "${SONAR_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")"
+STATUS_JSON="$(sonar_api "${SONAR_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")"
 GATE_STATUS="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
 print(json.loads(payload).get("projectStatus",{}).get("status","")) if payload else print("")' "${STATUS_JSON}" 2>/dev/null || true)"
 
@@ -211,7 +214,7 @@ fi
 
 log "Quality Gate: ${GATE_STATUS}"
 
-ISSUES_JSON="$(curl -s -u "${SONAR_LOGIN}:${SONAR_PASSWORD}" "${SONAR_URL}/api/issues/search?projectKeys=${PROJECT_KEY}&resolved=false&ps=10")"
+ISSUES_JSON="$(sonar_api "${SONAR_URL}/api/issues/search?projectKeys=${PROJECT_KEY}&resolved=false&ps=10")"
 ISSUES_OUTPUT="$(PAYLOAD="${ISSUES_JSON}" ${PYTHON_BIN} - <<'PY' 2>/dev/null || printf 'No issues data available.'
 import json
 import os

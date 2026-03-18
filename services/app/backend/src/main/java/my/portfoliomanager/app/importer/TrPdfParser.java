@@ -22,8 +22,8 @@ import java.util.regex.Pattern;
 public class TrPdfParser implements DepotParser {
 	private static final Pattern POSITION_START_RE = Pattern.compile("^\\s*(?<shares>[\\d\\.,]+)\\s+Stk\\.?\\s+(?<rest>.+?)\\s*$",
 			Pattern.CASE_INSENSITIVE);
-	private static final Pattern ISIN_RE = Pattern.compile("\\b([A-Z]{2}[A-Z0-9]{9}[0-9])\\b");
-	private static final Pattern ISIN_LINE_RE = Pattern.compile("^\\s*ISIN:\\s*(?<isin>[A-Z]{2}[A-Z0-9]{9}[0-9])\\s*$",
+	private static final Pattern ISIN_RE = Pattern.compile("\\b([A-Z]{2}[A-Z\\d]{9}\\d)\\b");
+	private static final Pattern ISIN_LINE_RE = Pattern.compile("^\\s*ISIN:\\s*(?<isin>[A-Z]{2}[A-Z\\d]{9}\\d)\\s*$",
 			Pattern.CASE_INSENSITIVE);
 	private static final Pattern DATE_DDMMYYYY_RE = Pattern.compile("\\b(?<d>\\d{2}\\.\\d{2}\\.\\d{4})\\b");
 	private static final Pattern HEADER_ASOF_1_RE = Pattern.compile("^\\s*DATUM\\s+(?<d>\\d{2}\\.\\d{2}\\.\\d{4})\\s*$",
@@ -49,6 +49,7 @@ public class TrPdfParser implements DepotParser {
 
 	List<Position> parseLines(List<String> lines, String depotCode, String fileHash, LocalDate asOf) {
 		List<Position> positions = new ArrayList<>();
+		ParseContext context = new ParseContext(positions, depotCode, fileHash, asOf);
 		String currentName = null;
 		BigDecimal currentShares = null;
 		BigDecimal currentValueEur = null;
@@ -58,7 +59,7 @@ public class TrPdfParser implements DepotParser {
 			String trimmed = line == null ? "" : line.trim();
 			Matcher start = POSITION_START_RE.matcher(trimmed);
 			if (start.matches()) {
-				flush(currentName, currentShares, currentValueEur, currentBlock, positions, depotCode, fileHash, asOf);
+				flush(currentName, currentShares, currentValueEur, currentBlock, context);
 				currentShares = parseDecimalDe(start.group("shares"));
 				String rest = start.group("rest");
 				ParsedRest parsed = splitRestIntoNameAndValue(rest);
@@ -71,7 +72,7 @@ public class TrPdfParser implements DepotParser {
 			}
 		}
 
-		flush(currentName, currentShares, currentValueEur, currentBlock, positions, depotCode, fileHash, asOf);
+		flush(currentName, currentShares, currentValueEur, currentBlock, context);
 		return aggregatePositions(positions);
 	}
 
@@ -81,24 +82,34 @@ public class TrPdfParser implements DepotParser {
 			Position existing = agg.get(pos.isin());
 			if (existing == null) {
 				agg.put(pos.isin(), pos);
-				continue;
+			} else {
+				agg.put(pos.isin(), mergePositions(existing, pos));
 			}
-			String name = chooseName(existing.name(), pos.name(), pos.isin());
-			BigDecimal shares = (existing.shares() == null ? BigDecimal.ZERO : existing.shares())
-					.add(pos.shares() == null ? BigDecimal.ZERO : pos.shares());
-			BigDecimal value = null;
-			if (existing.valueEur() != null || pos.valueEur() != null) {
-				value = (existing.valueEur() == null ? BigDecimal.ZERO : existing.valueEur())
-						.add(pos.valueEur() == null ? BigDecimal.ZERO : pos.valueEur());
-			}
-			agg.put(pos.isin(), new Position(pos.depotCode(), pos.asOfDate(), pos.source(), pos.fileHash(),
-					pos.isin(), name, shares, value, pos.currency()));
 		}
 		return agg.values().stream().sorted(Comparator.comparing(Position::isin)).toList();
 	}
 
+	private Position mergePositions(Position existing, Position incoming) {
+		String name = chooseName(existing.name(), incoming.name(), incoming.isin());
+		BigDecimal shares = toAmount(existing.shares()).add(toAmount(incoming.shares()));
+		BigDecimal value = mergeValues(existing.valueEur(), incoming.valueEur());
+		return new Position(incoming.depotCode(), incoming.asOfDate(), incoming.source(), incoming.fileHash(),
+				incoming.isin(), name, shares, value, incoming.currency());
+	}
+
+	private BigDecimal toAmount(BigDecimal value) {
+		return value == null ? BigDecimal.ZERO : value;
+	}
+
+	private BigDecimal mergeValues(BigDecimal existingValue, BigDecimal incomingValue) {
+		if (existingValue == null && incomingValue == null) {
+			return null;
+		}
+		return toAmount(existingValue).add(toAmount(incomingValue));
+	}
+
 	private void flush(String name, BigDecimal shares, BigDecimal valueEur, List<String> block,
-					   List<Position> out, String depotCode, String fileHash, LocalDate asOf) {
+					   ParseContext context) {
 		if (name == null || shares == null) {
 			return;
 		}
@@ -107,11 +118,11 @@ public class TrPdfParser implements DepotParser {
 			return;
 		}
 		BigDecimal finalValue = valueEur != null ? valueEur : extractValueFallback(block).orElse(null);
-		out.add(new Position(
-				depotCode,
-				asOf,
+		context.positions().add(new Position(
+				context.depotCode(),
+				context.asOf(),
 				"TR_PDF",
-				fileHash,
+				context.fileHash(),
 				isin,
 				sanitizeName(name, isin),
 				shares,
@@ -305,5 +316,8 @@ public class TrPdfParser implements DepotParser {
 	}
 
 	private record ParsedRest(String name, BigDecimal valueEur) {
+	}
+
+	private record ParseContext(List<Position> positions, String depotCode, String fileHash, LocalDate asOf) {
 	}
 }

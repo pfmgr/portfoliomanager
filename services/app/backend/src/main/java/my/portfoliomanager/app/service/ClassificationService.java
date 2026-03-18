@@ -125,41 +125,31 @@ public class ClassificationService {
 	private PolicyAdjustment applyPolicies(RulesetDefinition ruleset, ClassificationDto proposed, boolean savingPlanActive) {
 		List<String> notes = new ArrayList<>();
 		ClassificationDto adjusted = proposed;
-		if (ruleset.getPolicies() != null && ruleset.getPolicies().isLayer1RequiresSavingPlan()) {
-			if (proposed.layer() != null && proposed.layer() == 1 && !savingPlanActive) {
-				adjusted = new ClassificationDto(proposed.instrumentType(), proposed.assetClass(), proposed.subClass(), 2);
-				notes.add("layer1_requires_savingPlan applied -> layer=2");
-			}
+		if (ruleset.getPolicies() != null
+				&& ruleset.getPolicies().isLayer1RequiresSavingPlan()
+				&& proposed.layer() != null
+				&& proposed.layer() == 1
+				&& !savingPlanActive) {
+			adjusted = new ClassificationDto(proposed.instrumentType(), proposed.assetClass(), proposed.subClass(), 2);
+			notes.add("layer1_requires_savingPlan applied -> layer=2");
 		}
 		return new PolicyAdjustment(adjusted, notes);
 	}
 
 	private ImpactContext loadImpactContext(LocalDate asOfDate) {
 		Map<String, BigDecimal> valueByIsin = new HashMap<>();
-		double totalValue = 0.0d;
-		if (asOfDate == null) {
-			List<Object[]> values = snapshotPositionRepository.sumValueEurByIsinActiveSnapshots();
-			for (Object[] row : values) {
-				String isin = (String) row[0];
-				BigDecimal value = row[1] == null ? BigDecimal.ZERO : new BigDecimal(row[1].toString());
-				valueByIsin.put(isin, value);
-			}
-			Double total = snapshotPositionRepository.sumValueEurActiveSnapshots();
-			if (total != null) {
-				totalValue = total;
-			}
-		} else {
-			List<Object[]> values = snapshotPositionRepository.sumValueEurByIsinAsOf(asOfDate);
-			for (Object[] row : values) {
-				String isin = (String) row[0];
-				BigDecimal value = row[1] == null ? BigDecimal.ZERO : new BigDecimal(row[1].toString());
-				valueByIsin.put(isin, value);
-			}
-			Double total = snapshotPositionRepository.sumValueEurAsOf(asOfDate);
-			if (total != null) {
-				totalValue = total;
-			}
+		List<Object[]> values = asOfDate == null
+				? snapshotPositionRepository.sumValueEurByIsinActiveSnapshots()
+				: snapshotPositionRepository.sumValueEurByIsinAsOf(asOfDate);
+		for (Object[] row : values) {
+			String isin = (String) row[0];
+			BigDecimal value = row[1] == null ? BigDecimal.ZERO : new BigDecimal(row[1].toString());
+			valueByIsin.put(isin, value);
 		}
+		Double total = asOfDate == null
+				? snapshotPositionRepository.sumValueEurActiveSnapshots()
+				: snapshotPositionRepository.sumValueEurAsOf(asOfDate);
+		double totalValue = total == null ? 0.0d : total;
 		return new ImpactContext(valueByIsin, totalValue);
 	}
 

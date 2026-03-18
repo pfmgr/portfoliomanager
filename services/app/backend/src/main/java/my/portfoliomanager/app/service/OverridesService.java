@@ -32,6 +32,13 @@ import java.util.regex.Pattern;
 @Service
 public class OverridesService {
 	private static final Pattern ISIN_RE = Pattern.compile("^[A-Z]{2}[A-Z0-9]{9}[0-9]$");
+	private static final String FIELD_INSTRUMENT_TYPE = "instrument_type";
+	private static final String FIELD_ASSET_CLASS = "asset_class";
+	private static final String FIELD_SUB_CLASS = "sub_class";
+	private static final String FIELD_LAYER = "layer";
+	private static final String FIELD_LAYER_NOTES = "layer_notes";
+	private static final String SOURCE_OVERRIDE_IMPORT = "override_import";
+	private static final String SOURCE_OVERRIDE_UI = "override_ui";
 	private final InstrumentRepository instrumentRepository;
 	private final InstrumentOverrideRepository overrideRepository;
 	private final AuditService auditService;
@@ -107,12 +114,12 @@ public class OverridesService {
 				continue;
 			}
 			String name = trimOrNull(get(record, headerMap, "name"));
-			String instrumentType = trimOrNull(get(record, headerMap, "instrument_type"));
-			String assetClass = trimOrNull(get(record, headerMap, "asset_class"));
-			String subClass = trimOrNull(get(record, headerMap, "sub_class"));
-			Integer layer = parseLayer(get(record, headerMap, "layer"));
+			String instrumentType = trimOrNull(get(record, headerMap, FIELD_INSTRUMENT_TYPE));
+			String assetClass = trimOrNull(get(record, headerMap, FIELD_ASSET_CLASS));
+			String subClass = trimOrNull(get(record, headerMap, FIELD_SUB_CLASS));
+			Integer layer = parseLayer(get(record, headerMap, FIELD_LAYER));
 			LocalDate layerLastChanged = parseDate(get(record, headerMap, "layer_last_changed"), "layer_last_changed");
-			String layerNotes = trimOrNull(get(record, headerMap, "layer_notes"));
+			String layerNotes = trimOrNull(get(record, headerMap, FIELD_LAYER_NOTES));
 
 			if (!hasAny(name, instrumentType, assetClass, subClass, layer, layerLastChanged, layerNotes)) {
 				skippedEmpty += 1;
@@ -125,17 +132,17 @@ public class OverridesService {
 				return created;
 			});
 
-			updateField(override.getName(), name, "name", override::setName, isin, editedBy, "override_import");
-			updateField(override.getInstrumentType(), instrumentType, "instrument_type", override::setInstrumentType,
-					isin, editedBy, "override_import");
-			updateField(override.getAssetClass(), assetClass, "asset_class", override::setAssetClass,
-					isin, editedBy, "override_import");
-			updateField(override.getSubClass(), subClass, "sub_class", override::setSubClass, isin, editedBy,
-					"override_import");
+			updateField(override.getName(), name, "name", override::setName, isin, editedBy, SOURCE_OVERRIDE_IMPORT);
+			updateField(override.getInstrumentType(), instrumentType, FIELD_INSTRUMENT_TYPE, override::setInstrumentType,
+					isin, editedBy, SOURCE_OVERRIDE_IMPORT);
+			updateField(override.getAssetClass(), assetClass, FIELD_ASSET_CLASS, override::setAssetClass,
+					isin, editedBy, SOURCE_OVERRIDE_IMPORT);
+			updateField(override.getSubClass(), subClass, FIELD_SUB_CLASS, override::setSubClass, isin, editedBy,
+					SOURCE_OVERRIDE_IMPORT);
 			if (layer != null) {
 				updateField(override.getLayer() == null ? null : override.getLayer().toString(),
-						layer.toString(), "layer", val -> override.setLayer(val == null ? null : Integer.valueOf(val)),
-						isin, editedBy, "override_import");
+						layer.toString(), FIELD_LAYER, val -> override.setLayer(val == null ? null : Integer.valueOf(val)),
+						isin, editedBy, SOURCE_OVERRIDE_IMPORT);
 				if (layerLastChanged == null) {
 					layerLastChanged = LocalDate.now();
 				}
@@ -143,8 +150,8 @@ public class OverridesService {
 			if (layerLastChanged != null) {
 				override.setLayerLastChanged(layerLastChanged);
 			}
-			updateField(override.getLayerNotes(), layerNotes, "layer_notes", override::setLayerNotes, isin, editedBy,
-					"override_import");
+			updateField(override.getLayerNotes(), layerNotes, FIELD_LAYER_NOTES, override::setLayerNotes, isin, editedBy,
+					SOURCE_OVERRIDE_IMPORT);
 			override.setUpdatedAt(java.time.LocalDateTime.now());
 			overrideRepository.save(override);
 			imported += 1;
@@ -165,19 +172,19 @@ public class OverridesService {
 		});
 
 		updateField(override.getName(), trimOrNull(request.name()), "name", override::setName, normalizedIsin, editedBy,
-				"override_ui");
-		updateField(override.getInstrumentType(), trimOrNull(request.instrumentType()), "instrument_type",
-				override::setInstrumentType, normalizedIsin, editedBy, "override_ui");
-		updateField(override.getAssetClass(), trimOrNull(request.assetClass()), "asset_class",
-				override::setAssetClass, normalizedIsin, editedBy, "override_ui");
-		updateField(override.getSubClass(), trimOrNull(request.subClass()), "sub_class",
-				override::setSubClass, normalizedIsin, editedBy, "override_ui");
+				SOURCE_OVERRIDE_UI);
+		updateField(override.getInstrumentType(), trimOrNull(request.instrumentType()), FIELD_INSTRUMENT_TYPE,
+				override::setInstrumentType, normalizedIsin, editedBy, SOURCE_OVERRIDE_UI);
+		updateField(override.getAssetClass(), trimOrNull(request.assetClass()), FIELD_ASSET_CLASS,
+				override::setAssetClass, normalizedIsin, editedBy, SOURCE_OVERRIDE_UI);
+		updateField(override.getSubClass(), trimOrNull(request.subClass()), FIELD_SUB_CLASS,
+				override::setSubClass, normalizedIsin, editedBy, SOURCE_OVERRIDE_UI);
 
 		Integer layer = request.layer();
 		if (layer != null) {
 			updateField(override.getLayer() == null ? null : override.getLayer().toString(),
-					layer.toString(), "layer", val -> override.setLayer(val == null ? null : Integer.valueOf(val)),
-					normalizedIsin, editedBy, "override_ui");
+					layer.toString(), FIELD_LAYER, val -> override.setLayer(val == null ? null : Integer.valueOf(val)),
+					normalizedIsin, editedBy, SOURCE_OVERRIDE_UI);
 			if (request.layerLastChanged() == null) {
 				override.setLayerLastChanged(LocalDate.now());
 			}
@@ -186,8 +193,8 @@ public class OverridesService {
 			override.setLayerLastChanged(request.layerLastChanged());
 		}
 
-		updateField(override.getLayerNotes(), trimOrNull(request.layerNotes()), "layer_notes",
-				override::setLayerNotes, normalizedIsin, editedBy, "override_ui");
+		updateField(override.getLayerNotes(), trimOrNull(request.layerNotes()), FIELD_LAYER_NOTES,
+				override::setLayerNotes, normalizedIsin, editedBy, SOURCE_OVERRIDE_UI);
 		override.setUpdatedAt(java.time.LocalDateTime.now());
 		overrideRepository.save(override);
 	}
@@ -201,11 +208,11 @@ public class OverridesService {
 		}
 		InstrumentOverride override = existing.get();
 		recordDelete(override.getName(), "name", normalizedIsin, editedBy);
-		recordDelete(override.getInstrumentType(), "instrument_type", normalizedIsin, editedBy);
-		recordDelete(override.getAssetClass(), "asset_class", normalizedIsin, editedBy);
-		recordDelete(override.getSubClass(), "sub_class", normalizedIsin, editedBy);
-		recordDelete(override.getLayer() == null ? null : override.getLayer().toString(), "layer", normalizedIsin, editedBy);
-		recordDelete(override.getLayerNotes(), "layer_notes", normalizedIsin, editedBy);
+		recordDelete(override.getInstrumentType(), FIELD_INSTRUMENT_TYPE, normalizedIsin, editedBy);
+		recordDelete(override.getAssetClass(), FIELD_ASSET_CLASS, normalizedIsin, editedBy);
+		recordDelete(override.getSubClass(), FIELD_SUB_CLASS, normalizedIsin, editedBy);
+		recordDelete(override.getLayer() == null ? null : override.getLayer().toString(), FIELD_LAYER, normalizedIsin, editedBy);
+		recordDelete(override.getLayerNotes(), FIELD_LAYER_NOTES, normalizedIsin, editedBy);
 		overrideRepository.deleteById(normalizedIsin);
 	}
 

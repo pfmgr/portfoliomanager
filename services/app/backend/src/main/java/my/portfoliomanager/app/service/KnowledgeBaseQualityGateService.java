@@ -98,47 +98,64 @@ public class KnowledgeBaseQualityGateService {
 	private static final String PROFILE_EQUITY = "EQUITY";
 	private static final String PROFILE_REIT = "REIT";
 	private static final String PROFILE_UNKNOWN = "UNKNOWN";
+	private static final String KEY_BENCHMARK_INDEX = "benchmark_index";
+	private static final String KEY_ONGOING_CHARGES_PCT = "ongoing_charges_pct";
+	private static final String KEY_PRICE = "price";
+	private static final String KEY_PE_CURRENT = "pe_current";
+	private static final String KEY_PB_CURRENT = "pb_current";
+	private static final String KEY_PE_TTM_HOLDINGS = "pe_ttm_holdings";
+	private static final String KEY_EARNINGS_YIELD_TTM_HOLDINGS = "earnings_yield_ttm_holdings";
+	private static final String KEY_HOLDINGS_COVERAGE_WEIGHT_PCT = "holdings_coverage_weight_pct";
+	private static final String KEY_HOLDINGS_COVERAGE_COUNT = "holdings_coverage_count";
+	private static final String KEY_HOLDINGS_ASOF = "holdings_asof";
+	private static final String KEY_DIVIDEND_PER_SHARE = "dividend_per_share";
+	private static final String KEY_REVENUE = "revenue";
+	private static final String KEY_NET_INCOME = "net_income";
+	private static final String KEY_EBITDA = "ebitda";
+	private static final String KEY_EPS_HISTORY = "eps_history";
+	private static final String KEY_NET_RENT = "net_rent";
+	private static final String REGEX_TOKEN_NON_DIGIT_SUFFIX = "(?!\\d)";
 	private static final List<String> DEFAULT_FUND_EVIDENCE_KEYS = List.of(
-			"benchmark_index",
-			"ongoing_charges_pct",
+			KEY_BENCHMARK_INDEX,
+			KEY_ONGOING_CHARGES_PCT,
 			"sri",
-			"price",
-			"pe_current",
-			"pb_current",
-			"pe_ttm_holdings",
-			"earnings_yield_ttm_holdings",
-			"holdings_coverage_weight_pct",
-			"holdings_coverage_count",
-			"holdings_asof"
+			KEY_PRICE,
+			KEY_PE_CURRENT,
+			KEY_PB_CURRENT,
+			KEY_PE_TTM_HOLDINGS,
+			KEY_EARNINGS_YIELD_TTM_HOLDINGS,
+			KEY_HOLDINGS_COVERAGE_WEIGHT_PCT,
+			KEY_HOLDINGS_COVERAGE_COUNT,
+			KEY_HOLDINGS_ASOF
 	);
 	private static final List<String> DEFAULT_EQUITY_EVIDENCE_KEYS = List.of(
-			"price",
-			"pe_current",
-			"pb_current",
-			"dividend_per_share",
-			"revenue",
-			"net_income",
-			"ebitda",
-			"eps_history"
+			KEY_PRICE,
+			KEY_PE_CURRENT,
+			KEY_PB_CURRENT,
+			KEY_DIVIDEND_PER_SHARE,
+			KEY_REVENUE,
+			KEY_NET_INCOME,
+			KEY_EBITDA,
+			KEY_EPS_HISTORY
 	);
 	private static final List<String> DEFAULT_REIT_EVIDENCE_KEYS = List.of(
-			"price",
-			"pe_current",
-			"pb_current",
-			"dividend_per_share",
-			"revenue",
-			"net_income",
-			"ebitda",
-			"eps_history",
-			"net_rent",
+			KEY_PRICE,
+			KEY_PE_CURRENT,
+			KEY_PB_CURRENT,
+			KEY_DIVIDEND_PER_SHARE,
+			KEY_REVENUE,
+			KEY_NET_INCOME,
+			KEY_EBITDA,
+			KEY_EPS_HISTORY,
+			KEY_NET_RENT,
 			"noi",
 			"affo",
 			"ffo"
 	);
 	private static final List<String> DEFAULT_UNKNOWN_EVIDENCE_KEYS = List.of(
-			"price",
-			"pe_current",
-			"pb_current"
+			KEY_PRICE,
+			KEY_PE_CURRENT,
+			KEY_PB_CURRENT
 	);
 
 	public DossierQualityResult evaluateDossier(String isin,
@@ -382,7 +399,7 @@ public class KnowledgeBaseQualityGateService {
 		}
 		String pattern = "\\b(?:sri|srri|summary\\s*risk|risk\\s*indicator|risk\\s*level|risk\\s*category|risk\\s*class|"
 				+ "synthetic\\s*risk(?:\\s*indicator)?)\\b[^\\n:=]*[:=]\\s*"
-				+ "(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+				+ "(?<!\\d)" + Pattern.quote(token) + REGEX_TOKEN_NON_DIGIT_SUFFIX;
 		return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(line).find();
 	}
 
@@ -392,7 +409,7 @@ public class KnowledgeBaseQualityGateService {
 		}
 		String pattern = "\\b(?:risk_indicator(?:\\.value)?|summary_risk_indicator(?:\\.value)?|"
 				+ "risk\\.summary_risk_indicator\\.value)\\b[^\\n:=]*[:=]\\s*(?:\\{\\s*)?(?:\"?value\"?\\s*[:=]\\s*)?"
-				+ "(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+				+ "(?<!\\d)" + Pattern.quote(token) + REGEX_TOKEN_NON_DIGIT_SUFFIX;
 		return Pattern.compile(pattern, Pattern.CASE_INSENSITIVE).matcher(line).find();
 	}
 
@@ -408,7 +425,7 @@ public class KnowledgeBaseQualityGateService {
 		if (!startLine.contains("{") && !trimmedStart.endsWith(":")) {
 			return false;
 		}
-		String pattern = "\\b\"?value\"?\\b\\s*[:=]\\s*(?<!\\d)" + Pattern.quote(token) + "(?!\\d)";
+		String pattern = "\\b\"?value\"?\\b\\s*[:=]\\s*(?<!\\d)" + Pattern.quote(token) + REGEX_TOKEN_NON_DIGIT_SUFFIX;
 		Pattern valuePattern = Pattern.compile("^\\s*[-*+]?\\s*" + pattern + "\\b", Pattern.CASE_INSENSITIVE);
 		int endExclusive = Math.min(lines.length, startIndex + SRI_VALUE_LOOKAHEAD_LINES + 1);
 		for (int i = startIndex + 1; i < endExclusive; i++) {
@@ -573,61 +590,61 @@ public class KnowledgeBaseQualityGateService {
 				: payload.risk().summaryRiskIndicator().value();
 		for (String key : normalizeEvidenceKeys(evidenceKeys)) {
 			switch (key) {
-			case "benchmark_index" -> checkTextEvidence(normalizedContent, "benchmark_index",
+			case KEY_BENCHMARK_INDEX -> checkTextEvidence(normalizedContent, KEY_BENCHMARK_INDEX,
 						etf == null ? null : etf.benchmarkIndex(), missingEvidence, true);
-				case "ongoing_charges_pct" -> checkNumericEvidence(dossierContent, "ongoing_charges_pct",
+				case KEY_ONGOING_CHARGES_PCT -> checkNumericEvidence(dossierContent, KEY_ONGOING_CHARGES_PCT,
 							etf == null ? null : etf.ongoingChargesPct(),
 							List.of("ter", "ongoing charges", "ongoing charge", "total expense ratio",
-									"ongoing_charges_pct", "ongoing charges pct"),
+									KEY_ONGOING_CHARGES_PCT, "ongoing charges pct"),
 							true, missingEvidence);
 				case "sri" -> checkSriEvidence(dossierContent, sri, missingEvidence);
-				case "price" -> checkNumericEvidence(dossierContent, "price",
+				case KEY_PRICE -> checkNumericEvidence(dossierContent, KEY_PRICE,
 							valuation == null ? null : valuation.price(),
-							List.of("price", "nav", "market price"), false, missingEvidence);
-				case "pe_current" -> checkNumericEvidence(dossierContent, "pe_current",
+							List.of(KEY_PRICE, "nav", "market price"), false, missingEvidence);
+				case KEY_PE_CURRENT -> checkNumericEvidence(dossierContent, KEY_PE_CURRENT,
 							valuation == null ? null : valuation.peCurrent(),
-							List.of("pe_current", "p/e", "pe", "price/earnings"), false, missingEvidence);
-				case "pb_current" -> checkNumericEvidence(dossierContent, "pb_current",
+							List.of(KEY_PE_CURRENT, "p/e", "pe", "price/earnings"), false, missingEvidence);
+				case KEY_PB_CURRENT -> checkNumericEvidence(dossierContent, KEY_PB_CURRENT,
 							valuation == null ? null : valuation.pbCurrent(),
-							List.of("pb_current", "p/b", "pb", "price/book", "price to book"), false, missingEvidence);
+							List.of(KEY_PB_CURRENT, "p/b", "pb", "price/book", "price to book"), false, missingEvidence);
 				case "market_cap" -> checkNumericEvidence(dossierContent, "market_cap",
 							valuation == null ? null : valuation.marketCap(),
 							List.of("market cap", "market capitalization"), false, missingEvidence);
-				case "pe_ttm_holdings" -> checkNumericEvidence(dossierContent, "pe_ttm_holdings",
+				case KEY_PE_TTM_HOLDINGS -> checkNumericEvidence(dossierContent, KEY_PE_TTM_HOLDINGS,
 							valuation == null ? null : valuation.peTtmHoldings(),
-							List.of("pe_ttm_holdings", "holdings p/e", "holdings pe"), false, missingEvidence);
-				case "earnings_yield_ttm_holdings" -> checkNumericEvidence(dossierContent, "earnings_yield_ttm_holdings",
+							List.of(KEY_PE_TTM_HOLDINGS, "holdings p/e", "holdings pe"), false, missingEvidence);
+				case KEY_EARNINGS_YIELD_TTM_HOLDINGS -> checkNumericEvidence(dossierContent, KEY_EARNINGS_YIELD_TTM_HOLDINGS,
 							valuation == null ? null : valuation.earningsYieldTtmHoldings(),
-							List.of("earnings_yield_ttm_holdings", "holdings earnings yield", "earnings yield holdings"),
+							List.of(KEY_EARNINGS_YIELD_TTM_HOLDINGS, "holdings earnings yield", "earnings yield holdings"),
 							false, missingEvidence);
-				case "holdings_coverage_weight_pct" -> checkNumericEvidence(dossierContent, "holdings_coverage_weight_pct",
+				case KEY_HOLDINGS_COVERAGE_WEIGHT_PCT -> checkNumericEvidence(dossierContent, KEY_HOLDINGS_COVERAGE_WEIGHT_PCT,
 							valuation == null ? null : valuation.holdingsCoverageWeightPct(),
-							List.of("holdings_coverage_weight_pct", "holdings coverage weight"), true, missingEvidence);
-				case "holdings_coverage_count" -> checkNumericEvidence(dossierContent, "holdings_coverage_count",
+							List.of(KEY_HOLDINGS_COVERAGE_WEIGHT_PCT, "holdings coverage weight"), true, missingEvidence);
+				case KEY_HOLDINGS_COVERAGE_COUNT -> checkNumericEvidence(dossierContent, KEY_HOLDINGS_COVERAGE_COUNT,
 							valuation == null || valuation.holdingsCoverageCount() == null
 									? null
 									: BigDecimal.valueOf(valuation.holdingsCoverageCount()),
-							List.of("holdings_coverage_count", "holdings coverage count"), false, missingEvidence);
-				case "holdings_asof" -> checkDateEvidence(dossierContent, "holdings_asof",
+							List.of(KEY_HOLDINGS_COVERAGE_COUNT, "holdings coverage count"), false, missingEvidence);
+				case KEY_HOLDINGS_ASOF -> checkDateEvidence(dossierContent, KEY_HOLDINGS_ASOF,
 							valuation == null ? null : valuation.holdingsAsOf(),
-							List.of("holdings_asof", "holdings asof", "holdings as of"), missingEvidence);
-				case "dividend_per_share" -> checkNumericEvidence(dossierContent, "dividend_per_share",
+							List.of(KEY_HOLDINGS_ASOF, "holdings asof", "holdings as of"), missingEvidence);
+				case KEY_DIVIDEND_PER_SHARE -> checkNumericEvidence(dossierContent, KEY_DIVIDEND_PER_SHARE,
 							financials == null ? null : financials.dividendPerShare(),
-							List.of("dividend_per_share", "dividend per share"), false, missingEvidence);
-				case "revenue" -> checkNumericEvidence(dossierContent, "revenue",
+							List.of(KEY_DIVIDEND_PER_SHARE, "dividend per share"), false, missingEvidence);
+				case KEY_REVENUE -> checkNumericEvidence(dossierContent, KEY_REVENUE,
 							financials == null ? null : financials.revenue(),
-							List.of("revenue"), false, missingEvidence);
-				case "net_income" -> checkNumericEvidence(dossierContent, "net_income",
+							List.of(KEY_REVENUE), false, missingEvidence);
+				case KEY_NET_INCOME -> checkNumericEvidence(dossierContent, KEY_NET_INCOME,
 							financials == null ? null : financials.netIncome(),
-							List.of("net income", "net_income"), false, missingEvidence);
-				case "ebitda" -> checkNumericEvidence(dossierContent, "ebitda",
+							List.of("net income", KEY_NET_INCOME), false, missingEvidence);
+				case KEY_EBITDA -> checkNumericEvidence(dossierContent, KEY_EBITDA,
 							valuation == null ? null : valuation.ebitda(),
-							List.of("ebitda"), false, missingEvidence);
-				case "eps_history" -> checkEpsHistoryEvidence(dossierContent,
+							List.of(KEY_EBITDA), false, missingEvidence);
+				case KEY_EPS_HISTORY -> checkEpsHistoryEvidence(dossierContent,
 							valuation == null ? null : valuation.epsHistory(), missingEvidence);
-				case "net_rent" -> checkNumericEvidence(dossierContent, "net_rent",
+				case KEY_NET_RENT -> checkNumericEvidence(dossierContent, KEY_NET_RENT,
 							valuation == null ? null : valuation.netRent(),
-							List.of("net_rent", "net rent"), false, missingEvidence);
+							List.of(KEY_NET_RENT, "net rent"), false, missingEvidence);
 				case "noi" -> checkNumericEvidence(dossierContent, "noi",
 							valuation == null ? null : valuation.noi(),
 							List.of("noi"), false, missingEvidence);
@@ -642,9 +659,9 @@ public class KnowledgeBaseQualityGateService {
 			}
 		}
 		if (valuation != null && valuation.peCurrent() != null
-				&& missingEvidence.contains("pe_current")
+				&& missingEvidence.contains(KEY_PE_CURRENT)
 				&& canDerivePeCurrent(valuation)) {
-			missingEvidence.remove("pe_current");
+			missingEvidence.remove(KEY_PE_CURRENT);
 		}
 	}
 
@@ -679,9 +696,9 @@ public class KnowledgeBaseQualityGateService {
 			return;
 		}
 		String lower = content.toLowerCase(Locale.ROOT);
-		boolean hasLabel = lower.contains("eps_history") || lower.contains("eps history");
+		boolean hasLabel = lower.contains(KEY_EPS_HISTORY) || lower.contains("eps history");
 		if (!hasLabel) {
-			missingEvidence.add("eps_history");
+			missingEvidence.add(KEY_EPS_HISTORY);
 			return;
 		}
 		for (InstrumentDossierExtractionPayload.EpsHistoryPayload entry : epsHistory) {
@@ -693,7 +710,7 @@ public class KnowledgeBaseQualityGateService {
 				return;
 			}
 		}
-		missingEvidence.add("eps_history");
+		missingEvidence.add(KEY_EPS_HISTORY);
 	}
 
 	private List<String> buildDateTokens(String value) {

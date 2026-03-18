@@ -27,7 +27,7 @@ class AdvisorServiceLlmNarrativeTest {
 	private static final String JWT_SECRET = UUID.randomUUID().toString();
 
 	@Autowired
-	private AdvisorService advisorService;
+	private RebalancerService rebalancerService;
 
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
@@ -70,7 +70,7 @@ class AdvisorServiceLlmNarrativeTest {
 
 	@Test
 	void summaryKeepsTargetsButAddsNarrativeWhenLlmEnabled() {
-		var summary = advisorService.summary(null);
+		var summary = rebalancerService.summary(null);
 		assertThat(summary.savingPlanSummary()).isNotNull();
 		assertThat(summary.savingPlanSummary().monthlyTotalAmountEur()).isEqualTo(100.0d);
 		assertThat(summary.savingPlanProposal()).isNotNull();

@@ -33,6 +33,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -49,11 +50,19 @@ public class BackupService {
 	private static final int FORMAT_VERSION = 1;
 	private static final String METADATA_ENTRY = "metadata.json";
 	private static final String DATA_PREFIX = "data/";
+	private static final String TABLE_DEPOTS = "depots";
+	private static final String TABLE_INSTRUMENT_DOSSIERS = "instrument_dossiers";
+	private static final String COLUMN_DEPOT_ID = "depot_id";
+	private static final String COLUMN_DOSSIER_ID = "dossier_id";
+	private static final String COLUMN_ACTIVE_SNAPSHOT_ID = "active_snapshot_id";
+	private static final String COLUMN_SUPERSEDES_ID = "supersedes_id";
+	private static final String TYPE_JSON = "json";
+	private static final String TYPE_JSONB = "jsonb";
 	private static final Set<String> EXCLUDED_TABLES = Set.of("databasechangelog", "databasechangeloglock");
 	private static final List<String> KNOWN_IMPORT_ORDER = List.of(
-			"depots",
+			TABLE_DEPOTS,
 			"instruments",
-			"instrument_dossiers",
+			TABLE_INSTRUMENT_DOSSIERS,
 			"instrument_dossier_extractions",
 			"knowledge_base_extractions",
 			"instrument_facts",
@@ -73,12 +82,12 @@ public class BackupService {
 			"layer_target_config"
 	);
 	private static final List<SequenceInfo> SEQUENCE_COLUMNS = List.of(
-			new SequenceInfo("depots", "depot_id"),
+			new SequenceInfo(TABLE_DEPOTS, COLUMN_DEPOT_ID),
 			new SequenceInfo("sparplans", "sparplan_id"),
 			new SequenceInfo("sparplans_history", "hist_id"),
 			new SequenceInfo("rulesets", "id"),
 			new SequenceInfo("instrument_edits", "id"),
-			new SequenceInfo("instrument_dossiers", "dossier_id"),
+			new SequenceInfo(TABLE_INSTRUMENT_DOSSIERS, COLUMN_DOSSIER_ID),
 			new SequenceInfo("instrument_dossier_extractions", "extraction_id"),
 			new SequenceInfo("kb_runs", "run_id"),
 			new SequenceInfo("kb_alternatives", "alternative_id"),
@@ -268,54 +277,94 @@ public class BackupService {
 								 byte[] jsonData,
 								 int expectedRows,
 								 List<DepotActiveSnapshot> depotActiveSnapshots) throws IOException {
-		if (!isValidIdentifier(tableName)) {
-			throw new IllegalArgumentException("Invalid table name in backup: " + tableName);
-		}
+		validateTableName(tableName);
 		List<Map<String, Object>> rows = deserializeRows(jsonData);
-		if (expectedRows != rows.size()) {
-			throw new IllegalArgumentException("Row count mismatch for table: " + tableName);
-		}
+		validateExpectedRowCount(tableName, expectedRows, rows.size());
 		if (rows.isEmpty()) {
 			return 0;
 		}
-		List<DossierSupersedes> supersedesUpdates = List.of();
-		boolean needsSupersedesUpdate = "instrument_dossiers".equalsIgnoreCase(tableName);
-		if (needsSupersedesUpdate) {
-			supersedesUpdates = collectSupersedesUpdates(rows);
-		}
-		if ("depots".equalsIgnoreCase(tableName)) {
-			for (Map<String, Object> row : rows) {
-				Object active = row.get("active_snapshot_id");
-				if (active != null) {
-					Long depotId = toLong(row.get("depot_id"));
-					Long snapshotId = toLong(active);
-					if (depotId != null && snapshotId != null) {
-						depotActiveSnapshots.add(new DepotActiveSnapshot(depotId, snapshotId));
-					}
-				}
-				row.put("active_snapshot_id", null);
-			}
-		}
+		List<DossierSupersedes> supersedesUpdates = collectSupersedesUpdatesIfNeeded(tableName, rows);
+		collectDepotActiveSnapshotsIfNeeded(tableName, rows, depotActiveSnapshots);
 		Map<String, ColumnInfo> columnInfos = getColumnInfos(tableName);
-		// Determine which columns from the backup are actually known in the database schema.
+		List<String> columns = resolveInsertColumns(tableName, rows, columnInfos);
+		String sql = buildInsertSql(tableName, columns);
+		insertRows(tableName, rows, columns, columnInfos, sql);
+		if (!supersedesUpdates.isEmpty()) {
+			applySupersedesUpdates(supersedesUpdates);
+		}
+		return rows.size();
+	}
+
+	private void validateTableName(String tableName) {
+		if (!isValidIdentifier(tableName)) {
+			throw new IllegalArgumentException("Invalid table name in backup: " + tableName);
+		}
+	}
+
+	private void validateExpectedRowCount(String tableName, int expectedRows, int actualRows) {
+		if (expectedRows != actualRows) {
+			throw new IllegalArgumentException("Row count mismatch for table: " + tableName);
+		}
+	}
+
+	private List<DossierSupersedes> collectSupersedesUpdatesIfNeeded(String tableName, List<Map<String, Object>> rows) {
+		if (!TABLE_INSTRUMENT_DOSSIERS.equalsIgnoreCase(tableName)) {
+			return List.of();
+		}
+		return collectSupersedesUpdates(rows);
+	}
+
+	private void collectDepotActiveSnapshotsIfNeeded(String tableName,
+												 List<Map<String, Object>> rows,
+												 List<DepotActiveSnapshot> depotActiveSnapshots) {
+		if (!TABLE_DEPOTS.equalsIgnoreCase(tableName)) {
+			return;
+		}
+		for (Map<String, Object> row : rows) {
+			Object active = row.get(COLUMN_ACTIVE_SNAPSHOT_ID);
+			if (active != null) {
+				Long depotId = toLong(row.get(COLUMN_DEPOT_ID));
+				Long snapshotId = toLong(active);
+				if (depotId != null && snapshotId != null) {
+					depotActiveSnapshots.add(new DepotActiveSnapshot(depotId, snapshotId));
+				}
+			}
+			row.put(COLUMN_ACTIVE_SNAPSHOT_ID, null);
+		}
+	}
+
+	private List<String> resolveInsertColumns(String tableName,
+										 List<Map<String, Object>> rows,
+										 Map<String, ColumnInfo> columnInfos) {
 		List<String> requestedColumns = new ArrayList<>(rows.get(0).keySet());
 		List<String> columns = requestedColumns.stream()
 				.filter(this::isValidIdentifier)
 				.filter(col -> columnInfos.containsKey(col.toLowerCase(Locale.ROOT)))
-				.collect(Collectors.toList());
+				.toList();
 		if (columns.isEmpty()) {
 			throw new IllegalArgumentException("No valid columns found for table: " + tableName);
 		}
 		if (columns.size() != requestedColumns.size()) {
 			throw new IllegalArgumentException("Backup contains unknown or invalid columns for table: " + tableName);
 		}
+		return columns;
+	}
+
+	private String buildInsertSql(String tableName, List<String> columns) {
 		String columnList = columns.stream()
 				.map(this::quoteIdentifier)
 				.collect(Collectors.joining(", "));
 		String values = columns.stream()
 				.map(column -> ":" + column)
 				.collect(Collectors.joining(", "));
-		String sql = "INSERT INTO " + quoteIdentifier(tableName) + " (" + columnList + ") VALUES (" + values + ")";
+		return "INSERT INTO " + quoteIdentifier(tableName) + " (" + columnList + ") VALUES (" + values + ")";
+	}
+
+	private void insertRows(String tableName,
+						 List<Map<String, Object>> rows,
+						 List<String> columns,
+						 Map<String, ColumnInfo> columnInfos,
+						 String sql) {
 		for (Map<String, Object> row : rows) {
 			MapSqlParameterSource params = new MapSqlParameterSource();
 			for (String column : columns) {
@@ -330,10 +379,6 @@ public class BackupService {
 				throw new IllegalArgumentException(message, ex);
 			}
 		}
-		if (needsSupersedesUpdate && !supersedesUpdates.isEmpty()) {
-			applySupersedesUpdates(supersedesUpdates);
-		}
-		return rows.size();
 	}
 
 	private boolean isValidIdentifier(String name) {
@@ -345,7 +390,7 @@ public class BackupService {
 			return "row=unknown";
 		}
 		Object isin = row.get("isin");
-		Object depotId = row.get("depot_id");
+		Object depotId = row.get(COLUMN_DEPOT_ID);
 		Object snapshotId = row.get("snapshot_id");
 		List<String> parts = new ArrayList<>();
 		if (isin != null) {
@@ -383,11 +428,11 @@ public class BackupService {
 		if (updates.isEmpty()) {
 			return;
 		}
-		String sql = "UPDATE " + quoteIdentifier("depots") + " SET " + quoteIdentifier("active_snapshot_id") + " = :active WHERE " + quoteIdentifier("depot_id") + " = :depot_id";
+		String sql = "UPDATE " + quoteIdentifier(TABLE_DEPOTS) + " SET " + quoteIdentifier(COLUMN_ACTIVE_SNAPSHOT_ID) + " = :active WHERE " + quoteIdentifier(COLUMN_DEPOT_ID) + " = :" + COLUMN_DEPOT_ID;
 		for (DepotActiveSnapshot update : updates) {
 			MapSqlParameterSource params = new MapSqlParameterSource();
 			params.addValue("active", update.activeSnapshotId());
-			params.addValue("depot_id", update.depotId());
+			params.addValue(COLUMN_DEPOT_ID, update.depotId());
 			namedParameterJdbcTemplate.update(sql, params);
 		}
 	}
@@ -401,20 +446,20 @@ public class BackupService {
 			if (row == null) {
 				continue;
 			}
-			Long dossierId = toLong(row.get("dossier_id"));
-			Long supersedesId = toLong(row.get("supersedes_id"));
+			Long dossierId = toLong(row.get(COLUMN_DOSSIER_ID));
+			Long supersedesId = toLong(row.get(COLUMN_SUPERSEDES_ID));
 			if (dossierId != null && supersedesId != null) {
 				updates.add(new DossierSupersedes(dossierId, supersedesId));
-				row.put("supersedes_id", null);
+				row.put(COLUMN_SUPERSEDES_ID, null);
 			}
 		}
 		return List.copyOf(updates);
 	}
 
 	private void applySupersedesUpdates(List<DossierSupersedes> updates) {
-		String sql = "UPDATE " + quoteIdentifier("instrument_dossiers")
-				+ " SET " + quoteIdentifier("supersedes_id") + " = :supersedes"
-				+ " WHERE " + quoteIdentifier("dossier_id") + " = :dossier";
+		String sql = "UPDATE " + quoteIdentifier(TABLE_INSTRUMENT_DOSSIERS)
+				+ " SET " + quoteIdentifier(COLUMN_SUPERSEDES_ID) + " = :supersedes"
+				+ " WHERE " + quoteIdentifier(COLUMN_DOSSIER_ID) + " = :dossier";
 		for (DossierSupersedes update : updates) {
 			MapSqlParameterSource params = new MapSqlParameterSource();
 			params.addValue("supersedes", update.supersedesId());
@@ -482,7 +527,7 @@ public class BackupService {
 			return value;
 		}
 		String typeText = type == null ? "" : type.toString().toLowerCase(Locale.ROOT);
-		if (!"json".equals(typeText) && !"jsonb".equals(typeText)) {
+		if (!TYPE_JSON.equals(typeText) && !TYPE_JSONB.equals(typeText)) {
 			return value;
 		}
 		if (Boolean.TRUE.equals(isNull)) {
@@ -511,35 +556,86 @@ public class BackupService {
 			}
 		}
 		if (value instanceof String str) {
-			String trimmed = str.trim();
-			if (trimmed.isEmpty()) {
-				return value;
-			}
-			try {
-				return java.sql.Date.valueOf(LocalDate.parse(trimmed));
-			} catch (DateTimeParseException ex) {
-				try {
-					return java.sql.Date.valueOf(LocalDateTime.parse(trimmed).toLocalDate());
-				} catch (DateTimeParseException ex2) {
-					try {
-						return java.sql.Date.valueOf(OffsetDateTime.parse(trimmed).toLocalDate());
-					} catch (DateTimeParseException ex3) {
-						try {
-							return java.sql.Date.valueOf(Instant.parse(trimmed).atOffset(ZoneOffset.UTC).toLocalDate());
-						} catch (DateTimeParseException ex4) {
-							try {
-								long epoch = Long.parseLong(trimmed);
-								Object converted = prepareDateFromEpoch(epoch);
-								return converted == null ? value : converted;
-							} catch (NumberFormatException ex5) {
-								return value;
-							}
-						}
-					}
-				}
-			}
+			return prepareDateValueFromString(str, value);
 		}
 		return value;
+	}
+
+	private Object prepareDateValueFromString(String raw, Object fallback) {
+		String trimmed = raw.trim();
+		if (trimmed.isEmpty()) {
+			return fallback;
+		}
+		LocalDate date = parseDateText(trimmed);
+		if (date != null) {
+			return java.sql.Date.valueOf(date);
+		}
+		Long epoch = parseLong(trimmed);
+		if (epoch == null) {
+			return fallback;
+		}
+		Object converted = prepareDateFromEpoch(epoch);
+		return converted == null ? fallback : converted;
+	}
+
+	private LocalDate parseDateText(String text) {
+		LocalDate localDate = tryParseLocalDate(text);
+		if (localDate != null) {
+			return localDate;
+		}
+		LocalDateTime localDateTime = tryParseLocalDateTime(text);
+		if (localDateTime != null) {
+			return localDateTime.toLocalDate();
+		}
+		OffsetDateTime offsetDateTime = tryParseOffsetDateTime(text);
+		if (offsetDateTime != null) {
+			return offsetDateTime.toLocalDate();
+		}
+		Instant instant = tryParseInstant(text);
+		if (instant != null) {
+			return instant.atOffset(ZoneOffset.UTC).toLocalDate();
+		}
+		return null;
+	}
+
+	private LocalDate tryParseLocalDate(String text) {
+		try {
+			return LocalDate.parse(text);
+		} catch (DateTimeParseException ex) {
+			return null;
+		}
+	}
+
+	private LocalDateTime tryParseLocalDateTime(String text) {
+		try {
+			return LocalDateTime.parse(text);
+		} catch (DateTimeParseException ex) {
+			return null;
+		}
+	}
+
+	private OffsetDateTime tryParseOffsetDateTime(String text) {
+		try {
+			return OffsetDateTime.parse(text);
+		} catch (DateTimeParseException ex) {
+			return null;
+		}
+	}
+
+	private Instant tryParseInstant(String text) {
+		try {
+			return Instant.parse(text);
+		} catch (DateTimeParseException ex) {
+			return null;
+		}
+	}
+
+	private Long parseLong(String value) {
+		try {
+			return Long.parseLong(value);
+		} catch (NumberFormatException ex) {
+			return null;
+		}
 	}
 
 	private Object prepareDateFromEpoch(long epochValue) {
@@ -604,7 +700,7 @@ public class BackupService {
 		}
 		try {
 			PGobject pg = new PGobject();
-			pg.setType(kind == ColumnKind.JSONB ? "jsonb" : "json");
+			pg.setType(kind == ColumnKind.JSONB ? TYPE_JSONB : TYPE_JSON);
 			pg.setValue(json);
 			return pg;
 		} catch (SQLException e) {
@@ -734,6 +830,36 @@ public class BackupService {
 	}
 
 	private record TableExport(String tableName, int rowCount, byte[] bytes, String sha256) {
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj) {
+				return true;
+			}
+			if (!(obj instanceof TableExport other)) {
+				return false;
+			}
+			return rowCount == other.rowCount
+					&& tableName.equals(other.tableName)
+					&& sha256.equals(other.sha256)
+					&& Arrays.equals(bytes, other.bytes);
+		}
+
+		@Override
+		public int hashCode() {
+			int result = tableName.hashCode();
+			result = 31 * result + Integer.hashCode(rowCount);
+			result = 31 * result + Arrays.hashCode(bytes);
+			result = 31 * result + sha256.hashCode();
+			return result;
+		}
+
+		@Override
+		public String toString() {
+			return "TableExport[tableName=" + tableName
+					+ ", rowCount=" + rowCount
+					+ ", bytes=" + (bytes == null ? 0 : bytes.length)
+					+ ", sha256=" + sha256 + "]";
+		}
 	}
 
 	private record BackupMetadata(int formatVersion,
@@ -768,10 +894,10 @@ public class BackupService {
 			if ("timestamp with time zone".equals(type) || "timestamptz".equals(udt)) {
 				return TIMESTAMP_TZ;
 			}
-			if ("json".equals(type) || "json".equals(udt)) {
+			if (TYPE_JSON.equals(type) || TYPE_JSON.equals(udt)) {
 				return JSON;
 			}
-			if ("jsonb".equals(type) || "jsonb".equals(udt)) {
+			if (TYPE_JSONB.equals(type) || TYPE_JSONB.equals(udt)) {
 				return JSONB;
 			}
 			return OTHER;
