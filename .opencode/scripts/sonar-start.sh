@@ -100,6 +100,7 @@ if [[ -z "${PORT_OVERRIDE}" && -f "${RUNTIME_ENV}" ]]; then
         SONAR_URL="${EXISTING_SONAR_URL}"
         REUSE_RUNNING=true
       fi
+    fi
   fi
 fi
 
@@ -473,14 +474,6 @@ if [[ "${REUSE_RUNNING}" == "true" ]]; then
   exit 0
 fi
 
-if [[ "${REUSE_RUNNING}" == "true" ]]; then
-  configure_default_quality_gate
-  log "SonarQube is already running and quality gate policy is ensured."
-  echo "SONAR_PORT=${SONAR_PORT}"
-  echo "SONAR_URL=${SONAR_URL}"
-  exit 0
-fi
-
 log "Starting SonarQube stack (${COMPOSE_PROJECT_NAME}) on port ${SONAR_PORT}..."
 if ! docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" up -d; then
   echo "Failed to start SonarQube stack." >&2
@@ -509,3 +502,4 @@ echo "SonarQube did not become ready within ${TIMEOUT_SECONDS}s." >&2
 docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=200 sonarqube || true
 docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=200 sonar_db || true
 exit 3
+
