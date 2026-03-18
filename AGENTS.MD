@@ -1,4 +1,4 @@
-# AGENTS.MD — Portfolio Stack (Codex Guide)
+# AGENTS.MD — Portfolio Stack
 
 This repository contains a small, self-hosted portfolio tracker for **Trade Republic (TR) PDF** and **Deka CSV** exports.
 It imports positions into PostgreSQL and manages savings plans via the **Spring Boot Admin API + Vue 3 UI**, then lets you classify instruments (type/asset class/layer) using a **rules engine**. The Admin UI authenticates via JWT login only.
