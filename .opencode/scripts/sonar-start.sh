@@ -100,7 +100,6 @@ if [[ -z "${PORT_OVERRIDE}" && -f "${RUNTIME_ENV}" ]]; then
         SONAR_URL="${EXISTING_SONAR_URL}"
         REUSE_RUNNING=true
       fi
-    fi
   fi
 fi
 
@@ -471,6 +470,14 @@ if [[ "${REUSE_RUNNING}" == "true" ]]; then
   echo "SONAR_PORT=${SONAR_PORT}"
   echo "SONAR_URL=${SONAR_URL}"
   echo "SONAR_TOKEN=${SONAR_TOKEN}"
+  exit 0
+fi
+
+if [[ "${REUSE_RUNNING}" == "true" ]]; then
+  configure_default_quality_gate
+  log "SonarQube is already running and quality gate policy is ensured."
+  echo "SONAR_PORT=${SONAR_PORT}"
+  echo "SONAR_URL=${SONAR_URL}"
   exit 0
 fi
 
