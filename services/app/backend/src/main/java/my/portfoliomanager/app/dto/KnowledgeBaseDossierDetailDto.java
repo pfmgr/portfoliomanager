@@ -5,6 +5,7 @@ import java.util.List;
 public record KnowledgeBaseDossierDetailDto(
 		String isin,
 		String displayName,
+		KnowledgeBaseBlacklistStateDto blacklist,
 		InstrumentDossierResponseDto latestDossier,
 		List<KnowledgeBaseDossierVersionDto> versions,
 		List<InstrumentDossierExtractionResponseDto> extractions,

@@ -52,6 +52,7 @@ class AssessorInstrumentSuggestionServiceTest {
 
 	@BeforeEach
 	void setup() {
+		jdbcTemplate.update("delete from instrument_blacklists");
 		jdbcTemplate.update("delete from knowledge_base_extractions");
 	}
 
@@ -161,6 +162,106 @@ class AssessorInstrumentSuggestionServiceTest {
 				.map(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::amount)
 				.reduce(BigDecimal.ZERO, BigDecimal::add);
 		assertThat(total).isEqualByComparingTo(new BigDecimal("50"));
+	}
+
+	@Test
+	void savingPlanBlacklistBlocksSavingPlanSuggestionsButKeepsOneTimeSuggestions() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayload(
+				"CAND1",
+				"Tech Innovators ETF",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6")))
+		));
+		insertBlacklist("CAND1", "SAVING_PLAN_ONLY");
+
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						List.of(),
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("50")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS,
+						DEFAULT_THRESHOLDS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions())
+				.extracting(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::isin)
+				.doesNotContain("CAND1");
+		assertThat(result.oneTimeSuggestions())
+				.extracting(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::isin)
+				.containsExactly("CAND1");
+	}
+
+	@Test
+	void allProposalBlacklistBlocksSavingPlanAndOneTimeSuggestions() throws Exception {
+		insertExtraction(buildPayload(
+				"EXIST1",
+				"Global Core ETF",
+				1,
+				"global equity",
+				"core global",
+				new BigDecimal("0.18"),
+				"MSCI World",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("Global", new BigDecimal("100"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Apple", new BigDecimal("5")))
+		));
+		insertExtraction(buildPayload(
+				"CAND1",
+				"Tech Innovators ETF",
+				1,
+				"technology",
+				"technology thematic accumulating",
+				new BigDecimal("0.12"),
+				"MSCI World Information Technology",
+				List.of(new InstrumentDossierExtractionPayload.RegionExposurePayload("United States", new BigDecimal("70"))),
+				List.of(new InstrumentDossierExtractionPayload.HoldingPayload("Nvidia", new BigDecimal("6")))
+		));
+		insertBlacklist("CAND1", "ALL_PROPOSALS");
+
+		AssessorInstrumentSuggestionService.SuggestionResult result = suggestionService.suggest(
+				new AssessorInstrumentSuggestionService.SuggestionRequest(
+						List.of(),
+						Set.of("EXIST1"),
+						Map.of(1, new BigDecimal("50")),
+						Map.of(1, new BigDecimal("50")),
+						25,
+						10,
+						25,
+						Map.of(1, 2),
+						Set.of(),
+						AssessorGapDetectionPolicy.SAVING_PLAN_GAPS,
+						DEFAULT_THRESHOLDS
+				)
+		);
+
+		assertThat(result.savingPlanSuggestions())
+				.extracting(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::isin)
+				.doesNotContain("CAND1");
+		assertThat(result.oneTimeSuggestions())
+				.extracting(AssessorInstrumentSuggestionService.NewInstrumentSuggestion::isin)
+				.doesNotContain("CAND1");
 	}
 
 	@Test
@@ -1078,14 +1179,33 @@ class AssessorInstrumentSuggestionServiceTest {
 	}
 
 	private InstrumentDossierExtractionPayload.ValuationPayload buildValuationWithHoldingsYield(BigDecimal holdingsYield,
-																								String peMethod,
-																								String peHorizon,
-																								String negHandling) {
+																	String peMethod,
+																	String peHorizon,
+																	String negHandling) {
 		return objectMapper.convertValue(Map.of(
 				"earnings_yield_ttm_holdings", holdingsYield,
 				"pe_method", peMethod,
 				"pe_horizon", peHorizon,
 				"neg_earnings_handling", negHandling
 		), InstrumentDossierExtractionPayload.ValuationPayload.class);
+	}
+
+	private void insertBlacklist(String isin, String scope) {
+		jdbcTemplate.update(
+				"""
+				insert into instrument_blacklists (
+				  isin,
+				  requested_scope,
+				  effective_scope,
+				  requested_updated_at,
+				  effective_updated_at
+				) values (?, ?, ?, ?, ?)
+				""",
+				isin,
+				scope,
+				scope,
+				LocalDateTime.now(),
+				LocalDateTime.now()
+		);
 	}
 }

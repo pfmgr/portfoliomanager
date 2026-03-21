@@ -8,6 +8,7 @@ import my.portfoliomanager.app.domain.DossierStatus;
 import my.portfoliomanager.app.domain.DossierAuthoredBy;
 import my.portfoliomanager.app.domain.InstrumentDossier;
 import my.portfoliomanager.app.domain.InstrumentDossierExtraction;
+import my.portfoliomanager.app.domain.InstrumentBlacklistScope;
 import my.portfoliomanager.app.domain.InstrumentEdit;
 import my.portfoliomanager.app.domain.InstrumentOverride;
 import my.portfoliomanager.app.dto.InstrumentDossierCreateRequest;
@@ -93,6 +94,7 @@ class KnowledgeBaseServiceTest {
 		jdbcTemplate.update("update depots set active_snapshot_id = null");
 		jdbcTemplate.update("delete from snapshot_positions");
 		jdbcTemplate.update("delete from snapshots");
+		jdbcTemplate.update("delete from instrument_blacklists");
 		jdbcTemplate.update("delete from instrument_dossier_extractions");
 		jdbcTemplate.update("delete from instrument_dossiers");
 		jdbcTemplate.update("delete from instrument_facts");
@@ -172,6 +174,175 @@ class KnowledgeBaseServiceTest {
 		var applied = knowledgeBaseService.applyExtraction(extraction.extractionId(), "tester");
 		assertThat(applied.status()).isEqualTo(DossierExtractionStatus.APPLIED);
 		assertThat(overrideRepository.findById("DE0000000001")).isPresent();
+	}
+
+	@Test
+	void approveDossierActivatesPendingBlacklist() {
+		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				"Name: Blacklist Draft\nLayer: 2",
+				DossierOrigin.USER,
+				DossierStatus.PENDING_REVIEW,
+				objectMapper.createArrayNode(),
+				InstrumentBlacklistScope.ALL_PROPOSALS
+		);
+		var dossier = knowledgeBaseService.createDossier(request, "tester");
+
+		var pending = knowledgeBaseService.getDossierDetail("DE0000000001");
+		assertThat(pending.blacklist().requestedScope()).isEqualTo(InstrumentBlacklistScope.ALL_PROPOSALS);
+		assertThat(pending.blacklist().effectiveScope()).isEqualTo(InstrumentBlacklistScope.NONE);
+		assertThat(pending.blacklist().pendingChange()).isTrue();
+
+		knowledgeBaseService.approveDossier(dossier.dossierId(), "tester");
+
+		var approved = knowledgeBaseService.getDossierDetail("DE0000000001");
+		assertThat(approved.blacklist().requestedScope()).isEqualTo(InstrumentBlacklistScope.ALL_PROPOSALS);
+		assertThat(approved.blacklist().effectiveScope()).isEqualTo(InstrumentBlacklistScope.ALL_PROPOSALS);
+		assertThat(approved.blacklist().pendingChange()).isFalse();
+	}
+
+	@Test
+	void autoApproveDossierAlsoActivatesBlacklist() {
+		configService.updateConfig(new KnowledgeBaseConfigDto(
+				baselineConfig.enabled(),
+				baselineConfig.refreshIntervalDays(),
+				baselineConfig.autoApprove(),
+				baselineConfig.applyExtractionsToOverrides(),
+				baselineConfig.overwriteExistingOverrides(),
+				baselineConfig.batchSizeInstruments(),
+				baselineConfig.batchMaxInputChars(),
+				baselineConfig.maxParallelBulkBatches(),
+				baselineConfig.maxBatchesPerRun(),
+				baselineConfig.pollIntervalSeconds(),
+				baselineConfig.maxInstrumentsPerRun(),
+				baselineConfig.maxRetriesPerInstrument(),
+				baselineConfig.baseBackoffSeconds(),
+				baselineConfig.maxBackoffSeconds(),
+				baselineConfig.dossierMaxChars(),
+				baselineConfig.kbRefreshMinDaysBetweenRunsPerInstrument(),
+				baselineConfig.runTimeoutMinutes(),
+				baselineConfig.websearchReasoningEffort(),
+				baselineConfig.websearchAllowedDomains(),
+				1,
+				false,
+				baselineConfig.alternativesMinSimilarityScore(),
+				baselineConfig.extractionEvidenceRequired(),
+				baselineConfig.qualityGateRetryLimit(),
+				baselineConfig.qualityGateProfiles()
+		));
+		var citations = objectMapper.createArrayNode();
+		citations.addObject()
+				.put("url", "https://issuer.example/factsheet")
+				.put("title", "Issuer factsheet");
+		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				"# DE0000000001 - Auto Approved Blacklist\n\n"
+						+ "## Quick profile\n- Name: Auto Approved Blacklist\n\n"
+						+ "## Classification\n- Layer: 2\n\n"
+						+ "## Risk\n- SRI: 3\n\n"
+						+ "## Costs & structure\n- TER: 0.20\n\n"
+						+ "## Exposures\n- Benchmark: MSCI World\n\n"
+						+ "## Valuation & profitability\n- pe_current: 15\n\n"
+						+ "## Sources\n1) https://issuer.example/factsheet\n",
+				DossierOrigin.USER,
+				DossierStatus.PENDING_REVIEW,
+				citations,
+				InstrumentBlacklistScope.SAVING_PLAN_ONLY
+		);
+		var dossier = knowledgeBaseService.createDossier(request, "tester");
+
+		knowledgeBaseService.approveDossier(dossier.dossierId(), "tester", true);
+
+		var approved = knowledgeBaseService.getDossierDetail("DE0000000001");
+		assertThat(approved.latestDossier().autoApproved()).isTrue();
+		assertThat(approved.blacklist().effectiveScope()).isEqualTo(InstrumentBlacklistScope.SAVING_PLAN_ONLY);
+		assertThat(approved.blacklist().pendingChange()).isFalse();
+	}
+
+	@Test
+	void rejectDossierClearsPendingBlacklistChange() {
+		var approved = knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				"Name: Approved Base\nLayer: 2",
+				DossierOrigin.USER,
+				DossierStatus.APPROVED,
+				objectMapper.createArrayNode(),
+				InstrumentBlacklistScope.NONE
+		), "tester");
+		assertThat(approved.dossierId()).isNotNull();
+
+		var draft = knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				"Name: Pending Blacklist\nLayer: 2",
+				DossierOrigin.USER,
+				DossierStatus.PENDING_REVIEW,
+				objectMapper.createArrayNode(),
+				InstrumentBlacklistScope.ALL_PROPOSALS
+		), "tester");
+
+		var pending = knowledgeBaseService.getDossierDetail("DE0000000001");
+		assertThat(pending.blacklist().pendingChange()).isTrue();
+
+		knowledgeBaseService.rejectDossier(draft.dossierId(), "tester");
+
+		var rejected = knowledgeBaseService.getDossierDetail("DE0000000001");
+		assertThat(rejected.blacklist().requestedScope()).isEqualTo(InstrumentBlacklistScope.NONE);
+		assertThat(rejected.blacklist().effectiveScope()).isEqualTo(InstrumentBlacklistScope.NONE);
+		assertThat(rejected.blacklist().pendingChange()).isFalse();
+	}
+
+	@Test
+	void updatingApprovedDossierBlacklistRequiresFreshApproval() {
+		var approved = knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				"# DE0000000001\n\n## Quick profile\n- Name: Approved Base\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+				DossierOrigin.USER,
+				DossierStatus.APPROVED,
+				objectMapper.createArrayNode(),
+				InstrumentBlacklistScope.NONE
+		), "tester");
+
+		var updated = knowledgeBaseService.updateDossier(
+				approved.dossierId(),
+				new my.portfoliomanager.app.dto.InstrumentDossierUpdateRequest(
+						null,
+						"# DE0000000001\n\n## Quick profile\n- Name: Pending Review\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+						DossierStatus.APPROVED,
+						objectMapper.createArrayNode(),
+						InstrumentBlacklistScope.ALL_PROPOSALS
+				),
+				"tester"
+		);
+
+		assertThat(updated.status()).isEqualTo(DossierStatus.PENDING_REVIEW);
+		var detail = knowledgeBaseService.getDossierDetail("DE0000000001");
+		assertThat(detail.blacklist().effectiveScope()).isEqualTo(InstrumentBlacklistScope.NONE);
+		assertThat(detail.blacklist().requestedScope()).isEqualTo(InstrumentBlacklistScope.ALL_PROPOSALS);
+		assertThat(detail.blacklist().pendingChange()).isTrue();
+	}
+
+	@Test
+	void deleteDossiersRemovesBlacklistEntries() {
+		knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
+				"DE0000000001",
+				null,
+				"# DE0000000001\n\n## Quick profile\n- Name: Delete Me\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+				DossierOrigin.USER,
+				DossierStatus.APPROVED,
+				objectMapper.createArrayNode(),
+				InstrumentBlacklistScope.ALL_PROPOSALS
+		), "tester");
+
+		assertThat(jdbcTemplate.queryForObject("select count(*) from instrument_blacklists where isin = 'DE0000000001'", Integer.class))
+				.isEqualTo(1);
+		knowledgeBaseService.deleteDossiers(List.of("DE0000000001"));
+		assertThat(jdbcTemplate.queryForObject("select count(*) from instrument_blacklists where isin = 'DE0000000001'", Integer.class))
+				.isEqualTo(0);
 	}
 
 	@Test

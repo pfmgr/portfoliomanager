@@ -65,6 +65,7 @@ public class AssessorService {
 	private final LlmNarrativeService llmNarrativeService;
 	private final SavingPlanDeltaAllocator savingPlanDeltaAllocator;
 	private final LlmPromptPolicy llmPromptPolicy;
+	private final InstrumentBlacklistService blacklistService;
 	private final boolean llmEnabled;
 
 	public AssessorService(SavingPlanRepository savingPlanRepository,
@@ -76,7 +77,8 @@ public class AssessorService {
 					   AssessorInstrumentAssessmentService instrumentAssessmentService,
 					   LlmNarrativeService llmNarrativeService,
 					   SavingPlanDeltaAllocator savingPlanDeltaAllocator,
-					   LlmPromptPolicy llmPromptPolicy) {
+					   LlmPromptPolicy llmPromptPolicy,
+					   InstrumentBlacklistService blacklistService) {
 		this.savingPlanRepository = savingPlanRepository;
 		this.layerTargetConfigService = layerTargetConfigService;
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
@@ -87,6 +89,7 @@ public class AssessorService {
 		this.llmNarrativeService = llmNarrativeService;
 		this.savingPlanDeltaAllocator = savingPlanDeltaAllocator;
 		this.llmPromptPolicy = llmPromptPolicy;
+		this.blacklistService = blacklistService;
 		this.llmEnabled = llmNarrativeService != null && llmNarrativeService.isEnabled();
 	}
 
@@ -149,6 +152,7 @@ public class AssessorService {
 				result,
 				suggestionDtos,
 				instrumentSuggestions.savingPlanSuggestions(),
+				runContext.savingPlanSnapshot(),
 				savingPlanAllocation);
 		List<String> riskWarnings = buildRiskWarnings(
 				runContext.savingPlanSnapshot(),
@@ -366,32 +370,88 @@ public class AssessorService {
 	}
 
 	private SavingPlanPlanResult resolveSavingPlanPlan(AssessorEngine.AssessorEngineResult result,
-											 List<AssessorSavingPlanSuggestionDto> suggestionDtos,
-											 List<AssessorInstrumentSuggestionService.NewInstrumentSuggestion> savingPlanInstrumentSuggestions,
-											 SavingPlanAllocation savingPlanAllocation) {
+										 List<AssessorSavingPlanSuggestionDto> suggestionDtos,
+										 List<AssessorInstrumentSuggestionService.NewInstrumentSuggestion> savingPlanInstrumentSuggestions,
+										 SavingPlanSnapshot savingPlanSnapshot,
+										 SavingPlanAllocation savingPlanAllocation) {
 		if (savingPlanAllocation != null) {
 			return new SavingPlanPlanResult(
 					savingPlanAllocation.targetLayerAmounts(),
-					savingPlanAllocation.savingPlanSuggestions(),
+					mergeBlacklistSavingPlanSuggestions(savingPlanAllocation.savingPlanSuggestions(), savingPlanSnapshot),
 					savingPlanAllocation.newInstruments(),
 					savingPlanAllocation.allocationNotes());
 		}
 		List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments =
 				toNewInstrumentSuggestionDtos(savingPlanInstrumentSuggestions, Set.of());
 		List<AssessorSavingPlanSuggestionDto> adjustedSuggestions =
-				applyNewInstrumentReservations(suggestionDtos, savingPlanNewInstruments);
+				mergeBlacklistSavingPlanSuggestions(
+						applyNewInstrumentReservations(suggestionDtos, savingPlanNewInstruments),
+						savingPlanSnapshot);
 		Map<Integer, BigDecimal> targetLayerAmounts = resolveSavingPlanTargets(result, adjustedSuggestions, savingPlanNewInstruments);
 		return new SavingPlanPlanResult(targetLayerAmounts, adjustedSuggestions, savingPlanNewInstruments, List.of());
 	}
 
 	private Map<Integer, BigDecimal> resolveSavingPlanTargets(AssessorEngine.AssessorEngineResult result,
-											 List<AssessorSavingPlanSuggestionDto> adjustedSuggestions,
-											 List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments) {
+										 List<AssessorSavingPlanSuggestionDto> adjustedSuggestions,
+										 List<AssessorNewInstrumentSuggestionDto> savingPlanNewInstruments) {
 		Map<Integer, BigDecimal> derivedTargets = deriveTargetLayerDistribution(adjustedSuggestions);
 		if (derivedTargets == null) {
 			return result.targetLayerDistribution();
 		}
 		return applyNewInstrumentTargets(derivedTargets, savingPlanNewInstruments);
+	}
+
+	private List<AssessorSavingPlanSuggestionDto> mergeBlacklistSavingPlanSuggestions(
+			List<AssessorSavingPlanSuggestionDto> suggestions,
+			SavingPlanSnapshot savingPlanSnapshot) {
+		if (savingPlanSnapshot == null || savingPlanSnapshot.excludedSavingPlanIsins() == null
+				|| savingPlanSnapshot.excludedSavingPlanIsins().isEmpty()) {
+			return suggestions == null ? List.of() : List.copyOf(suggestions);
+		}
+		List<AssessorSavingPlanSuggestionDto> merged = new ArrayList<>();
+		Set<PlanKey> covered = new LinkedHashSet<>();
+		if (suggestions != null) {
+			for (AssessorSavingPlanSuggestionDto suggestion : suggestions) {
+				if (suggestion == null) {
+					continue;
+				}
+				String isin = normalizeIsin(suggestion.isin());
+				if (savingPlanSnapshot.excludedSavingPlanIsins().contains(isin)) {
+					continue;
+				}
+				PlanKey key = new PlanKey(isin, suggestion.depotId());
+				covered.add(key);
+				merged.add(suggestion);
+			}
+		}
+		for (AssessorEngine.SavingPlanItem plan : savingPlanSnapshot.plans()) {
+			if (plan == null) {
+				continue;
+			}
+			String isin = normalizeIsin(plan.isin());
+			if (!savingPlanSnapshot.excludedSavingPlanIsins().contains(isin)) {
+				continue;
+			}
+			PlanKey key = new PlanKey(isin, plan.depotId());
+			if (covered.contains(key)) {
+				continue;
+			}
+			PlanMeta meta = resolvePlanMeta(key, isin, savingPlanSnapshot.planMeta(), savingPlanSnapshot.instrumentMeta());
+			BigDecimal amount = plan.amount() == null ? BigDecimal.ZERO : plan.amount();
+			merged.add(new AssessorSavingPlanSuggestionDto(
+					"discard",
+					isin,
+					meta == null ? null : meta.instrumentName(),
+					meta == null ? null : meta.layer(),
+					plan.depotId(),
+					meta == null ? null : meta.depotName(),
+					toAmount(amount),
+					0.0d,
+					toAmount(BigDecimal.ZERO.subtract(amount)),
+					"Blacklisted from Saving Plan Proposals"
+			));
+		}
+		return List.copyOf(merged);
 	}
 
 	private LocalDate resolveAsOfDate(LocalDate asOfDate) {
@@ -765,7 +825,11 @@ public class AssessorService {
 		Map<String, InstrumentMeta> instrumentMeta = loadInstrumentMetadata(isins);
 		Map<PlanKey, PlanMeta> resolvedPlanMeta = resolvePlanMeta(planMeta, instrumentMeta);
 		Map<String, InstrumentMeta> resolvedInstrumentMeta = resolveInstrumentMeta(instrumentMeta, resolvedPlanMeta);
-		return new SavingPlanSnapshot(plans, resolvedPlanMeta, resolvedInstrumentMeta);
+		Set<String> excludedSavingPlanIsins = blacklistService.findSavingPlanExcludedIsins(isins);
+		List<AssessorEngine.SavingPlanItem> eligiblePlans = plans.stream()
+				.filter(plan -> plan != null && !excludedSavingPlanIsins.contains(normalizeIsin(plan.isin())))
+				.toList();
+		return new SavingPlanSnapshot(plans, eligiblePlans, Set.copyOf(excludedSavingPlanIsins), resolvedPlanMeta, resolvedInstrumentMeta);
 	}
 
 	private void collectActiveMonthlyPlans(List<SavingPlanListProjection> rows,
@@ -1981,7 +2045,7 @@ public class AssessorService {
 		int minRebalance = input.minimumRebalancingAmount() == null ? DEFAULT_MIN_REBALANCE : input.minimumRebalancingAmount();
 		int minInstrument = input.minimumInstrumentAmount() == null ? DEFAULT_MIN_INSTRUMENT : input.minimumInstrumentAmount();
 		return instrumentSuggestionService.suggest(new AssessorInstrumentSuggestionService.SuggestionRequest(
-				input.savingPlanSnapshot().plans(),
+				input.savingPlanSnapshot().eligiblePlans(),
 				existingCoverageIsins,
 				savingPlanBudgets,
 				oneTimeBudgets,
@@ -2106,7 +2170,7 @@ public class AssessorService {
 		SavingPlanSnapshot snapshot = input.savingPlanSnapshot();
 		Map<Integer, BigDecimal> baseTargets = normalizeLayerAmounts(result.targetLayerDistribution());
 		Map<Integer, BigDecimal> currentAmounts = normalizeLayerAmounts(result.currentLayerDistribution());
-		Map<Integer, Integer> planCounts = countSavingPlans(snapshot.plans());
+		Map<Integer, Integer> planCounts = countSavingPlans(snapshot.eligiblePlans());
 		Map<Integer, Integer> maxSavingPlans = normalizeMaxSavingPlans(
 				input.config() == null ? null : input.config().getMaxSavingPlansPerLayer());
 		int minSaving = input.minimumSavingPlanSize() == null ? DEFAULT_MIN_SAVING_PLAN : input.minimumSavingPlanSize();
@@ -2153,7 +2217,7 @@ public class AssessorService {
 			return AssessorInstrumentSuggestionService.SuggestionResult.empty();
 		}
 		return instrumentSuggestionService.suggest(new AssessorInstrumentSuggestionService.SuggestionRequest(
-				context.snapshot().plans(),
+				context.snapshot().eligiblePlans(),
 				context.existingCoverageIsins(),
 				positiveBudgets,
 				Map.of(),
@@ -2256,23 +2320,23 @@ public class AssessorService {
 		Map<Integer, BigDecimal> newInstrumentTotals = sumNewInstrumentTotalsFromDtos(newInstruments);
 		Map<Integer, Map<String, BigDecimal>> weightsByLayer = instrumentSuggestionService.computeSavingPlanWeights(
 				new AssessorInstrumentSuggestionService.SavingPlanWeightRequest(
-						context.snapshot().plans(),
+						context.snapshot().eligiblePlans(),
 						context.existingCoverageIsins(),
 						input.gapDetectionPolicy()
 				));
-		Set<String> planIsins = collectPlanIsins(context.snapshot().plans());
+		Set<String> planIsins = collectPlanIsins(context.snapshot().eligiblePlans());
 		Map<String, Integer> assessmentScores = instrumentAssessmentService.assessScores(
 				planIsins,
 				input.riskThresholds(),
 				input.riskThresholdsByLayer());
 		Map<AssessorEngine.PlanKey, BigDecimal> planWeights = buildPlanWeights(
-				context.snapshot().plans(),
+				context.snapshot().eligiblePlans(),
 				weightsByLayer,
 				assessmentScores,
 				input.riskThresholds(),
 				input.riskThresholdsByLayer());
 		List<AssessorEngine.SavingPlanSuggestion> weightedSuggestions = buildWeightedSavingPlanSuggestions(
-				context.snapshot().plans(),
+				context.snapshot().eligiblePlans(),
 				effectiveTargets,
 				newInstrumentTotals,
 				planWeights,
@@ -2928,6 +2992,8 @@ public class AssessorService {
 	}
 
 	private record SavingPlanSnapshot(List<AssessorEngine.SavingPlanItem> plans,
+									  List<AssessorEngine.SavingPlanItem> eligiblePlans,
+									  Set<String> excludedSavingPlanIsins,
 									  Map<PlanKey, PlanMeta> planMeta,
 									  Map<String, InstrumentMeta> instrumentMeta) {
 	}

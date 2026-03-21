@@ -25,6 +25,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -36,6 +37,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.util.List;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -63,6 +65,9 @@ class KnowledgeBaseApiIntegrationTest {
 
 	@Autowired
 	private TestDatabaseCleaner databaseCleaner;
+
+	@Autowired
+	private JdbcTemplate jdbcTemplate;
 
 	@DynamicPropertySource
 	static void registerProperties(DynamicPropertyRegistry registry) {
@@ -259,6 +264,129 @@ class KnowledgeBaseApiIntegrationTest {
 		JsonNode isinPrefix = objectMapper.readTree(isinPrefixResponse);
 		assertThat(isinPrefix.path("items").isArray()).isTrue();
 		assertThat(isinPrefix.path("items").size()).isGreaterThanOrEqualTo(3);
+	}
+
+	@Test
+	void dossiersSearchSupportsBlacklistApprovalExtractionAndFreshnessFilters() throws Exception {
+		mockMvc.perform(post("/api/kb/dossiers")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(objectMapper.writeValueAsString(new InstrumentDossierCreateRequest(
+								"DE1111111111",
+								"Blacklisted Approved",
+								"# DE1111111111\n\n## Quick profile\n- Name: Blacklisted Approved\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+								DossierOrigin.USER,
+								DossierStatus.APPROVED,
+								objectMapper.createArrayNode(),
+								my.portfoliomanager.app.domain.InstrumentBlacklistScope.ALL_PROPOSALS
+						))))
+				.andExpect(status().isOk());
+
+		createDossier("DE2222222222", "Draft Instrument");
+
+		mockMvc.perform(post("/api/kb/dossiers")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(objectMapper.writeValueAsString(new InstrumentDossierCreateRequest(
+								"DE3333333333",
+								"Fresh Extraction",
+								"# DE3333333333\n\n## Quick profile\n- Name: Fresh Extraction\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+								DossierOrigin.USER,
+								DossierStatus.APPROVED,
+								objectMapper.createArrayNode(),
+								null
+						))))
+				.andExpect(status().isOk());
+
+		String detailPayload = mockMvc.perform(get("/api/kb/dossiers/DE3333333333")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		long dossierId = objectMapper.readTree(detailPayload).at("/latestDossier/dossierId").asLong();
+		jdbcTemplate.update(
+				"""
+				insert into instrument_dossier_extractions (
+				  dossier_id, model, extracted_json, missing_fields_json, warnings_json, status, created_at, auto_approved
+				) values (?, 'test', cast(? as jsonb), cast(? as jsonb), cast(? as jsonb), 'PENDING_REVIEW', ?, false)
+				""",
+				dossierId,
+				"{}",
+				"[]",
+				"[]",
+				LocalDateTime.now().plusMinutes(1)
+		);
+
+		mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("blacklistStatus", "ALL_PROPOSALS"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].isin").value("DE1111111111"))
+				.andExpect(jsonPath("$.items[0].blacklistScope").value("ALL_PROPOSALS"));
+
+		mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("approvalStatus", "NOT_APPROVED"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].isin").value("DE2222222222"))
+				.andExpect(jsonPath("$.items[0].approvalStatus").value("NOT_APPROVED"));
+
+		mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("extractionStatus", "PENDING_REVIEW"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].isin").value("DE3333333333"))
+				.andExpect(jsonPath("$.items[0].latestExtractionStatus").value("PENDING_REVIEW"));
+
+		mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("freshnessStatus", "CURRENT")
+						.param("sortBy", "blacklistStatus")
+						.param("sortDirection", "desc"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].isin").value("DE3333333333"))
+				.andExpect(jsonPath("$.items[0].extractionFreshness").value("CURRENT"));
+	}
+
+	@Test
+	void dossierApprovalStatusReflectsLatestDossierVersion() throws Exception {
+		mockMvc.perform(post("/api/kb/dossiers")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(objectMapper.writeValueAsString(new InstrumentDossierCreateRequest(
+								"DE4444444444",
+								"Approved Version",
+								"# DE4444444444\n\n## Quick profile\n- Name: Approved Version\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+								DossierOrigin.USER,
+								DossierStatus.APPROVED,
+								objectMapper.createArrayNode(),
+								null
+						))))
+				.andExpect(status().isOk());
+
+		mockMvc.perform(post("/api/kb/dossiers")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(objectMapper.writeValueAsString(new InstrumentDossierCreateRequest(
+								"DE4444444444",
+								"Pending Version",
+								"# DE4444444444\n\n## Quick profile\n- Name: Pending Version\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+								DossierOrigin.USER,
+								DossierStatus.PENDING_REVIEW,
+								objectMapper.createArrayNode(),
+								null
+						))))
+				.andExpect(status().isOk());
+
+		mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("q", "de4444444444")
+						.param("approvalStatus", "NOT_APPROVED"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].isin").value("DE4444444444"))
+				.andExpect(jsonPath("$.items[0].latestDossierStatus").value("PENDING_REVIEW"))
+				.andExpect(jsonPath("$.items[0].approvalStatus").value("NOT_APPROVED"));
 	}
 
 	private void createDossier(String isin, String displayName) throws Exception {

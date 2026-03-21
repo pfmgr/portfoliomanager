@@ -38,6 +38,7 @@ public class InstrumentRebalanceService {
 	private static final String REASON_EQUAL_WEIGHT = "EQUAL_WEIGHT";
 	private static final String REASON_SCORE_WEIGHTED = "SCORE_WEIGHTED";
 	private static final String REASON_LAYER_BUDGET_ZERO = "LAYER_BUDGET_ZERO";
+	private static final String REASON_BLACKLISTED = "BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS";
 	private static final String WARNING_NO_INSTRUMENTS = "LAYER_NO_INSTRUMENTS";
 	private static final double DEFAULT_PB_TARGET = 2.0;
 	private static final double DATA_QUALITY_MISSING_WEIGHT = 0.01;
@@ -78,14 +79,22 @@ public class InstrumentRebalanceService {
 	}
 
 	public InstrumentProposalResult buildInstrumentProposals(List<SavingPlanInstrument> instruments,
-										 Map<Integer, BigDecimal> layerBudgets,
-										 Integer minimumSavingPlanSize,
-										 Integer minimumRebalancingAmount,
-										 boolean withinTolerance,
-										 LayerTargetRiskThresholds riskThresholds,
-										 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
+									 Map<Integer, BigDecimal> layerBudgets,
+									 Integer minimumSavingPlanSize,
+									 Integer minimumRebalancingAmount,
+									 boolean withinTolerance,
+									 Set<String> excludedSavingPlanIsins,
+									 LayerTargetRiskThresholds riskThresholds,
+									 Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer) {
 		List<SavingPlanInstrument> normalized = normalizeInstruments(instruments);
-		Set<String> isins = normalized.stream()
+		Set<String> excludedIsins = normalizeIsinSet(excludedSavingPlanIsins);
+		List<SavingPlanInstrument> eligible = normalized.stream()
+				.filter(instrument -> instrument != null && !excludedIsins.contains(instrument.isin()))
+				.toList();
+		List<SavingPlanInstrument> discarded = normalized.stream()
+				.filter(instrument -> instrument != null && excludedIsins.contains(instrument.isin()))
+				.toList();
+		Set<String> isins = eligible.stream()
 				.map(SavingPlanInstrument::isin)
 				.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 
@@ -95,13 +104,15 @@ public class InstrumentRebalanceService {
 		boolean kbComplete = kbEnabled && missingIsins.isEmpty();
 		InstrumentProposalGatingDto gating = new InstrumentProposalGatingDto(kbEnabled, kbComplete, missingIsins);
 
-		if (!kbComplete || normalized.isEmpty()) {
-			return new InstrumentProposalResult(gating, List.of(), List.of(), List.of());
+		if (!kbComplete || eligible.isEmpty()) {
+			List<InstrumentProposalDto> proposals = new ArrayList<>(buildBlacklistDiscards(discarded));
+			proposals.sort(instrumentOrder());
+			return new InstrumentProposalResult(gating, proposals, List.of(), List.of());
 		}
 
 		if (withinTolerance) {
 			List<InstrumentProposalDto> proposals = new ArrayList<>();
-			for (SavingPlanInstrument instrument : normalized) {
+			for (SavingPlanInstrument instrument : eligible) {
 				BigDecimal amount = instrument.monthlyAmount();
 				proposals.add(new InstrumentProposalDto(
 						instrument.isin(),
@@ -113,6 +124,7 @@ public class InstrumentRebalanceService {
 						List.of(REASON_NO_CHANGE)
 				));
 			}
+			proposals.addAll(buildBlacklistDiscards(discarded));
 			proposals.sort(instrumentOrder());
 			return new InstrumentProposalResult(gating, proposals, List.of(), List.of());
 		}
@@ -124,7 +136,7 @@ public class InstrumentRebalanceService {
 				? Map.of()
 				: assessmentService.assessScores(isins, thresholds, normalizedByLayer);
 
-		Map<Integer, List<SavingPlanInstrument>> byLayer = groupByLayer(normalized);
+		Map<Integer, List<SavingPlanInstrument>> byLayer = groupByLayer(eligible);
 		List<InstrumentProposalDto> proposals = new ArrayList<>();
 		List<InstrumentWarning> warnings = new ArrayList<>();
 		List<LayerWeightingSummary> weightingSummaries = new ArrayList<>();
@@ -186,8 +198,29 @@ public class InstrumentRebalanceService {
 			}
 		}
 
+		proposals.addAll(buildBlacklistDiscards(discarded));
 		proposals.sort(instrumentOrder());
 		return new InstrumentProposalResult(gating, proposals, warnings, List.copyOf(weightingSummaries));
+	}
+
+	private List<InstrumentProposalDto> buildBlacklistDiscards(List<SavingPlanInstrument> discarded) {
+		if (discarded == null || discarded.isEmpty()) {
+			return List.of();
+		}
+		List<InstrumentProposalDto> proposals = new ArrayList<>();
+		for (SavingPlanInstrument instrument : discarded) {
+			BigDecimal amount = instrument.monthlyAmount() == null ? BigDecimal.ZERO : instrument.monthlyAmount();
+			proposals.add(new InstrumentProposalDto(
+					instrument.isin(),
+					instrument.name(),
+					toAmount(amount),
+					0.0d,
+					toAmount(BigDecimal.ZERO.subtract(amount)),
+					instrument.layer(),
+					List.of(REASON_BLACKLISTED)
+			));
+		}
+		return proposals;
 	}
 
 	private List<SavingPlanInstrument> normalizeInstruments(List<SavingPlanInstrument> instruments) {
@@ -1743,6 +1776,20 @@ public class InstrumentRebalanceService {
 		return isin.trim().toUpperCase(Locale.ROOT);
 	}
 
+	private Set<String> normalizeIsinSet(Set<String> isins) {
+		if (isins == null || isins.isEmpty()) {
+			return Set.of();
+		}
+		Set<String> normalized = new LinkedHashSet<>();
+		for (String isin : isins) {
+			String value = normalizeIsin(isin);
+			if (value != null) {
+				normalized.add(value);
+			}
+		}
+		return Set.copyOf(normalized);
+	}
+
 	private Double toAmount(BigDecimal value) {
 		if (value == null) {
 			return null;
@@ -1751,8 +1798,17 @@ public class InstrumentRebalanceService {
 	}
 
 	private Comparator<InstrumentProposalDto> instrumentOrder() {
-		return Comparator.comparing(InstrumentProposalDto::getLayer, Comparator.nullsLast(Comparator.naturalOrder()))
-				.thenComparing(InstrumentProposalDto::getIsin, Comparator.nullsLast(String::compareTo));
+		return (left, right) -> {
+			Integer leftLayer = left == null ? null : left.getLayer();
+			Integer rightLayer = right == null ? null : right.getLayer();
+			int layerCompare = Comparator.<Integer>nullsLast(Integer::compareTo).compare(leftLayer, rightLayer);
+			if (layerCompare != 0) {
+				return layerCompare;
+			}
+			String leftIsin = left == null ? null : left.getIsin();
+			String rightIsin = right == null ? null : right.getIsin();
+			return Comparator.<String>nullsLast(String::compareTo).compare(leftIsin, rightIsin);
+		};
 	}
 
 	public record InstrumentProposalResult(InstrumentProposalGatingDto gating,

@@ -65,6 +65,34 @@
             </select>
           </label>
           <label class="field">
+            <span>Approval</span>
+            <select v-model="dossierFilters.approvalStatus">
+              <option value="">Any</option>
+              <option v-for="status in approvalStatusOptions" :key="status.value" :value="status.value">{{ status.label }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Extraction</span>
+            <select v-model="dossierFilters.extractionStatus">
+              <option value="">Any</option>
+              <option v-for="status in extractionStatusOptions" :key="status" :value="status">{{ formatExtractionStatus(status) }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Freshness</span>
+            <select v-model="dossierFilters.freshnessStatus">
+              <option value="">Any</option>
+              <option v-for="status in freshnessStatusOptions" :key="status" :value="status">{{ formatExtractionFreshness(status) }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Proposal exclusions</span>
+            <select v-model="dossierFilters.blacklistStatus">
+              <option value="">Any</option>
+              <option v-for="status in blacklistStatusOptions" :key="status.value" :value="status.value">{{ status.label }}</option>
+            </select>
+          </label>
+          <label class="field">
             <span>Stale</span>
             <select v-model="dossierFilters.stale">
               <option value="">Any</option>
@@ -176,8 +204,46 @@
                       </button>
                     </th>
                     <th scope="col">Version</th>
-                    <th scope="col">Approved</th>
-                    <th scope="col">Extraction</th>
+                    <th scope="col" :aria-sort="ariaSort(dossierSort, 'approvalStatus')">
+                      <button
+                        type="button"
+                        class="sort-button"
+                        :aria-label="sortButtonLabel('Approval', dossierSort, 'approvalStatus')"
+                        @click="toggleDossierSort('approvalStatus')"
+                      >
+                        Approval <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(dossierSort, 'approvalStatus') }}</span>
+                      </button>
+                    </th>
+                    <th scope="col" :aria-sort="ariaSort(dossierSort, 'extractionStatus')">
+                      <button
+                        type="button"
+                        class="sort-button"
+                        :aria-label="sortButtonLabel('Extraction', dossierSort, 'extractionStatus')"
+                        @click="toggleDossierSort('extractionStatus')"
+                      >
+                        Extraction <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(dossierSort, 'extractionStatus') }}</span>
+                      </button>
+                    </th>
+                    <th scope="col" :aria-sort="ariaSort(dossierSort, 'freshnessStatus')">
+                      <button
+                        type="button"
+                        class="sort-button"
+                        :aria-label="sortButtonLabel('Freshness', dossierSort, 'freshnessStatus')"
+                        @click="toggleDossierSort('freshnessStatus')"
+                      >
+                        Freshness <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(dossierSort, 'freshnessStatus') }}</span>
+                      </button>
+                    </th>
+                    <th scope="col" :aria-sort="ariaSort(dossierSort, 'blacklistStatus')">
+                      <button
+                        type="button"
+                        class="sort-button"
+                        :aria-label="sortButtonLabel('Proposal exclusions', dossierSort, 'blacklistStatus')"
+                        @click="toggleDossierSort('blacklistStatus')"
+                      >
+                        Proposal exclusions <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(dossierSort, 'blacklistStatus') }}</span>
+                      </button>
+                    </th>
                     <th scope="col">Stale</th>
                     <th scope="col" :aria-sort="ariaSort(dossierSort, 'updatedAt')">
                       <button
@@ -194,10 +260,10 @@
                 </thead>
                 <tbody>
                   <tr v-if="dossiersLoading">
-                    <td colspan="10">Loading dossiers...</td>
+                    <td colspan="12">Loading dossiers...</td>
                   </tr>
                   <tr v-else-if="dossierItems.length === 0">
-                    <td colspan="10">No dossiers found.</td>
+                    <td colspan="12">No dossiers found.</td>
                   </tr>
                   <tr
                     v-else
@@ -234,11 +300,26 @@
                       </span>
                     </td>
                     <td>{{ item.latestDossierVersion ?? '-' }}</td>
-                    <td>{{ item.hasApprovedDossier ? 'Yes' : 'No' }}</td>
+                    <td>
+                      <span :class="['badge', approvalBadgeClass(item.approvalStatus)]">
+                        {{ formatApprovalStatus(item.approvalStatus) }}
+                      </span>
+                    </td>
+                    <td>
+                      <span :class="['badge', statusBadgeClass(item.latestExtractionStatus)]">
+                        {{ formatExtractionStatus(item.latestExtractionStatus) }}
+                      </span>
+                    </td>
                     <td>
                       <span :class="['badge', extractionBadgeClass(item.extractionFreshness)]">
                         {{ formatExtractionFreshness(item.extractionFreshness) }}
                       </span>
+                    </td>
+                    <td>
+                      <span :class="['badge', blacklistBadgeClass(item.blacklistScope)]">
+                        {{ formatBlacklistScope(item.blacklistScope) }}
+                      </span>
+                      <span v-if="item.blacklistPendingChange" class="badge caution">Pending</span>
                     </td>
                     <td>{{ item.stale ? 'Yes' : 'No' }}</td>
                     <td>{{ item.latestUpdatedAt ? formatDate(item.latestUpdatedAt) : '-' }}</td>
@@ -298,6 +379,17 @@
               <p v-if="dossierActionError" class="toast error">{{ dossierActionError }}</p>
               <p v-if="dossierActionMessage" class="toast success">{{ dossierActionMessage }}</p>
 
+              <div class="section">
+                <h4>Proposal exclusions</h4>
+                <p class="hint">Changes become active after approval or auto-approval.</p>
+                <p class="hint">
+                  Effective: <span :class="['badge', blacklistBadgeClass(dossierDetail.blacklist?.effectiveScope)]">{{ formatBlacklistScope(dossierDetail.blacklist?.effectiveScope) }}</span>
+                  <template v-if="dossierDetail.blacklist?.pendingChange">
+                    Pending: <span :class="['badge', blacklistBadgeClass(dossierDetail.blacklist?.requestedScope)]">{{ formatBlacklistScope(dossierDetail.blacklist?.requestedScope) }}</span>
+                  </template>
+                </p>
+              </div>
+
               <div v-if="editMode" class="section">
                 <label class="field">
                   <span>Display name</span>
@@ -307,6 +399,12 @@
                   <span>Status</span>
                   <select v-model="dossierForm.status">
                     <option v-for="status in dossierStatusOptions" :key="status" :value="status">{{ status }}</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Proposal exclusions</span>
+                  <select v-model="dossierForm.blacklistScope">
+                    <option v-for="status in blacklistStatusOptions" :key="status.value" :value="status.value">{{ status.label }}</option>
                   </select>
                 </label>
                 <label class="field">
@@ -1277,6 +1375,17 @@ const sections = [
 ]
 
 const dossierStatusOptions = ['APPROVED', 'PENDING_REVIEW', 'FAILED', 'REJECTED', 'DRAFT', 'SUPERSEDED']
+const approvalStatusOptions = [
+  { value: 'APPROVED', label: 'Approved' },
+  { value: 'NOT_APPROVED', label: 'Not approved' }
+]
+const extractionStatusOptions = ['NONE', 'CREATED', 'PENDING_REVIEW', 'APPROVED', 'APPLIED', 'REJECTED', 'FAILED']
+const freshnessStatusOptions = ['CURRENT', 'OUTDATED', 'NONE']
+const blacklistStatusOptions = [
+  { value: 'NONE', label: 'No exclusion' },
+  { value: 'SAVING_PLAN_ONLY', label: 'Exclude from saving plan proposals only' },
+  { value: 'ALL_PROPOSALS', label: 'Exclude from all buy proposals (saving plan and one-time)' }
+]
 const runStatusOptions = ['IN_PROGRESS', 'SUCCEEDED', 'FAILED', 'FAILED_TIMEOUT', 'SKIPPED']
 
 const activeSection = ref('DOSSIERS')
@@ -1320,6 +1429,10 @@ const configSaved = ref(false)
 const dossierFilters = ref({
   query: '',
   status: '',
+  approvalStatus: '',
+  extractionStatus: '',
+  freshnessStatus: '',
+  blacklistStatus: '',
   stale: ''
 })
 const dossierPage = ref({
@@ -1351,7 +1464,8 @@ const dossierForm = ref({
   displayName: '',
   contentMd: '',
   status: 'DRAFT',
-  citationsText: '[]'
+  citationsText: '[]',
+  blacklistScope: 'NONE'
 })
 
 const extractionError = ref('')
@@ -1437,6 +1551,10 @@ const alternativesIsinNormalized = computed(() => (alternativesIsin.value || '')
 const dossierSorters = {
   isin: (item) => item.isin,
   status: (item) => item.latestDossierStatus,
+  approvalStatus: (item) => item.approvalStatus,
+  extractionStatus: (item) => item.latestExtractionStatus,
+  freshnessStatus: (item) => item.extractionFreshness,
+  blacklistStatus: (item) => item.blacklistScope,
   updatedAt: (item) => item.latestUpdatedAt
 }
 const versionSorters = {
@@ -1958,6 +2076,10 @@ async function loadDossiers(options = {}) {
   const params = new URLSearchParams()
   if (dossierFilters.value.query) params.append('q', dossierFilters.value.query)
   if (dossierFilters.value.status) params.append('status', dossierFilters.value.status)
+  if (dossierFilters.value.approvalStatus) params.append('approvalStatus', dossierFilters.value.approvalStatus)
+  if (dossierFilters.value.extractionStatus) params.append('extractionStatus', dossierFilters.value.extractionStatus)
+  if (dossierFilters.value.freshnessStatus) params.append('freshnessStatus', dossierFilters.value.freshnessStatus)
+  if (dossierFilters.value.blacklistStatus) params.append('blacklistStatus', dossierFilters.value.blacklistStatus)
   if (dossierFilters.value.stale === 'true') params.append('stale', 'true')
   if (dossierFilters.value.stale === 'false') params.append('stale', 'false')
   params.append('sortBy', dossierSort.key)
@@ -2000,7 +2122,14 @@ function buildDossierLiveMessage() {
   const total = dossierPage.value.total || 0
   const page = dossierPage.value.page + 1
   const pageCount = total > 0 ? Math.max(1, Math.ceil(total / dossierPage.value.size)) : 1
-  const sortedBy = dossierSort.key === 'updatedAt' ? 'updated time' : dossierSort.key
+  const sortLabels = {
+    updatedAt: 'updated time',
+    approvalStatus: 'approval status',
+    extractionStatus: 'extraction status',
+    freshnessStatus: 'freshness status',
+    blacklistStatus: 'proposal exclusions'
+  }
+  const sortedBy = sortLabels[dossierSort.key] || dossierSort.key
   const direction = dossierSort.direction === 'asc' ? 'ascending' : 'descending'
   if (total === 0) {
     return `No dossiers found. Sorted by ${sortedBy}, ${direction}.`
@@ -2041,7 +2170,8 @@ async function loadDossierDetail(isin) {
       displayName: latest.displayName || '',
       contentMd: latest.contentMd || '',
       status: latest.status,
-      citationsText: JSON.stringify(latest.citations || [], null, 2)
+      citationsText: JSON.stringify(latest.citations || [], null, 2),
+      blacklistScope: detail.blacklist?.requestedScope || detail.blacklist?.effectiveScope || 'NONE'
     }
     announceDossier(`Dossier loaded for ${isin}.`)
     await focusDossierDetailHeading()
@@ -2104,7 +2234,8 @@ async function saveDossier() {
     displayName: dossierForm.value.displayName,
     contentMd: dossierForm.value.contentMd,
     status: dossierForm.value.status,
-    citations
+    citations,
+    blacklistScope: dossierForm.value.blacklistScope || 'NONE'
   }
   try {
     if (!dossierDetail.value.latestDossier.dossierId) {
@@ -2379,6 +2510,7 @@ ${template}`
 
 function buildEmptyDossierDetail(item) {
   const displayName = item?.name || ''
+  const blacklistScope = item?.blacklistScope || 'NONE'
   const contentTemplate = buildDossierTemplate(item?.isin, displayName)
   const draft = {
     dossierId: null,
@@ -2395,11 +2527,17 @@ function buildEmptyDossierDetail(item) {
     displayName,
     contentMd: contentTemplate,
     status: 'DRAFT',
-    citationsText: '[]'
+    citationsText: '[]',
+    blacklistScope
   }
   return {
     isin: item?.isin,
     displayName,
+    blacklist: {
+      requestedScope: blacklistScope,
+      effectiveScope: blacklistScope,
+      pendingChange: false
+    },
     latestDossier: draft,
     versions: [],
     extractions: [],
@@ -3169,10 +3307,37 @@ function statusBadgeClass(status) {
   return 'neutral'
 }
 
+function approvalBadgeClass(status) {
+  return status === 'APPROVED' ? 'ok' : 'neutral'
+}
+
+function formatApprovalStatus(status) {
+  return status === 'APPROVED' ? 'Approved' : 'Not approved'
+}
+
 function gateBadgeClass(passed) {
   if (passed === true) return 'ok'
   if (passed === false) return 'warn'
   return 'neutral'
+}
+
+function blacklistBadgeClass(scope) {
+  if (scope === 'ALL_PROPOSALS') return 'warn'
+  if (scope === 'SAVING_PLAN_ONLY') return 'caution'
+  return 'neutral'
+}
+
+function formatBlacklistScope(scope) {
+  if (scope === 'ALL_PROPOSALS') return 'All buy proposals'
+  if (scope === 'SAVING_PLAN_ONLY') return 'Saving plan proposals only'
+  return 'No exclusion'
+}
+
+function formatExtractionStatus(status) {
+  if (status === 'PENDING_REVIEW') return 'Pending review'
+  if (status === 'NOT_APPROVED') return 'Not approved'
+  if (!status || status === 'NONE') return 'None'
+  return status.replaceAll('_', ' ').toLowerCase().replace(/(^|\s)\S/g, (match) => match.toUpperCase())
 }
 
 function extractionBadgeClass(freshness) {

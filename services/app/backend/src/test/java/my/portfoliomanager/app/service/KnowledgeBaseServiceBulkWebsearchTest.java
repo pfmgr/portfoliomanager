@@ -87,7 +87,8 @@ class KnowledgeBaseServiceBulkWebsearchTest {
 				llmClient,
 				new ObjectMapper(),
 				null,
-				null
+				null,
+				mock(InstrumentBlacklistService.class)
 		);
 
 		KnowledgeBaseService.BulkWebsearchDraftResult result =

@@ -98,13 +98,16 @@ public class AssessorInstrumentSuggestionService {
 	private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 	private final ObjectMapper objectMapper;
 	private final AssessorInstrumentAssessmentService assessmentService;
+	private final InstrumentBlacklistService blacklistService;
 
 	public AssessorInstrumentSuggestionService(NamedParameterJdbcTemplate namedParameterJdbcTemplate,
-										   ObjectMapper objectMapper,
-										   AssessorInstrumentAssessmentService assessmentService) {
+									   ObjectMapper objectMapper,
+									   AssessorInstrumentAssessmentService assessmentService,
+									   InstrumentBlacklistService blacklistService) {
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
 		this.objectMapper = objectMapper;
 		this.assessmentService = assessmentService;
+		this.blacklistService = blacklistService;
 	}
 
 	public SuggestionResult suggest(SuggestionRequest request) {
@@ -158,8 +161,24 @@ public class AssessorInstrumentSuggestionService {
 			candidateProfiles.putAll(fallbackCandidates);
 		}
 		candidateProfiles = filterCandidatesByRisk(candidateProfiles, riskThresholds, riskThresholdsByLayer);
-		Map<Integer, List<InstrumentProfile>> candidatesByLayer = groupByLayer(candidateProfiles.values());
-		Map<Integer, LayerCoverage> candidateCoverage = buildCoverageByLayer(candidatesByLayer);
+		Set<String> savingPlanExcludedIsins = blacklistService.findSavingPlanExcludedIsins(candidateProfiles.keySet());
+		Set<String> oneTimeExcludedIsins = blacklistService.findAllProposalExcludedIsins(candidateProfiles.keySet());
+		Map<String, InstrumentProfile> savingPlanCandidateProfiles = new LinkedHashMap<>();
+		Map<String, InstrumentProfile> oneTimeCandidateProfiles = new LinkedHashMap<>();
+		for (Map.Entry<String, InstrumentProfile> entry : candidateProfiles.entrySet()) {
+			String isin = entry.getKey();
+			InstrumentProfile profile = entry.getValue();
+			if (!savingPlanExcludedIsins.contains(isin)) {
+				savingPlanCandidateProfiles.put(isin, profile);
+			}
+			if (!oneTimeExcludedIsins.contains(isin)) {
+				oneTimeCandidateProfiles.put(isin, profile);
+			}
+		}
+		Map<Integer, List<InstrumentProfile>> savingPlanCandidatesByLayer = groupByLayer(savingPlanCandidateProfiles.values());
+		Map<Integer, List<InstrumentProfile>> oneTimeCandidatesByLayer = groupByLayer(oneTimeCandidateProfiles.values());
+		Map<Integer, LayerCoverage> savingPlanCandidateCoverage = buildCoverageByLayer(savingPlanCandidatesByLayer);
+		Map<Integer, LayerCoverage> oneTimeCandidateCoverage = buildCoverageByLayer(oneTimeCandidatesByLayer);
 		Set<String> preferredSavingPlanIsins = new HashSet<>(coverageIsins);
 		preferredSavingPlanIsins.removeAll(savingPlanIsins);
 		Set<String> preferredOneTimeIsins = new HashSet<>(coverageIsins);
@@ -169,30 +188,32 @@ public class AssessorInstrumentSuggestionService {
 
 		for (int layer = 1; layer <= 5; layer++) {
 			int layerIndex = layer;
-			List<InstrumentProfile> layerCandidates = candidatesByLayer.getOrDefault(layer, List.of());
-			if (layerCandidates.isEmpty()) {
+			List<InstrumentProfile> layerSavingPlanCandidates = savingPlanCandidatesByLayer.getOrDefault(layer, List.of());
+			List<InstrumentProfile> layerOneTimeCandidates = oneTimeCandidatesByLayer.getOrDefault(layer, List.of());
+			if (layerSavingPlanCandidates.isEmpty() && layerOneTimeCandidates.isEmpty()) {
 				continue;
 			}
 			LayerCoverage existing = existingCoverage.getOrDefault(layer, new LayerCoverage());
 			LayerCoverage savingPlanExisting = savingPlanCoverage.getOrDefault(layer, new LayerCoverage());
-			LayerCoverage available = candidateCoverage.getOrDefault(layer, new LayerCoverage());
+			LayerCoverage savingPlanAvailable = savingPlanCandidateCoverage.getOrDefault(layer, new LayerCoverage());
+			LayerCoverage oneTimeAvailable = oneTimeCandidateCoverage.getOrDefault(layer, new LayerCoverage());
 			int savingPlanCount = savingPlanCounts.getOrDefault(layer, 0);
 			boolean needsBaselinePlan = savingPlanCount == 0;
 			MissingCategories savingPlanMissing = gapPolicy == AssessorGapDetectionPolicy.PORTFOLIO_GAPS
-					? MissingCategories.from(existing, available)
-					: MissingCategories.from(savingPlanExisting, available);
-			MissingCategories oneTimeMissing = MissingCategories.from(existing, available);
+					? MissingCategories.from(existing, savingPlanAvailable)
+					: MissingCategories.from(savingPlanExisting, savingPlanAvailable);
+			MissingCategories oneTimeMissing = MissingCategories.from(existing, oneTimeAvailable);
 			savingPlanMissing = savingPlanMissing.forLayer(layerIndex);
 			oneTimeMissing = oneTimeMissing.forLayer(layerIndex);
 			boolean skipSavingPlanSuggestions = savingPlanMissing.isEmpty() && !needsBaselinePlan;
-			List<InstrumentProfile> savingPlanCandidates = layerCandidates;
+			List<InstrumentProfile> savingPlanCandidates = layerSavingPlanCandidates;
 			if (!savingPlanIsins.isEmpty()) {
-				savingPlanCandidates = layerCandidates.stream()
+				savingPlanCandidates = layerSavingPlanCandidates.stream()
 						.filter(profile -> profile != null && !savingPlanIsins.contains(profile.isin()))
 						.filter(profile -> !isSingleStockDisallowed(profile, layerIndex))
 						.toList();
 			} else {
-				savingPlanCandidates = layerCandidates.stream()
+				savingPlanCandidates = layerSavingPlanCandidates.stream()
 						.filter(profile -> !isSingleStockDisallowed(profile, layerIndex))
 						.toList();
 			}
@@ -223,9 +244,9 @@ public class AssessorInstrumentSuggestionService {
 			}
 
 			if (oneTimeBudgets.containsKey(layer)) {
-				List<InstrumentProfile> oneTimeCandidates = layerCandidates;
+				List<InstrumentProfile> oneTimeCandidates = layerOneTimeCandidates;
 				if (!excludedSnapshotIsins.isEmpty()) {
-					oneTimeCandidates = layerCandidates.stream()
+					oneTimeCandidates = layerOneTimeCandidates.stream()
 							.filter(profile -> profile != null && !excludedSnapshotIsins.contains(profile.isin()))
 							.toList();
 				}

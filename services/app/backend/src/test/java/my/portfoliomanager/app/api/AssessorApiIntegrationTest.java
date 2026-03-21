@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,6 +68,7 @@ class AssessorApiIntegrationTest {
 		jdbcTemplate.update("delete from snapshot_positions");
 		jdbcTemplate.update("update depots set active_snapshot_id = null");
 		jdbcTemplate.update("delete from snapshots");
+		jdbcTemplate.update("delete from instrument_blacklists");
 		jdbcTemplate.update("delete from sparplans_history");
 		jdbcTemplate.update("delete from sparplans");
 		jdbcTemplate.update("delete from instruments");
@@ -130,6 +132,64 @@ class AssessorApiIntegrationTest {
 				assertThat(resultNode.path("saving_plan_suggestions").isArray()).isTrue();
 				assertThat(resultNode.path("diagnostics").path("within_tolerance").asBoolean()).isFalse();
 				assertThat(resultNode.path("one_time_allocation").path("layer_buckets").isMissingNode()).isFalse();
+				return;
+			}
+			if ("FAILED".equals(status)) {
+				fail("Assessor job failed: " + jobNode.path("error").asText());
+			}
+			Thread.sleep(100);
+		}
+		fail("Assessor job did not complete in time.");
+	}
+
+	@Test
+	void savingPlanAssessmentMarksBlacklistedPlansAsDiscard() throws Exception {
+		jdbcTemplate.update(
+				"""
+				insert into instrument_blacklists (isin, requested_scope, effective_scope, requested_updated_at, effective_updated_at)
+				values ('AAA111', 'SAVING_PLAN_ONLY', 'SAVING_PLAN_ONLY', ?, ?)
+				""",
+				LocalDateTime.now(),
+				LocalDateTime.now()
+		);
+
+		String startPayload = mockMvc.perform(post("/api/assessor/run")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "profile": "BALANCED",
+								  "assessmentType": "saving_plan"
+								}
+								"""))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		String jobId = objectMapper.readTree(startPayload).path("job_id").asText();
+		for (int attempt = 0; attempt < 30; attempt++) {
+			String jobPayload = mockMvc.perform(get("/api/assessor/run/{jobId}", jobId)
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+			JsonNode jobNode = objectMapper.readTree(jobPayload);
+			String status = jobNode.path("status").asText();
+			if ("DONE".equals(status)) {
+				JsonNode suggestions = jobNode.path("result").path("saving_plan_suggestions");
+				assertThat(suggestions.isArray()).isTrue();
+				boolean found = false;
+				for (JsonNode node : suggestions) {
+					if (!"AAA111".equals(node.path("isin").asText())) {
+						continue;
+					}
+					assertThat(node.path("type").asText()).isEqualTo("discard");
+					assertThat(node.path("rationale").asText()).isEqualTo("Blacklisted from Saving Plan Proposals");
+					found = true;
+				}
+				assertThat(found).isTrue();
 				return;
 			}
 			if ("FAILED".equals(status)) {

@@ -46,7 +46,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("30"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		assertThat(result.gating().kbComplete()).isFalse();
 		assertThat(result.gating().missingIsins()).contains("DE000B");
@@ -67,7 +67,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("30"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isEqualTo(20.0d);
@@ -89,7 +89,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("25"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 15, 0, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, 0, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		long dropped = byIsin.values().stream()
@@ -115,7 +115,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("40"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 15, 5, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, 5, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isGreaterThan(0.0d);
@@ -141,7 +141,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(2, new BigDecimal("100"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 5, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 5, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		double total = result.proposals().stream()
 				.mapToDouble(InstrumentProposalDto::getProposedAmountEur)
@@ -163,7 +163,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("100"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, true, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, true, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isEqualTo(60.0d);
@@ -190,7 +190,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("100"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 5, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 5, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000C").getProposedAmountEur())
@@ -211,7 +211,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("100"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 5, 10, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 5, 10, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur()).isEqualTo(55.0d);
@@ -234,7 +234,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur())
@@ -278,7 +278,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur())
@@ -322,7 +322,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000B").getProposedAmountEur())
@@ -368,7 +368,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("1000"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 1, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		Map<String, InstrumentProposalDto> byIsin = toMap(result.proposals());
 		assertThat(byIsin.get("DE000A").getProposedAmountEur())
@@ -386,6 +386,7 @@ class InstrumentRebalanceServiceTest {
 				fixture.minimumSavingPlanSize(),
 				fixture.minimumRebalancingAmount(),
 				false,
+				Set.of(),
 				DEFAULT_THRESHOLDS,
 				Map.of()
 		);
@@ -420,7 +421,7 @@ class InstrumentRebalanceServiceTest {
 		);
 		Map<Integer, BigDecimal> budgets = Map.of(4, new BigDecimal("45"));
 
-		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false, DEFAULT_THRESHOLDS, Map.of());
+		var result = service.buildInstrumentProposals(instruments, budgets, 15, null, false, Set.of(), DEFAULT_THRESHOLDS, Map.of());
 
 		long dropped = result.proposals().stream()
 				.filter(proposal -> proposal.getProposedAmountEur() == 0.0d)
@@ -428,6 +429,36 @@ class InstrumentRebalanceServiceTest {
 		assertThat(dropped).isGreaterThanOrEqualTo(1);
 		double layerTotal = sumLayer(result.proposals(), 4);
 		assertThat(layerTotal).isBetween(45.0d, 75.0d);
+	}
+
+	@Test
+	void blacklistedSavingPlansAreProposedForDiscard() {
+		Map<String, ExtractionRow> rows = Map.of(
+				"DE000A", new ExtractionRow("DE000A", "COMPLETE", "{\"isin\":\"DE000A\"}")
+		);
+		InstrumentRebalanceService service = buildService(rows, true);
+
+		List<SavingPlanInstrument> instruments = List.of(
+				new SavingPlanInstrument("DE000A", "Alpha Fund", new BigDecimal("20"), 1, null)
+		);
+		Map<Integer, BigDecimal> budgets = Map.of(1, new BigDecimal("20"));
+
+		var result = service.buildInstrumentProposals(
+				instruments,
+				budgets,
+				15,
+				null,
+				false,
+				Set.of("DE000A"),
+				DEFAULT_THRESHOLDS,
+				Map.of()
+		);
+
+		assertThat(result.proposals()).hasSize(1);
+		InstrumentProposalDto proposal = result.proposals().get(0);
+		assertThat(proposal.getIsin()).isEqualTo("DE000A");
+		assertThat(proposal.getProposedAmountEur()).isEqualTo(0.0d);
+		assertThat(proposal.getReasonCodes()).contains("BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS");
 	}
 
 	private InstrumentRebalanceService buildService(Map<String, ExtractionRow> rows, boolean kbEnabled) {

@@ -66,6 +66,7 @@ class RebalancerApiIntegrationTest {
 		jdbcTemplate.update("delete from snapshot_positions");
 		jdbcTemplate.update("update depots set active_snapshot_id = null");
 		jdbcTemplate.update("delete from snapshots");
+		jdbcTemplate.update("delete from instrument_blacklists");
 		jdbcTemplate.update("delete from sparplans_history");
 		jdbcTemplate.update("delete from sparplans");
 		jdbcTemplate.update("delete from instruments");
@@ -157,6 +158,32 @@ class RebalancerApiIntegrationTest {
 		org.assertj.core.api.Assertions.assertThat(currentTargetWeights)
 				.isNotEmpty()
 				.anySatisfy(value -> org.assertj.core.api.Assertions.assertThat(value.doubleValue()).isGreaterThan(0.0d));
+	}
+
+	@Test
+	void summaryMarksBlacklistedSavingPlansForDiscard() throws Exception {
+		jdbcTemplate.update("""
+				insert into knowledge_base_extractions (isin, status, extracted_json, updated_at)
+				values ('DE000C', 'COMPLETE', cast(? as jsonb), ?)
+				""", "{\"isin\":\"DE000C\"}", LocalDateTime.now());
+		jdbcTemplate.update("""
+				insert into instrument_blacklists (isin, requested_scope, effective_scope, requested_updated_at, effective_updated_at)
+				values ('DE000C', 'SAVING_PLAN_ONLY', 'SAVING_PLAN_ONLY', ?, ?)
+				""", LocalDateTime.now(), LocalDateTime.now());
+
+		MvcResult result = mockMvc.perform(post("/api/rebalancer/run")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn();
+		String jobId = JsonHelper.read(result, "$.job_id").toString();
+		awaitJob(jobId);
+		mockMvc.perform(get("/api/rebalancer/run/" + jobId)
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals[0].isin").value("DE000C"))
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals[0].proposedAmountEur").value(0.0))
+				.andExpect(jsonPath("$.result.summary.savingPlanProposal.instrumentProposals[0].reasonCodes[0]")
+						.value("BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS"));
 	}
 
 	@Test

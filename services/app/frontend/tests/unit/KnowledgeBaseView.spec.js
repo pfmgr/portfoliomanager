@@ -120,6 +120,10 @@ describe('KnowledgeBaseView', () => {
               latestDossierStatus: 'DRAFT',
               latestUpdatedAt: '2025-01-01T00:00:00',
               latestDossierVersion: 1,
+              approvalStatus: 'NOT_APPROVED',
+              latestExtractionStatus: 'NONE',
+              blacklistScope: 'NONE',
+              blacklistPendingChange: false,
               hasApprovedDossier: false,
               hasApprovedExtraction: false,
               stale: false,
@@ -172,6 +176,18 @@ describe('KnowledgeBaseView', () => {
     await flushPromises()
     expect(dossierCalls.at(-1)).toContain('q=alpha')
     expect(dossierCalls.at(-1)).toContain('page=0')
+
+    const selects = wrapper.findAll('form.kb-filter-form select')
+    await selects[1].setValue('APPROVED')
+    await selects[2].setValue('PENDING_REVIEW')
+    await selects[3].setValue('CURRENT')
+    await selects[4].setValue('ALL_PROPOSALS')
+    await filterForm.trigger('submit')
+    await flushPromises()
+    expect(dossierCalls.at(-1)).toContain('approvalStatus=APPROVED')
+    expect(dossierCalls.at(-1)).toContain('extractionStatus=PENDING_REVIEW')
+    expect(dossierCalls.at(-1)).toContain('freshnessStatus=CURRENT')
+    expect(dossierCalls.at(-1)).toContain('blacklistStatus=ALL_PROPOSALS')
 
     wrapper.unmount()
   })

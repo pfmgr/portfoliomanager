@@ -386,6 +386,8 @@
             </dd>
             <dt>Layer budget 0</dt>
             <dd>Layer has no budget, so all instruments are proposed at 0.</dd>
+            <dt>Blacklisted from saving plan proposals</dt>
+            <dd>Instrument is excluded by approved Knowledge Base dossier policy and is proposed for discard.</dd>
             <dt>No change (within tolerance)</dt>
             <dd>Current amounts are kept because the plan is within tolerance.</dd>
             <dt>No change (below minimum rebalancing)</dt>
@@ -420,6 +422,7 @@
           <label class="field">
             Sort
             <select v-model="instrumentSortMode">
+              <option value="action">Action</option>
               <option value="layer">Layer</option>
               <option value="isin">ISIN</option>
               <option value="name">Name</option>
@@ -433,6 +436,7 @@
             <caption class="sr-only">Instrument-level savings plan proposal.</caption>
             <thead>
               <tr>
+                <th scope="col">Action</th>
                 <th scope="col">ISIN</th>
                 <th scope="col">Name</th>
                 <th scope="col">Layer</th>
@@ -446,9 +450,10 @@
             <tbody>
               <template v-if="loading">
                 <tr class="sr-only">
-                  <td colspan="8">Loading instrument proposals...</td>
+                  <td colspan="9">Loading instrument proposals...</td>
                 </tr>
                 <tr v-for="n in 3" :key="`instrument-skeleton-${n}`" class="skeleton-row" aria-hidden="true">
+                  <td><span class="skeleton-block"></span></td>
                   <td><span class="skeleton-block"></span></td>
                   <td><span class="skeleton-block"></span></td>
                   <td><span class="skeleton-block"></span></td>
@@ -461,12 +466,12 @@
               </template>
               <template v-else-if="instrumentGating && !instrumentGating.knowledgeBaseEnabled">
                 <tr>
-                  <td colspan="8">Instrument proposals are gated because the Knowledge Base is disabled.</td>
+                  <td colspan="9">Instrument proposals are gated because the Knowledge Base is disabled.</td>
                 </tr>
               </template>
               <template v-else-if="instrumentGating && !instrumentGating.kbComplete">
                 <tr>
-                  <td colspan="8">
+                  <td colspan="9">
                     Instrument proposals are gated; missing extractions for
                     <span v-if="instrumentGating.missingIsins && instrumentGating.missingIsins.length">
                       {{ instrumentGating.missingIsins.join(', ') }}
@@ -477,18 +482,19 @@
               </template>
               <template v-else-if="instrumentProposals.length === 0">
                 <tr>
-                  <td colspan="8">No instrument proposals available.</td>
+                  <td colspan="9">No instrument proposals available.</td>
                 </tr>
               </template>
               <template v-else>
                 <template v-for="group in groupedInstrumentProposals" :key="group.key">
                   <tr class="group-row">
-                    <th scope="rowgroup" colspan="8">{{ group.label }}</th>
+                    <th scope="rowgroup" colspan="9">{{ group.label }}</th>
                   </tr>
                   <tr v-if="group.items.length === 0">
-                    <td colspan="8">No instruments for this warning group.</td>
+                    <td colspan="9">No instruments for this warning group.</td>
                   </tr>
                   <tr v-for="row in group.items" :key="row.isin">
+                    <td><span :class="['badge', proposalActionClass(row)]">{{ proposalActionLabel(row) }}</span></td>
                     <th scope="row">{{ row.isin }}</th>
                     <td>{{ formatInstrumentName(row.instrumentName) }}</td>
                     <td>{{ layerLabel(row.layer) }}</td>
@@ -813,16 +819,17 @@ function formatReasons(reasons) {
   if (!reasons || reasons.length === 0) {
     return 'n/a'
   }
-    const labels = {
-      NO_CHANGE_WITHIN_TOLERANCE: 'No change (within tolerance)',
-      MIN_AMOUNT_DROPPED: 'Dropped (below minimum)',
-      MIN_REBALANCE_AMOUNT: 'No change (below minimum rebalancing)',
-      KB_WEIGHTED: 'KB-weighted',
-      SCORE_WEIGHTED: 'Score-weighted',
-      KB_GAP_SUGGESTION: 'New suggestion (gap detection)',
-      EQUAL_WEIGHT: 'Equal weight',
-      LAYER_BUDGET_ZERO: 'Layer budget 0'
-    }
+  const labels = {
+    NO_CHANGE_WITHIN_TOLERANCE: 'No change (within tolerance)',
+    MIN_AMOUNT_DROPPED: 'Dropped (below minimum)',
+    MIN_REBALANCE_AMOUNT: 'No change (below minimum rebalancing)',
+    KB_WEIGHTED: 'KB-weighted',
+    SCORE_WEIGHTED: 'Score-weighted',
+    KB_GAP_SUGGESTION: 'New suggestion (gap detection)',
+    EQUAL_WEIGHT: 'Equal weight',
+    LAYER_BUDGET_ZERO: 'Layer budget 0',
+    BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS: 'Blacklisted from Saving Plan Proposals'
+  }
   return reasons.map((code) => labels[code] || code).join(', ')
 }
 
@@ -892,6 +899,8 @@ function sortInstrumentProposals(items) {
   const sorted = [...items]
   sorted.sort((a, b) => {
     switch (instrumentSortMode.value) {
+      case 'action':
+        return compareText(proposalActionLabel(a), proposalActionLabel(b)) || compareText(a.isin, b.isin)
       case 'isin':
         return compareText(a.isin, b.isin)
       case 'name':
@@ -905,6 +914,37 @@ function sortInstrumentProposals(items) {
     }
   })
   return sorted
+}
+
+function proposalActionLabel(row) {
+  const reasons = row?.reasonCodes || []
+  if (reasons.includes('BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS')) {
+    return 'Discard'
+  }
+  const current = Number(row?.currentAmountEur ?? 0)
+  const proposed = Number(row?.proposedAmountEur ?? 0)
+  const delta = Number(row?.deltaEur ?? 0)
+  if (proposed === 0 && current > 0) {
+    return 'Discard'
+  }
+  if (current === 0 && proposed > 0) {
+    return 'New'
+  }
+  if (delta > 0) {
+    return 'Increase'
+  }
+  if (delta < 0) {
+    return 'Decrease'
+  }
+  return 'Keep'
+}
+
+function proposalActionClass(row) {
+  const action = proposalActionLabel(row)
+  if (action === 'Discard') return 'warn'
+  if (action === 'New') return 'ok'
+  if (action === 'Decrease') return 'caution'
+  return 'neutral'
 }
 
 function compareText(a, b) {

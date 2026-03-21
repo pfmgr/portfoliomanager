@@ -54,16 +54,19 @@ public class KnowledgeBaseBackupService {
 	private static final String DATA_PREFIX = "data/";
 	private static final List<String> TABLES = List.of(
 			"instrument_dossiers",
+			"instrument_blacklists",
 			"instrument_dossier_extractions",
 			"knowledge_base_extractions"
 	);
 	private static final List<String> IMPORT_ORDER = List.of(
 			"instrument_dossiers",
+			"instrument_blacklists",
 			"instrument_dossier_extractions",
 			"knowledge_base_extractions"
 	);
 	private static final List<SequenceInfo> SEQUENCES = List.of(
 			new SequenceInfo("instrument_dossiers", "dossier_id"),
+			new SequenceInfo("instrument_blacklists", "blacklist_id"),
 			new SequenceInfo("instrument_dossier_extractions", "extraction_id")
 	);
 
@@ -306,6 +309,7 @@ public class KnowledgeBaseBackupService {
 	private void clearKnowledgeBase() {
 		jdbcTemplate.update("delete from knowledge_base_extractions");
 		jdbcTemplate.update("delete from instrument_dossier_extractions");
+		jdbcTemplate.update("delete from instrument_blacklists");
 		jdbcTemplate.update("delete from instrument_dossiers");
 	}
 
