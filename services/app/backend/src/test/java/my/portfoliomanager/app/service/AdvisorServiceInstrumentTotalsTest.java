@@ -83,6 +83,7 @@ class AdvisorServiceInstrumentTotalsTest {
 						ArgumentMatchers.<Integer>any(),
 						ArgumentMatchers.<Integer>any(),
 						Mockito.anyBoolean(),
+						Mockito.anySet(),
 						ArgumentMatchers.<LayerTargetRiskThresholds>any(),
 						ArgumentMatchers.<Map<Integer, LayerTargetRiskThresholds>>any()))
 				.thenReturn(result);

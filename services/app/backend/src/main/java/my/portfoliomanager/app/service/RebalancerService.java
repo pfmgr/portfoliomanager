@@ -78,6 +78,7 @@ public class RebalancerService {
 	private final AssessorInstrumentSuggestionService instrumentSuggestionService;
 	private final AssessorInstrumentAssessmentService instrumentAssessmentService;
 	private final LayerTargetConfigService layerTargetConfigService;
+	private final InstrumentBlacklistService blacklistService;
 	private final LlmPromptPolicy llmPromptPolicy;
 	private volatile Boolean isPostgres;
 	private static final String ADVISOR_RUN_INSERT_SQL = """
@@ -140,7 +141,8 @@ public class RebalancerService {
 					  AssessorInstrumentSuggestionService instrumentSuggestionService,
 					  AssessorInstrumentAssessmentService instrumentAssessmentService,
 					  LayerTargetConfigService layerTargetConfigService,
-					  LlmPromptPolicy llmPromptPolicy) {
+					  LlmPromptPolicy llmPromptPolicy,
+					  InstrumentBlacklistService blacklistService) {
 		this.jdbcTemplate = jdbcTemplate;
 		this.summaryMapper = new ObjectMapper();
 		this.llmNarrativeService = llmNarrativeService;
@@ -150,6 +152,7 @@ public class RebalancerService {
 		this.instrumentAssessmentService = instrumentAssessmentService;
 		this.layerTargetConfigService = layerTargetConfigService;
 		this.llmPromptPolicy = llmPromptPolicy;
+		this.blacklistService = blacklistService;
 	}
 
 	public AdvisorSummaryDto summary(LocalDate asOf) {
@@ -688,6 +691,11 @@ public class RebalancerService {
 										  LayerTargetEffectiveConfig targetConfig,
 										  ProposalComputation computation) {
 		List<SavingPlanInstrument> savingPlanInstruments = loadSavingPlanInstruments();
+		Set<String> excludedSavingPlanIsins = blacklistService.findSavingPlanExcludedIsins(
+				savingPlanInstruments.stream().map(SavingPlanInstrument::isin).toList());
+		List<SavingPlanInstrument> eligibleSavingPlanInstruments = savingPlanInstruments.stream()
+				.filter(instrument -> instrument != null && !excludedSavingPlanIsins.contains(normalizeIsin(instrument.isin())))
+				.toList();
 		LayerTargetRiskThresholds riskThresholds = resolveRiskThresholds(targetConfig);
 		Map<Integer, LayerTargetRiskThresholds> riskThresholdsByLayer = resolveRiskThresholdsByLayer(targetConfig, riskThresholds);
 		InstrumentRebalanceService.InstrumentProposalResult instrumentResult = instrumentRebalanceService.buildInstrumentProposals(
@@ -696,6 +704,7 @@ public class RebalancerService {
 				targetConfig.minimumSavingPlanSize(),
 				targetConfig.minimumRebalancingAmount(),
 				computation.effectiveWithinTolerance(),
+				excludedSavingPlanIsins,
 				riskThresholds,
 				riskThresholdsByLayer
 		);
@@ -710,9 +719,9 @@ public class RebalancerService {
 				? new ArrayList<>()
 				: new ArrayList<>(instrumentResult.warnings());
 		List<InstrumentProposalDto> gapProposals = buildGapInstrumentProposals(metrics, computation.proposalAmounts(),
-				targetConfig, savingPlanInstruments, instrumentGating);
+				targetConfig, eligibleSavingPlanInstruments, instrumentGating);
 		mergeGapProposals(instrumentProposals, warningDetails, gapProposals);
-		appendRiskWarnings(warningDetails, savingPlanInstruments, targetConfig, instrumentGating);
+		appendRiskWarnings(warningDetails, eligibleSavingPlanInstruments, targetConfig, instrumentGating);
 		instrumentProposals.sort(this::compareInstrumentProposals);
 		List<String> warnings = warningDetails.stream().map(InstrumentRebalanceService.InstrumentWarning::message).toList();
 		List<String> warningCodes = warningDetails.stream().map(InstrumentRebalanceService.InstrumentWarning::code).toList();
@@ -897,6 +906,7 @@ public class RebalancerService {
 			switch (code) {
 				case "MIN_AMOUNT_DROPPED" -> labels.add("below minimum saving plan size");
 				case "LAYER_BUDGET_ZERO" -> labels.add("layer budget is zero");
+				case "BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS" -> labels.add("Blacklisted from Saving Plan Proposals");
 				default -> {
 					// Keep unknown reason codes for fallback output.
 				}

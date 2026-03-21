@@ -58,6 +58,7 @@ public class KnowledgeBaseService {
     private final Map<String, Object> bulkWebsearchSchema;
     private final LlmPromptPolicy llmPromptPolicy;
     private final KnowledgeBaseQualityGateService qualityGateService;
+    private final InstrumentBlacklistService blacklistService;
 
     public KnowledgeBaseService(InstrumentRepository instrumentRepository,
                                 InstrumentDossierRepository dossierRepository,
@@ -69,11 +70,12 @@ public class KnowledgeBaseService {
                                 KnowledgeBaseExtractionService knowledgeBaseExtractionService,
                                 KnowledgeBaseConfigService configService,
                                 KnowledgeBaseLlmClient knowledgeBaseLlmClient,
-                                KnowledgeBaseRunService runService,
-                                LlmClient llmClient,
-                                ObjectMapper objectMapper,
-                                LlmPromptPolicy llmPromptPolicy,
-                                KnowledgeBaseQualityGateService qualityGateService) {
+                                 KnowledgeBaseRunService runService,
+                                 LlmClient llmClient,
+                                 ObjectMapper objectMapper,
+                                 LlmPromptPolicy llmPromptPolicy,
+                                 KnowledgeBaseQualityGateService qualityGateService,
+                                 InstrumentBlacklistService blacklistService) {
         this.instrumentRepository = instrumentRepository;
         this.dossierRepository = dossierRepository;
         this.extractionRepository = extractionRepository;
@@ -90,10 +92,15 @@ public class KnowledgeBaseService {
         this.bulkWebsearchSchema = buildBulkWebsearchSchema(objectMapper);
         this.llmPromptPolicy = llmPromptPolicy;
         this.qualityGateService = qualityGateService;
+        this.blacklistService = blacklistService;
     }
 
     public InstrumentDossierSearchPageDto searchDossiers(String query,
                                                          DossierStatus status,
+                                                         String approvalStatus,
+                                                         String extractionStatus,
+                                                         String freshnessStatus,
+                                                         String blacklistStatus,
                                                          Boolean stale,
                                                          int limit,
                                                          int offset,
@@ -111,11 +118,27 @@ public class KnowledgeBaseService {
         KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
         LocalDateTime staleBefore = LocalDateTime.now().minusDays(config.refreshIntervalDays());
         String statusFilter = status == null ? null : status.name();
-        long total = dossierRepository.countSearch(queryContainsPattern, queryPrefixPattern, statusFilter, stale, staleBefore);
+        String approvalFilter = normalizeApprovalFilter(approvalStatus);
+        String extractionFilter = normalizeExtractionStatusFilter(extractionStatus);
+        String freshnessFilter = normalizeFreshnessStatusFilter(freshnessStatus);
+        String blacklistFilter = normalizeBlacklistStatusFilter(blacklistStatus);
+        long total = dossierRepository.countSearch(queryContainsPattern,
+                queryPrefixPattern,
+                statusFilter,
+                approvalFilter,
+                extractionFilter,
+                freshnessFilter,
+                blacklistFilter,
+                stale,
+                staleBefore);
         List<InstrumentDossierSearchProjection> rows = dossierRepository.searchDossiers(
                 queryContainsPattern,
                 queryPrefixPattern,
                 statusFilter,
+                approvalFilter,
+                extractionFilter,
+                freshnessFilter,
+                blacklistFilter,
                 stale,
                 staleBefore,
                 sort.key(),
@@ -137,6 +160,7 @@ public class KnowledgeBaseService {
         dossierRepository.clearSupersedesByIsinIn(normalized);
         List<Long> dossierIds = dossierRepository.findIdsByIsinIn(normalized);
         int deletedExtractions = dossierIds.isEmpty() ? 0 : extractionRepository.deleteByDossierIdIn(dossierIds);
+        blacklistService.deleteByIsins(normalized);
         int deletedDossiers = dossierRepository.deleteByIsinIn(normalized);
         int deletedKbExtractions = knowledgeBaseExtractionService.deleteByIsins(normalized);
         return new KnowledgeBaseDossierDeleteResultDto(
@@ -304,7 +328,16 @@ public class KnowledgeBaseService {
         dossier.setCreatedAt(now);
         dossier.setUpdatedAt(now);
         applyDossierStatus(dossier, request.status(), createdBy, false);
-        return toResponse(dossierRepository.save(dossier));
+        InstrumentDossier saved = dossierRepository.save(dossier);
+        if (request.blacklistScope() != null) {
+            blacklistService.updateRequestedScope(saved.getIsin(), saved.getDossierId(), request.blacklistScope());
+        } else {
+            blacklistService.carryForwardRequestedScope(saved.getIsin(), saved.getDossierId(), previous == null ? null : previous.getDossierId());
+        }
+        if (saved.getStatus() == DossierStatus.APPROVED) {
+            blacklistService.activateApprovedScope(saved.getIsin(), saved.getDossierId());
+        }
+        return toResponse(saved);
     }
 
     public InstrumentDossierResponseDto getDossier(Long dossierId) {
@@ -335,6 +368,7 @@ public class KnowledgeBaseService {
         return new KnowledgeBaseDossierDetailDto(
                 normalizedIsin,
                 displayName,
+                blacklistService.getState(normalizedIsin),
                 toResponse(latest),
                 history,
                 extractions,
@@ -355,8 +389,18 @@ public class KnowledgeBaseService {
         dossier.setCitationsJson(citations);
         dossier.setContentHash(hashContent(content));
         dossier.setUpdatedAt(LocalDateTime.now());
-        applyDossierStatus(dossier, request.status(), updatedBy, false);
-        return toResponse(dossierRepository.save(dossier));
+        DossierStatus targetStatus = resolveUpdatedDossierStatus(dossier, request);
+        applyDossierStatus(dossier, targetStatus, updatedBy, false);
+        InstrumentDossier saved = dossierRepository.save(dossier);
+        if (request.blacklistScope() != null) {
+            blacklistService.updateRequestedScope(saved.getIsin(), saved.getDossierId(), request.blacklistScope());
+        }
+        if (saved.getStatus() == DossierStatus.APPROVED) {
+            blacklistService.activateApprovedScope(saved.getIsin(), saved.getDossierId());
+        } else if (saved.getStatus() == DossierStatus.REJECTED || saved.getStatus() == DossierStatus.FAILED) {
+            blacklistService.discardPendingScope(saved.getIsin(), saved.getDossierId());
+        }
+        return toResponse(saved);
     }
 
     public List<InstrumentDossierExtractionResponseDto> listExtractions(Long dossierId) {
@@ -528,7 +572,9 @@ public class KnowledgeBaseService {
         dossier.setStatus(DossierStatus.REJECTED);
         dossier.setUpdatedAt(LocalDateTime.now());
         dossier.setAutoApproved(false);
-        return toResponse(dossierRepository.save(dossier));
+        InstrumentDossier saved = dossierRepository.save(dossier);
+        blacklistService.discardPendingScope(saved.getIsin(), saved.getDossierId());
+        return toResponse(saved);
     }
 
     @Transactional
@@ -649,6 +695,7 @@ public class KnowledgeBaseService {
         applyDossierStatus(dossier, DossierStatus.APPROVED, approvedBy, autoApproved);
         dossier.setUpdatedAt(now);
         InstrumentDossier saved = dossierRepository.save(dossier);
+        blacklistService.activateApprovedScope(saved.getIsin(), saved.getDossierId());
         List<InstrumentDossier> others = dossierRepository.findByIsinOrderByVersionDesc(saved.getIsin());
         for (InstrumentDossier other : others) {
             if (other.getDossierId().equals(saved.getDossierId())) {
@@ -922,9 +969,27 @@ public class KnowledgeBaseService {
                 dossier.setApprovedBy(approvedBy);
             }
             dossier.setAutoApproved(autoApproved);
-        } else if (status == DossierStatus.REJECTED || status == DossierStatus.FAILED) {
+        } else {
+            dossier.setApprovedAt(null);
+            dossier.setApprovedBy(null);
             dossier.setAutoApproved(false);
         }
+        if (status == DossierStatus.REJECTED || status == DossierStatus.FAILED) {
+            dossier.setAutoApproved(false);
+        }
+    }
+
+    private DossierStatus resolveUpdatedDossierStatus(InstrumentDossier dossier, InstrumentDossierUpdateRequest request) {
+        if (dossier == null || request == null || request.status() == null) {
+            return request == null ? null : request.status();
+        }
+        if (dossier.getStatus() != DossierStatus.APPROVED || request.status() != DossierStatus.APPROVED
+                || request.blacklistScope() == null) {
+            return request.status();
+        }
+        KnowledgeBaseBlacklistStateDto blacklistState = blacklistService.getState(dossier.getIsin());
+        InstrumentBlacklistScope effectiveScope = blacklistState == null ? InstrumentBlacklistScope.NONE : blacklistState.effectiveScope();
+        return effectiveScope == request.blacklistScope() ? request.status() : DossierStatus.PENDING_REVIEW;
     }
 
     private boolean requiresDossierApproval(DossierStatus status) {
@@ -1717,6 +1782,10 @@ public class KnowledgeBaseService {
                 row.getDossierUpdatedAt(),
                 row.getDossierVersion(),
                 row.getDossierApprovedAt(),
+                normalizeApprovalFilter(row.getApprovalStatus()),
+                normalizeExtractionStatusFilter(row.getLatestExtractionStatus()),
+                parseBlacklistScope(row.getBlacklistScope()),
+                Boolean.TRUE.equals(row.getBlacklistPendingChange()),
                 Boolean.TRUE.equals(row.getHasApprovedDossier()),
                 Boolean.TRUE.equals(row.getHasApprovedExtraction()),
                 Boolean.TRUE.equals(row.getStale()),
@@ -1733,6 +1802,62 @@ public class KnowledgeBaseService {
         } catch (IllegalArgumentException ex) {
             return DossierExtractionFreshness.NONE;
         }
+    }
+
+    private InstrumentBlacklistScope parseBlacklistScope(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return InstrumentBlacklistScope.NONE;
+        }
+        try {
+            return InstrumentBlacklistScope.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            return InstrumentBlacklistScope.NONE;
+        }
+    }
+
+    private String normalizeApprovalFilter(String approvalStatus) {
+        if (approvalStatus == null || approvalStatus.isBlank()) {
+            return null;
+        }
+        String normalized = approvalStatus.trim().toUpperCase(Locale.ROOT);
+        if (!"APPROVED".equals(normalized) && !"NOT_APPROVED".equals(normalized)) {
+            throw new IllegalArgumentException("Invalid approval status filter.");
+        }
+        return normalized;
+    }
+
+    private String normalizeExtractionStatusFilter(String extractionStatus) {
+        if (extractionStatus == null || extractionStatus.isBlank()) {
+            return null;
+        }
+        String normalized = extractionStatus.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("NONE", "CREATED", "PENDING_REVIEW", "APPROVED", "APPLIED", "REJECTED", "FAILED")
+                .contains(normalized)) {
+            throw new IllegalArgumentException("Invalid extraction status filter.");
+        }
+        return normalized;
+    }
+
+    private String normalizeFreshnessStatusFilter(String freshnessStatus) {
+        if (freshnessStatus == null || freshnessStatus.isBlank()) {
+            return null;
+        }
+        String normalized = freshnessStatus.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("NONE", "CURRENT", "OUTDATED").contains(normalized)) {
+            throw new IllegalArgumentException("Invalid freshness status filter.");
+        }
+        return normalized;
+    }
+
+    private String normalizeBlacklistStatusFilter(String blacklistStatus) {
+        if (blacklistStatus == null || blacklistStatus.isBlank()) {
+            return null;
+        }
+        String normalized = blacklistStatus.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("NONE", "SAVING_PLAN_ONLY", "ALL_PROPOSALS").contains(normalized)) {
+            throw new IllegalArgumentException("Invalid blacklist status filter.");
+        }
+        return normalized;
     }
 
     private String normalizeQuery(String query) {
@@ -1780,6 +1905,14 @@ public class KnowledgeBaseService {
             canonicalSortBy = "isin";
         } else if ("status".equalsIgnoreCase(normalizedSortBy)) {
             canonicalSortBy = "status";
+        } else if ("approvalStatus".equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = "approvalStatus";
+        } else if ("extractionStatus".equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = "extractionStatus";
+        } else if ("freshnessStatus".equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = "freshnessStatus";
+        } else if ("blacklistStatus".equalsIgnoreCase(normalizedSortBy)) {
+            canonicalSortBy = "blacklistStatus";
         } else if (SORT_UPDATED_AT.equalsIgnoreCase(normalizedSortBy)) {
             canonicalSortBy = SORT_UPDATED_AT;
         } else {

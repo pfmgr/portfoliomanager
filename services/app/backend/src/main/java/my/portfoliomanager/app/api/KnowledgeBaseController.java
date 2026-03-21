@@ -67,11 +67,15 @@ public class KnowledgeBaseController {
 	@GetMapping("/dossiers")
 	@Operation(summary = "Search knowledge base dossiers")
 	public InstrumentDossierSearchPageDto searchDossiers(@RequestParam(required = false) String q,
-											 @RequestParam(required = false) String query,
-											 @RequestParam(required = false) String status,
-											 @RequestParam(required = false) Boolean stale,
-											 @RequestParam(required = false) String sortBy,
-											 @RequestParam(required = false) String sortDirection,
+										 @RequestParam(required = false) String query,
+										 @RequestParam(required = false) String status,
+										 @RequestParam(required = false) String approvalStatus,
+										 @RequestParam(required = false) String extractionStatus,
+										 @RequestParam(required = false) String freshnessStatus,
+										 @RequestParam(required = false) String blacklistStatus,
+										 @RequestParam(required = false) Boolean stale,
+										 @RequestParam(required = false) String sortBy,
+										 @RequestParam(required = false) String sortDirection,
 											 @RequestParam(required = false) String sortDir,
 											 @RequestParam(required = false, defaultValue = "0") int page,
 											 @RequestParam(required = false, defaultValue = "50") int size,
@@ -95,7 +99,16 @@ public class KnowledgeBaseController {
 				throw new IllegalArgumentException("Invalid status filter.");
 			}
 		}
-		return knowledgeBaseService.searchDossiers(finalQuery, statusFilter, stale, finalLimit, finalOffset, sortBy,
+		return knowledgeBaseService.searchDossiers(finalQuery,
+				statusFilter,
+				approvalStatus,
+				extractionStatus,
+				freshnessStatus,
+				blacklistStatus,
+				stale,
+				finalLimit,
+				finalOffset,
+				sortBy,
 				finalSortDirection);
 	}
 

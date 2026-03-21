@@ -11,6 +11,10 @@ public interface InstrumentDossierSearchProjection {
 	LocalDateTime getDossierUpdatedAt();
 	Integer getDossierVersion();
 	LocalDateTime getDossierApprovedAt();
+	String getApprovalStatus();
+	String getLatestExtractionStatus();
+	String getBlacklistScope();
+	Boolean getBlacklistPendingChange();
 	Boolean getHasApprovedDossier();
 	Boolean getHasApprovedExtraction();
 	Boolean getStale();

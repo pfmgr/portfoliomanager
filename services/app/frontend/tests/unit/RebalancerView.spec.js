@@ -155,4 +155,65 @@ describe('RebalancerView', () => {
     expect(narrativeHtml).toContain('KB weighting')
     expect(text.toLowerCase()).toContain('valuation')
   })
+
+  it('shows discard action for blacklisted saving plans', async () => {
+    const summary = {
+      layerAllocations: [],
+      assetClassAllocations: [],
+      topPositions: [],
+      savingPlanSummary: { totalActiveAmountEur: 25, monthlyTotalAmountEur: 25, activeCount: 1, monthlyCount: 1, monthlyByLayer: [] },
+      savingPlanTargets: [],
+      savingPlanProposal: {
+        totalMonthlyAmountEur: 25,
+        targetWeightTotalPct: 100,
+        source: 'targets',
+        narrative: 'Discard blacklisted saving plan.',
+        notes: [],
+        actualDistributionByLayer: { 5: 100 },
+        targetDistributionByLayer: { 5: 100 },
+        proposedDistributionByLayer: { 5: 0 },
+        deviationsByLayer: { 5: 0 },
+        withinTolerance: false,
+        constraints: [],
+        recommendation: 'Discard blacklisted plan',
+        selectedProfileKey: 'BALANCED',
+        selectedProfileDisplayName: 'Balanced',
+        gating: { knowledgeBaseEnabled: true, kbComplete: true, missingIsins: [] },
+        instrumentWarnings: [],
+        instrumentWarningCodes: [],
+        instrumentProposals: [
+          {
+            isin: 'DE000C',
+            instrumentName: 'Test Stock',
+            layer: 5,
+            currentAmountEur: 25,
+            proposedAmountEur: 0,
+            deltaEur: -25,
+            reasonCodes: ['BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS']
+          }
+        ],
+        layers: []
+      }
+    }
+
+    apiRequest.mockImplementation((url) => {
+      if (url === '/layer-targets') {
+        return Promise.resolve({ layerNames: { 5: 'Unclassified' } })
+      }
+      if (url === '/rebalancer/run') {
+        return Promise.resolve({ job_id: 'job-2', status: 'PENDING' })
+      }
+      if (url === '/rebalancer/run/job-2') {
+        return Promise.resolve({ job_id: 'job-2', status: 'DONE', result: { summary } })
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`))
+    })
+
+    const wrapper = mount(RebalancerView)
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Discard')
+    expect(wrapper.text()).toContain('Blacklisted from Saving Plan Proposals')
+  })
 })

@@ -88,7 +88,7 @@
     </div>
 
     <div v-if="assessment && !loading" class="card">
-      <h3>No financal advice</h3>
+      <h3>No financial advice</h3>
       <p>These suggestions do not constitute financial advice!</p>
       <p>Examine the suggestions critically and use them with due caution!</p>
     </div>
@@ -584,7 +584,7 @@ const savingPlanSuggestionRows = computed(() => {
   const rows = suggestions.value.map((item) => ({
     key: `${item.isin}-${item.depot_id ?? 'na'}-${item.type ?? 'adjust'}`,
     action: formatAction(item.type),
-    actionClass: 'neutral',
+    actionClass: savingPlanActionClass(item.type),
     isin: item.isin,
     instrumentName: item.instrument_name,
     layer: item.layer,
@@ -1041,6 +1041,14 @@ function formatAction(action) {
   if (!action) return 'Adjust'
   if (action.toLowerCase() === 'keep') return 'Keep amount'
   return action.charAt(0).toUpperCase() + action.slice(1)
+}
+
+function savingPlanActionClass(action) {
+  const normalized = (action || '').toLowerCase()
+  if (normalized === 'discard') return 'warn'
+  if (normalized === 'create') return 'ok'
+  if (normalized === 'decrease') return 'caution'
+  return 'neutral'
 }
 
 function toggleSort(sortState, key, defaultDirection = 'asc') {

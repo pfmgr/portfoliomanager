@@ -1470,3 +1470,85 @@ databaseChangeLog:
             tableName: instrument_facts
             columnName: fact_value_num
             newDataType: NUMERIC(24,6)
+  - changeSet:
+      id: 019a-instrument-blacklists-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: instrument_blacklists
+      changes:
+        - createTable:
+            tableName: instrument_blacklists
+            columns:
+              - column:
+                  name: blacklist_id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: isin
+                  type: VARCHAR(12)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: requested_scope
+                  type: VARCHAR(32)
+                  defaultValue: NONE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: effective_scope
+                  type: VARCHAR(32)
+                  defaultValue: NONE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: requested_dossier_id
+                  type: BIGINT
+              - column:
+                  name: effective_dossier_id
+                  type: BIGINT
+              - column:
+                  name: requested_updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: effective_updated_at
+                  type: TIMESTAMP
+        - addUniqueConstraint:
+            tableName: instrument_blacklists
+            columnNames: isin
+            constraintName: ux_instrument_blacklists_isin
+        - addForeignKeyConstraint:
+            baseTableName: instrument_blacklists
+            baseColumnNames: requested_dossier_id
+            referencedTableName: instrument_dossiers
+            referencedColumnNames: dossier_id
+            constraintName: fk_instrument_blacklists_requested_dossier
+            onDelete: SET NULL
+        - addForeignKeyConstraint:
+            baseTableName: instrument_blacklists
+            baseColumnNames: effective_dossier_id
+            referencedTableName: instrument_dossiers
+            referencedColumnNames: dossier_id
+            constraintName: fk_instrument_blacklists_effective_dossier
+            onDelete: SET NULL
+        - createIndex:
+            tableName: instrument_blacklists
+            indexName: ix_instrument_blacklists_effective_scope
+            columns:
+              - column:
+                  name: effective_scope
+        - createIndex:
+            tableName: instrument_blacklists
+            indexName: ix_instrument_blacklists_requested_scope
+            columns:
+              - column:
+                  name: requested_scope

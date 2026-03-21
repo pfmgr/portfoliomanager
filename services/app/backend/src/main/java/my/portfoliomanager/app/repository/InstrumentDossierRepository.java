@@ -18,15 +18,17 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 
 	@Query(value = """
 			WITH latest_dossiers AS (
-			  SELECT dossier_id, isin, status, updated_at, display_name, version,
+			  SELECT dossier_id, isin, status, updated_at, approved_at, display_name, version,
 			         ROW_NUMBER() OVER (PARTITION BY isin ORDER BY version DESC, updated_at DESC, dossier_id DESC) AS rn
 			  FROM instrument_dossiers
 			),
 			latest_extractions AS (
-			  SELECT d.isin, MAX(e.created_at) AS latest_extraction_at
+			  SELECT d.isin,
+			         e.status AS extraction_status,
+			         e.created_at AS latest_extraction_at,
+			         ROW_NUMBER() OVER (PARTITION BY d.isin ORDER BY e.created_at DESC, e.extraction_id DESC) AS rn
 			  FROM instrument_dossiers d
 			  JOIN instrument_dossier_extractions e ON e.dossier_id = d.dossier_id
-			  GROUP BY d.isin
 			),
 			latest_approved_dossiers AS (
 			  SELECT isin, MAX(approved_at) AS approved_at
@@ -51,12 +53,22 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			    d.status AS dossier_status,
 			    d.updated_at AS dossier_updated_at,
 			    d.version AS dossier_version,
-			    lad.approved_at AS dossier_approved_at,
-			    ae.approved_at AS extraction_approved_at
+			    d.approved_at AS dossier_approved_at,
+			    ae.approved_at AS extraction_approved_at,
+			    le.extraction_status AS latest_extraction_status,
+			    le.latest_extraction_at AS latest_extraction_at,
+			    ib.effective_scope AS blacklist_scope,
+			    CASE
+			      WHEN ib.requested_scope IS NULL THEN FALSE
+			      WHEN ib.requested_scope <> ib.effective_scope THEN TRUE
+			      ELSE FALSE
+			    END AS blacklist_pending_change
 			  FROM instruments_effective ie
 			  LEFT JOIN latest_dossiers d ON d.isin = ie.isin AND d.rn = 1
 			  LEFT JOIN latest_approved_dossiers lad ON lad.isin = ie.isin
 			  LEFT JOIN approved_extractions ae ON ae.isin = ie.isin
+			  LEFT JOIN latest_extractions le ON le.isin = ie.isin AND le.rn = 1
+			  LEFT JOIN instrument_blacklists ib ON ib.isin = ie.isin
 			  UNION ALL
 			  SELECT
 			    d.isin,
@@ -67,8 +79,16 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			    d.status AS dossier_status,
 			    d.updated_at AS dossier_updated_at,
 			    d.version AS dossier_version,
-			    lad.approved_at AS dossier_approved_at,
-			    ae.approved_at AS extraction_approved_at
+			    d.approved_at AS dossier_approved_at,
+			    ae.approved_at AS extraction_approved_at,
+			    le.extraction_status AS latest_extraction_status,
+			    le.latest_extraction_at AS latest_extraction_at,
+			    ib.effective_scope AS blacklist_scope,
+			    CASE
+			      WHEN ib.requested_scope IS NULL THEN FALSE
+			      WHEN ib.requested_scope <> ib.effective_scope THEN TRUE
+			      ELSE FALSE
+			    END AS blacklist_pending_change
 			  FROM latest_dossiers d
 			  LEFT JOIN instruments_effective ie ON ie.isin = d.isin
 			  LEFT JOIN instruments i ON i.isin = d.isin
@@ -76,6 +96,8 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  LEFT JOIN instrument_classifications c ON c.isin = d.isin
 			  LEFT JOIN latest_approved_dossiers lad ON lad.isin = d.isin
 			  LEFT JOIN approved_extractions ae ON ae.isin = d.isin
+			  LEFT JOIN latest_extractions le ON le.isin = d.isin AND le.rn = 1
+			  LEFT JOIN instrument_blacklists ib ON ib.isin = d.isin
 			  WHERE d.rn = 1 AND ie.isin IS NULL
 			)
 			SELECT
@@ -87,6 +109,13 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  c.dossier_updated_at AS dossierUpdatedAt,
 			  c.dossier_version AS dossierVersion,
 			  c.dossier_approved_at AS dossierApprovedAt,
+			  CASE
+			    WHEN c.dossier_approved_at IS NULL THEN 'NOT_APPROVED'
+			    ELSE 'APPROVED'
+			  END AS approvalStatus,
+			  COALESCE(c.latest_extraction_status, 'NONE') AS latestExtractionStatus,
+			  COALESCE(c.blacklist_scope, 'NONE') AS blacklistScope,
+			  COALESCE(c.blacklist_pending_change, FALSE) AS blacklistPendingChange,
 			  CASE
 			    WHEN c.dossier_approved_at IS NULL THEN FALSE
 			    ELSE TRUE
@@ -102,12 +131,11 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  END AS stale,
 			  CASE
 			    WHEN c.dossier_id IS NULL THEN 'NONE'
-			    WHEN le.latest_extraction_at IS NULL THEN 'NONE'
-			    WHEN le.latest_extraction_at >= c.dossier_updated_at THEN 'CURRENT'
+			    WHEN c.latest_extraction_at IS NULL THEN 'NONE'
+			    WHEN c.latest_extraction_at >= c.dossier_updated_at THEN 'CURRENT'
 			    ELSE 'OUTDATED'
 			  END AS extractionFreshness
 			FROM combined c
-			LEFT JOIN latest_extractions le ON le.isin = c.isin
 			WHERE (
 			  :queryContainsPattern IS NULL
 			  OR LOWER(c.isin) LIKE :queryPrefixPattern ESCAPE '\\'
@@ -118,6 +146,19 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  OR LOWER(c.dossier_display_name) LIKE :queryContainsPattern ESCAPE '\\'
 			)
 			  AND (:status IS NULL OR c.dossier_status = :status)
+			  AND (:approvalStatus IS NULL OR (
+			    CASE WHEN c.dossier_approved_at IS NULL THEN 'NOT_APPROVED' ELSE 'APPROVED' END
+			  ) = :approvalStatus)
+			  AND (:extractionStatus IS NULL OR COALESCE(c.latest_extraction_status, 'NONE') = :extractionStatus)
+			  AND (:freshnessStatus IS NULL OR (
+			    CASE
+			      WHEN c.dossier_id IS NULL THEN 'NONE'
+			      WHEN c.latest_extraction_at IS NULL THEN 'NONE'
+			      WHEN c.latest_extraction_at >= c.dossier_updated_at THEN 'CURRENT'
+			      ELSE 'OUTDATED'
+			    END
+			  ) = :freshnessStatus)
+			  AND (:blacklistStatus IS NULL OR COALESCE(c.blacklist_scope, 'NONE') = :blacklistStatus)
 			  AND (:stale IS NULL OR (
 			    CASE
 			      WHEN c.dossier_approved_at IS NULL THEN FALSE
@@ -127,17 +168,81 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  ) = :stale)
 			ORDER BY
 			  CASE
-			    WHEN :sortBy = 'status' THEN CASE WHEN c.dossier_status IS NULL THEN 1 ELSE 0 END
-			    ELSE 0
-			  END ASC,
-			  CASE
 			    WHEN :sortBy = 'updatedAt' THEN CASE WHEN c.dossier_updated_at IS NULL THEN 1 ELSE 0 END
 			    ELSE 0
 			  END ASC,
 			  CASE WHEN :sortBy = 'isin' AND :sortDirection = 'asc' THEN LOWER(c.isin) END ASC,
 			  CASE WHEN :sortBy = 'isin' AND :sortDirection = 'desc' THEN LOWER(c.isin) END DESC,
-			  CASE WHEN :sortBy = 'status' AND :sortDirection = 'asc' THEN c.dossier_status END ASC,
-			  CASE WHEN :sortBy = 'status' AND :sortDirection = 'desc' THEN c.dossier_status END DESC,
+			  CASE WHEN :sortBy = 'status' AND :sortDirection = 'asc' THEN CASE c.dossier_status
+			    WHEN 'DRAFT' THEN 0
+			    WHEN 'PENDING_REVIEW' THEN 1
+			    WHEN 'APPROVED' THEN 2
+			    WHEN 'SUPERSEDED' THEN 3
+			    WHEN 'REJECTED' THEN 4
+			    WHEN 'FAILED' THEN 5
+			    ELSE 6
+			  END END ASC,
+			  CASE WHEN :sortBy = 'status' AND :sortDirection = 'desc' THEN CASE c.dossier_status
+			    WHEN 'DRAFT' THEN 0
+			    WHEN 'PENDING_REVIEW' THEN 1
+			    WHEN 'APPROVED' THEN 2
+			    WHEN 'SUPERSEDED' THEN 3
+			    WHEN 'REJECTED' THEN 4
+			    WHEN 'FAILED' THEN 5
+			    ELSE 6
+			  END END DESC,
+			  CASE WHEN :sortBy = 'approvalStatus' AND :sortDirection = 'asc' THEN CASE
+			    WHEN c.dossier_approved_at IS NULL THEN 0
+			    ELSE 1
+			  END END ASC,
+			  CASE WHEN :sortBy = 'approvalStatus' AND :sortDirection = 'desc' THEN CASE
+			    WHEN c.dossier_approved_at IS NULL THEN 0
+			    ELSE 1
+			  END END DESC,
+			  CASE WHEN :sortBy = 'extractionStatus' AND :sortDirection = 'asc' THEN CASE COALESCE(c.latest_extraction_status, 'NONE')
+			    WHEN 'NONE' THEN 0
+			    WHEN 'CREATED' THEN 1
+			    WHEN 'PENDING_REVIEW' THEN 2
+			    WHEN 'APPROVED' THEN 3
+			    WHEN 'APPLIED' THEN 4
+			    WHEN 'REJECTED' THEN 5
+			    WHEN 'FAILED' THEN 6
+			    ELSE 7
+			  END END ASC,
+			  CASE WHEN :sortBy = 'extractionStatus' AND :sortDirection = 'desc' THEN CASE COALESCE(c.latest_extraction_status, 'NONE')
+			    WHEN 'NONE' THEN 0
+			    WHEN 'CREATED' THEN 1
+			    WHEN 'PENDING_REVIEW' THEN 2
+			    WHEN 'APPROVED' THEN 3
+			    WHEN 'APPLIED' THEN 4
+			    WHEN 'REJECTED' THEN 5
+			    WHEN 'FAILED' THEN 6
+			    ELSE 7
+			  END END DESC,
+			  CASE WHEN :sortBy = 'freshnessStatus' AND :sortDirection = 'asc' THEN CASE
+			    WHEN c.dossier_id IS NULL THEN 0
+			    WHEN c.latest_extraction_at IS NULL THEN 0
+			    WHEN c.latest_extraction_at >= c.dossier_updated_at THEN 2
+			    ELSE 1
+			  END END ASC,
+			  CASE WHEN :sortBy = 'freshnessStatus' AND :sortDirection = 'desc' THEN CASE
+			    WHEN c.dossier_id IS NULL THEN 0
+			    WHEN c.latest_extraction_at IS NULL THEN 0
+			    WHEN c.latest_extraction_at >= c.dossier_updated_at THEN 2
+			    ELSE 1
+			  END END DESC,
+			  CASE WHEN :sortBy = 'blacklistStatus' AND :sortDirection = 'asc' THEN CASE COALESCE(c.blacklist_scope, 'NONE')
+			    WHEN 'NONE' THEN 0
+			    WHEN 'SAVING_PLAN_ONLY' THEN 1
+			    WHEN 'ALL_PROPOSALS' THEN 2
+			    ELSE 3
+			  END END ASC,
+			  CASE WHEN :sortBy = 'blacklistStatus' AND :sortDirection = 'desc' THEN CASE COALESCE(c.blacklist_scope, 'NONE')
+			    WHEN 'NONE' THEN 0
+			    WHEN 'SAVING_PLAN_ONLY' THEN 1
+			    WHEN 'ALL_PROPOSALS' THEN 2
+			    ELSE 3
+			  END END DESC,
 			  CASE WHEN :sortBy = 'updatedAt' AND :sortDirection = 'asc' THEN c.dossier_updated_at END ASC,
 			  CASE WHEN :sortBy = 'updatedAt' AND :sortDirection = 'desc' THEN c.dossier_updated_at END DESC,
 			  LOWER(c.isin) ASC
@@ -147,6 +252,10 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			@Param("queryContainsPattern") String queryContainsPattern,
 			@Param("queryPrefixPattern") String queryPrefixPattern,
 			@Param("status") String status,
+			@Param("approvalStatus") String approvalStatus,
+			@Param("extractionStatus") String extractionStatus,
+			@Param("freshnessStatus") String freshnessStatus,
+			@Param("blacklistStatus") String blacklistStatus,
 			@Param("stale") Boolean stale,
 			@Param("staleBefore") java.time.LocalDateTime staleBefore,
 			@Param("sortBy") String sortBy,
@@ -157,7 +266,7 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 
 	@Query(value = """
 			WITH latest_dossiers AS (
-			  SELECT dossier_id, isin, status, updated_at, display_name, version,
+			  SELECT dossier_id, isin, status, updated_at, approved_at, display_name, version,
 			         ROW_NUMBER() OVER (PARTITION BY isin ORDER BY version DESC, updated_at DESC, dossier_id DESC) AS rn
 			  FROM instrument_dossiers
 			),
@@ -166,6 +275,14 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  FROM instrument_dossiers
 			  WHERE status = 'APPROVED'
 			  GROUP BY isin
+			),
+			latest_extractions AS (
+			  SELECT d.isin,
+			         e.status AS extraction_status,
+			         e.created_at AS latest_extraction_at,
+			         ROW_NUMBER() OVER (PARTITION BY d.isin ORDER BY e.created_at DESC, e.extraction_id DESC) AS rn
+			  FROM instrument_dossiers d
+			  JOIN instrument_dossier_extractions e ON e.dossier_id = d.dossier_id
 			),
 			combined AS (
 			  SELECT
@@ -176,10 +293,15 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			    d.dossier_id,
 			    d.status AS dossier_status,
 			    d.updated_at AS dossier_updated_at,
-			    lad.approved_at AS dossier_approved_at
+			    d.approved_at AS dossier_approved_at,
+			    le.extraction_status AS latest_extraction_status,
+			    le.latest_extraction_at AS latest_extraction_at,
+			    ib.effective_scope AS blacklist_scope
 			  FROM instruments_effective ie
 			  LEFT JOIN latest_dossiers d ON d.isin = ie.isin AND d.rn = 1
 			  LEFT JOIN latest_approved_dossiers lad ON lad.isin = ie.isin
+			  LEFT JOIN latest_extractions le ON le.isin = ie.isin AND le.rn = 1
+			  LEFT JOIN instrument_blacklists ib ON ib.isin = ie.isin
 			  UNION ALL
 			  SELECT
 			    d.isin,
@@ -189,13 +311,18 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			    d.dossier_id,
 			    d.status AS dossier_status,
 			    d.updated_at AS dossier_updated_at,
-			    lad.approved_at AS dossier_approved_at
+			    d.approved_at AS dossier_approved_at,
+			    le.extraction_status AS latest_extraction_status,
+			    le.latest_extraction_at AS latest_extraction_at,
+			    ib.effective_scope AS blacklist_scope
 			  FROM latest_dossiers d
 			  LEFT JOIN instruments_effective ie ON ie.isin = d.isin
 			  LEFT JOIN instruments i ON i.isin = d.isin
 			  LEFT JOIN instrument_overrides o ON o.isin = d.isin
 			  LEFT JOIN instrument_classifications c ON c.isin = d.isin
 			  LEFT JOIN latest_approved_dossiers lad ON lad.isin = d.isin
+			  LEFT JOIN latest_extractions le ON le.isin = d.isin AND le.rn = 1
+			  LEFT JOIN instrument_blacklists ib ON ib.isin = d.isin
 			  WHERE d.rn = 1 AND ie.isin IS NULL
 			),
 			filtered AS (
@@ -204,6 +331,18 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			    c.name,
 			    c.dossier_display_name,
 			    c.dossier_status,
+			    CASE
+			      WHEN c.dossier_approved_at IS NULL THEN 'NOT_APPROVED'
+			      ELSE 'APPROVED'
+			    END AS approval_status,
+			    COALESCE(c.latest_extraction_status, 'NONE') AS latest_extraction_status,
+			    CASE
+			      WHEN c.dossier_id IS NULL THEN 'NONE'
+			      WHEN c.latest_extraction_at IS NULL THEN 'NONE'
+			      WHEN c.latest_extraction_at >= c.dossier_updated_at THEN 'CURRENT'
+			      ELSE 'OUTDATED'
+			    END AS extraction_freshness,
+			    COALESCE(c.blacklist_scope, 'NONE') AS blacklist_scope,
 			    CASE
 			      WHEN c.dossier_approved_at IS NULL THEN FALSE
 			      WHEN c.dossier_approved_at < :staleBefore THEN TRUE
@@ -223,11 +362,19 @@ public interface InstrumentDossierRepository extends JpaRepository<InstrumentDos
 			  OR LOWER(dossier_display_name) LIKE :queryContainsPattern ESCAPE '\\'
 			)
 			  AND (:status IS NULL OR dossier_status = :status)
+			  AND (:approvalStatus IS NULL OR approval_status = :approvalStatus)
+			  AND (:extractionStatus IS NULL OR latest_extraction_status = :extractionStatus)
+			  AND (:freshnessStatus IS NULL OR extraction_freshness = :freshnessStatus)
+			  AND (:blacklistStatus IS NULL OR blacklist_scope = :blacklistStatus)
 			  AND (:stale IS NULL OR stale = :stale)
 			""", nativeQuery = true)
 	long countSearch(@Param("queryContainsPattern") String queryContainsPattern,
 					 @Param("queryPrefixPattern") String queryPrefixPattern,
 					 @Param("status") String status,
+					 @Param("approvalStatus") String approvalStatus,
+					 @Param("extractionStatus") String extractionStatus,
+					 @Param("freshnessStatus") String freshnessStatus,
+					 @Param("blacklistStatus") String blacklistStatus,
 					 @Param("stale") Boolean stale,
 					 @Param("staleBefore") java.time.LocalDateTime staleBefore);
 

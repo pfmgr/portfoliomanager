@@ -1,6 +1,7 @@
 package my.portfoliomanager.app.dto;
 
 import my.portfoliomanager.app.domain.DossierStatus;
+import my.portfoliomanager.app.domain.InstrumentBlacklistScope;
 
 import java.time.LocalDateTime;
 
@@ -14,6 +15,10 @@ public record InstrumentDossierSearchItemDto(
 		LocalDateTime latestUpdatedAt,
 		Integer latestDossierVersion,
 		LocalDateTime latestApprovedAt,
+		String approvalStatus,
+		String latestExtractionStatus,
+		InstrumentBlacklistScope blacklistScope,
+		boolean blacklistPendingChange,
 		boolean hasApprovedDossier,
 		boolean hasApprovedExtraction,
 		boolean stale,
