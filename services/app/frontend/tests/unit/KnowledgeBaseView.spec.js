@@ -103,6 +103,58 @@ describe('KnowledgeBaseView', () => {
     wrapper.unmount()
   })
 
+  it('hides dossier filters by default and toggles them without reloading data', async () => {
+    const dossierCalls = []
+    apiRequest.mockImplementation((path) => {
+      if (path.startsWith('/kb/config')) {
+        return Promise.resolve({ enabled: true })
+      }
+      if (path.startsWith('/kb/dossiers')) {
+        dossierCalls.push(path)
+        return Promise.resolve({ items: [], total: 0 })
+      }
+      if (path.startsWith('/kb/runs')) {
+        return Promise.resolve({ items: [], total: 0 })
+      }
+      if (path.startsWith('/kb/llm-actions')) {
+        return Promise.resolve([])
+      }
+      return Promise.resolve({})
+    })
+
+    const wrapper = mount(KnowledgeBaseView)
+    await flushPromises()
+
+    const toggleButton = wrapper.find('button[aria-controls="kb-dossier-filters"]')
+    const filterPanel = wrapper.find('#kb-dossier-filters')
+    expect(toggleButton.exists()).toBe(true)
+    expect(toggleButton.text()).toBe('Show Filter')
+    expect(wrapper.text()).toContain('No filters applied')
+    expect(toggleButton.attributes('aria-expanded')).toBe('false')
+    expect(filterPanel.attributes('style') || '').toContain('display: none')
+    const initialCallCount = dossierCalls.length
+    expect(initialCallCount).toBeGreaterThan(0)
+
+    await toggleButton.trigger('click')
+    await flushPromises()
+    expect(toggleButton.text()).toBe('Hide Filter')
+    expect(toggleButton.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('#kb-dossier-filters').attributes('style') || '').not.toContain('display: none')
+    expect(dossierCalls).toHaveLength(initialCallCount)
+
+    const searchInput = wrapper.find('input[placeholder="ISIN or name"]')
+    await searchInput.setValue('alpha')
+    await toggleButton.trigger('click')
+    await flushPromises()
+    expect(toggleButton.text()).toBe('Show Filter')
+    expect(wrapper.find('#kb-dossier-filters').attributes('style') || '').toContain('display: none')
+    expect(wrapper.find('input[placeholder="ISIN or name"]').element.value).toBe('alpha')
+    expect(wrapper.text()).toContain('No filters applied')
+    expect(dossierCalls).toHaveLength(initialCallCount)
+
+    wrapper.unmount()
+  })
+
   it('loads dossiers with server-side sorting and resets page for sort and filters', async () => {
     const dossierCalls = []
     apiRequest.mockImplementation((path) => {
@@ -149,6 +201,10 @@ describe('KnowledgeBaseView', () => {
     expect(dossierCalls[0]).toContain('sortDirection=desc')
     expect(dossierCalls[0]).toContain('page=0')
 
+    const filterToggle = wrapper.find('button[aria-controls="kb-dossier-filters"]')
+    await filterToggle.trigger('click')
+    await flushPromises()
+
     const getNextButton = () => wrapper.findAll('button').find((button) => button.text() === 'Next')
 
     const nextButton = getNextButton()
@@ -176,6 +232,7 @@ describe('KnowledgeBaseView', () => {
     await flushPromises()
     expect(dossierCalls.at(-1)).toContain('q=alpha')
     expect(dossierCalls.at(-1)).toContain('page=0')
+    expect(wrapper.text()).toContain('1 filter active: Search')
 
     const selects = wrapper.findAll('form.kb-filter-form select')
     await selects[1].setValue('APPROVED')
@@ -188,6 +245,7 @@ describe('KnowledgeBaseView', () => {
     expect(dossierCalls.at(-1)).toContain('extractionStatus=PENDING_REVIEW')
     expect(dossierCalls.at(-1)).toContain('freshnessStatus=CURRENT')
     expect(dossierCalls.at(-1)).toContain('blacklistStatus=ALL_PROPOSALS')
+    expect(wrapper.text()).toContain('5 filters active: Search, Approval, Extraction, Freshness, Proposal exclusions')
 
     wrapper.unmount()
   })
