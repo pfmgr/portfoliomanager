@@ -25,7 +25,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,6 +37,12 @@ class SavingPlanServiceTest {
 
 	@Mock
 	private InstrumentRepository instrumentRepository;
+
+	@Mock
+	private InstrumentMaterializationService instrumentMaterializationService;
+
+	@Mock
+	private InstrumentBlacklistService instrumentBlacklistService;
 
 	@InjectMocks
 	private SavingPlanService savingPlanService;
@@ -56,6 +61,7 @@ class SavingPlanServiceTest {
 		instrument = new Instrument();
 		instrument.setIsin("DE0000000001");
 		instrument.setName("Sample");
+		instrument.setLayer(3);
 	}
 
 	@Test
@@ -81,7 +87,8 @@ class SavingPlanServiceTest {
 	@Test
 	void createUsesDefaultsAndInstrumentName() {
 		when(depotRepository.findById(1L)).thenReturn(Optional.of(depot));
-		when(instrumentRepository.findById("DE0000000001")).thenReturn(Optional.of(instrument));
+		when(instrumentMaterializationService.ensureInstrument("DE0000000001", depot, null, null))
+				.thenReturn(new InstrumentMaterializationService.MaterializationResult(instrument, false, false));
 		when(savingPlanRepository.findByDepotIdAndIsin(1L, "DE0000000001")).thenReturn(Optional.empty());
 		when(savingPlanRepository.save(any(SavingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -99,7 +106,6 @@ class SavingPlanServiceTest {
 	@Test
 	void createThrowsWhenExisting() {
 		when(depotRepository.findById(1L)).thenReturn(Optional.of(depot));
-		when(instrumentRepository.findById("DE0000000001")).thenReturn(Optional.of(instrument));
 		when(savingPlanRepository.findByDepotIdAndIsin(1L, "DE0000000001")).thenReturn(Optional.of(new SavingPlan()));
 
 		SavingPlanUpsertRequest request = new SavingPlanUpsertRequest(
@@ -125,7 +131,8 @@ class SavingPlanServiceTest {
 
 		when(savingPlanRepository.findById(5L)).thenReturn(Optional.of(existing));
 		when(depotRepository.findById(1L)).thenReturn(Optional.of(depot));
-		when(instrumentRepository.findById("DE0000000001")).thenReturn(Optional.of(instrument));
+		when(instrumentMaterializationService.ensureInstrument("DE0000000001", depot, null, null))
+				.thenReturn(new InstrumentMaterializationService.MaterializationResult(instrument, false, false));
 		when(savingPlanRepository.save(any(SavingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
 		SavingPlanUpsertRequest request = new SavingPlanUpsertRequest(
@@ -155,7 +162,8 @@ class SavingPlanServiceTest {
 
 		when(savingPlanRepository.findById(6L)).thenReturn(Optional.of(existing));
 		when(depotRepository.findById(1L)).thenReturn(Optional.of(depot));
-		when(instrumentRepository.findById("DE0000000001")).thenReturn(Optional.of(instrument));
+		when(instrumentMaterializationService.ensureInstrument("DE0000000001", depot, null, null))
+				.thenReturn(new InstrumentMaterializationService.MaterializationResult(instrument, false, false));
 		when(savingPlanRepository.save(any(SavingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
 		SavingPlanUpsertRequest request = new SavingPlanUpsertRequest(
@@ -366,16 +374,19 @@ class SavingPlanServiceTest {
 	}
 
 	@Test
-	void createRejectsMissingInstrument() {
+	void createAllowsMissingInstrumentWhenMaterializedFromKnowledgeBase() {
 		when(depotRepository.findById(1L)).thenReturn(Optional.of(depot));
-		when(instrumentRepository.findById("DE0000000001")).thenReturn(Optional.empty());
+		when(instrumentMaterializationService.ensureInstrument("DE0000000001", depot, null, null))
+				.thenReturn(new InstrumentMaterializationService.MaterializationResult(instrument, true, false));
+		when(savingPlanRepository.findByDepotIdAndIsin(1L, "DE0000000001")).thenReturn(Optional.empty());
+		when(savingPlanRepository.save(any(SavingPlan.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
 		SavingPlanUpsertRequest request = new SavingPlanUpsertRequest(
 				1L, "DE0000000001", null, BigDecimal.valueOf(25), null, null, null, null);
 
-		assertThatThrownBy(() -> savingPlanService.create(request))
-				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("ISIN not found");
+		SavingPlanDto result = savingPlanService.create(request);
+
+		assertThat(result.name()).isEqualTo("Sample");
 	}
 
 	@Test

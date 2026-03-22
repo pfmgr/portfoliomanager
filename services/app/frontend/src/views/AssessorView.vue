@@ -175,6 +175,12 @@
         <p v-if="kbSuggestionHint" class="note warn">
           {{ kbSuggestionHint }}
         </p>
+        <SavingPlanApprovalsPanel
+          v-if="savingPlanApprovalRows.length"
+          source="assessor"
+          :rows="savingPlanApprovalRows"
+          :layer-label="layerLabel"
+        />
       </div>
 
       <div v-if="assessmentType === 'one_time' && assessment.one_time_allocation" class="card">
@@ -398,6 +404,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { apiRequest } from '../api'
+import SavingPlanApprovalsPanel from '../components/SavingPlanApprovalsPanel.vue'
 import { formatNarrative } from '../utils/narrativeFormat'
 
 const layerNames = ref({})
@@ -608,6 +615,56 @@ const savingPlanSuggestionRows = computed(() => {
       newAmount: amount,
       delta: amount,
       rationale: item.rationale ?? ''
+    })
+  })
+  return rows
+})
+
+const savingPlanApprovalRows = computed(() => {
+  const rows = []
+  suggestions.value.forEach((item) => {
+    const proposedAmount = Number(item.new_amount ?? 0)
+    const currentAmount = Number(item.old_amount ?? 0)
+    if (currentAmount === proposedAmount) {
+      return
+    }
+    rows.push({
+      key: `existing-${item.isin}-${item.depot_id ?? 'na'}-${item.type ?? 'adjust'}`,
+      action: formatAction(item.type),
+      actionClass: savingPlanActionClass(item.type),
+      isin: item.isin,
+      instrumentName: item.instrument_name,
+      layer: item.layer,
+      depotId: item.depot_id ?? null,
+      depotName: item.depot_name ?? null,
+      depotCode: null,
+      currentAmountEur: currentAmount,
+      proposedAmountEur: proposedAmount,
+      deltaEur: Number(item.delta ?? proposedAmount - currentAmount),
+      rationale: item.rationale ?? '',
+      requiresDepotSelection: item.depot_id == null && proposedAmount > 0
+    })
+  })
+  savingPlanNewInstruments.value.forEach((item) => {
+    const proposedAmount = Number(item.amount ?? 0)
+    if (proposedAmount <= 0) {
+      return
+    }
+    rows.push({
+      key: `new-${item.isin}`,
+      action: 'New',
+      actionClass: 'ok',
+      isin: item.isin,
+      instrumentName: item.instrument_name,
+      layer: item.layer,
+      depotId: null,
+      depotName: null,
+      depotCode: null,
+      currentAmountEur: 0,
+      proposedAmountEur: proposedAmount,
+      deltaEur: proposedAmount,
+      rationale: item.rationale ?? '',
+      requiresDepotSelection: true
     })
   })
   return rows

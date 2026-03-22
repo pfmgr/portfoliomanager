@@ -115,6 +115,24 @@ public class InstrumentBlacklistService {
 	}
 
 	@Transactional
+	public void setEffectiveScopeDirectly(String isin, InstrumentBlacklistScope scope) {
+		if (isin == null || isin.isBlank() || scope == null) {
+			return;
+		}
+		String normalizedIsin = normalizeIsin(isin);
+		LocalDateTime now = LocalDateTime.now();
+		InstrumentBlacklist blacklist = repository.findByIsin(normalizedIsin).orElseGet(() -> createDefault(normalizedIsin, now));
+		InstrumentBlacklistScope normalizedScope = normalizeScope(scope);
+		blacklist.setRequestedScope(normalizedScope);
+		blacklist.setEffectiveScope(normalizedScope);
+		blacklist.setRequestedDossierId(null);
+		blacklist.setEffectiveDossierId(null);
+		blacklist.setRequestedUpdatedAt(now);
+		blacklist.setEffectiveUpdatedAt(now);
+		repository.save(blacklist);
+	}
+
+	@Transactional
 	public void discardPendingScope(String isin, Long dossierId) {
 		if (isin == null || isin.isBlank() || dossierId == null) {
 			return;

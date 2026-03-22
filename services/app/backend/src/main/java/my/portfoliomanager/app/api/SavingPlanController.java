@@ -1,6 +1,8 @@
 package my.portfoliomanager.app.api;
 
 import jakarta.validation.Valid;
+import my.portfoliomanager.app.dto.SavingPlanApprovalApplyRequestDto;
+import my.portfoliomanager.app.dto.SavingPlanApprovalApplyResponseDto;
 import my.portfoliomanager.app.dto.SavingPlanDto;
 import my.portfoliomanager.app.dto.SavingPlanImportResultDto;
 import my.portfoliomanager.app.dto.SavingPlanUpsertRequest;
@@ -38,6 +40,11 @@ public class SavingPlanController {
 	@PostMapping
 	public SavingPlanDto create(@Valid @RequestBody SavingPlanUpsertRequest request) {
 		return savingPlanService.create(request);
+	}
+
+	@PostMapping("/apply-approvals")
+	public SavingPlanApprovalApplyResponseDto applyApprovals(@Valid @RequestBody SavingPlanApprovalApplyRequestDto request) {
+		return savingPlanService.applyApprovals(request);
 	}
 
 	@PutMapping("/{id}")

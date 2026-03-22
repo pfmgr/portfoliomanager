@@ -216,4 +216,179 @@ describe('RebalancerView', () => {
     expect(wrapper.text()).toContain('Discard')
     expect(wrapper.text()).toContain('Blacklisted from Saving Plan Proposals')
   })
+
+  it('applies selected new saving plan proposals with proposal layer', async () => {
+    const summary = {
+      layerAllocations: [],
+      assetClassAllocations: [],
+      topPositions: [],
+      savingPlanSummary: { totalActiveAmountEur: 0, monthlyTotalAmountEur: 0, activeCount: 0, monthlyCount: 0, monthlyByLayer: [] },
+      savingPlanTargets: [],
+      savingPlanProposal: {
+        totalMonthlyAmountEur: 35,
+        targetWeightTotalPct: 100,
+        source: 'targets',
+        narrative: 'Add a new theme ETF.',
+        notes: [],
+        actualDistributionByLayer: { 3: 0 },
+        targetDistributionByLayer: { 3: 100 },
+        proposedDistributionByLayer: { 3: 100 },
+        deviationsByLayer: { 3: 0 },
+        withinTolerance: false,
+        constraints: [],
+        recommendation: 'Create a new saving plan',
+        selectedProfileKey: 'BALANCED',
+        selectedProfileDisplayName: 'Balanced',
+        gating: { knowledgeBaseEnabled: true, kbComplete: true, missingIsins: [] },
+        instrumentWarnings: [],
+        instrumentWarningCodes: [],
+        instrumentProposals: [
+          {
+            isin: 'NEWREBAL1234',
+            instrumentName: 'Theme Builder ETF',
+            layer: 4,
+            currentAmountEur: 0,
+            proposedAmountEur: 35,
+            deltaEur: 35,
+            reasonCodes: ['KB_GAP_SUGGESTION']
+          }
+        ],
+        layers: []
+      }
+    }
+
+    apiRequest.mockImplementation((url, options = {}) => {
+      if (url === '/layer-targets') {
+        return Promise.resolve({
+          layerNames: { 4: 'Individual Stocks' }
+        })
+      }
+      if (url === '/rebalancer/run') {
+        return Promise.resolve({ job_id: 'job-3', status: 'PENDING' })
+      }
+      if (url === '/rebalancer/run/job-3') {
+        return Promise.resolve({ job_id: 'job-3', status: 'DONE', result: { summary } })
+      }
+      if (url === '/depots') {
+        return Promise.resolve([{ depotId: 2, depotCode: 'sc', name: 'Scalable Capital' }])
+      }
+      if (url === '/sparplans/apply-approvals') {
+        const body = JSON.parse(options.body)
+        expect(body.source).toBe('rebalancer')
+        expect(body.items[0]).toMatchObject({
+          decision: 'APPLY',
+          depotId: 2,
+          isin: 'NEWREBAL1234',
+          layer: 4,
+          targetAmountEur: 35
+        })
+        return Promise.resolve({ applied: 1, ignored: 0, blacklistedSavingPlanOnly: 0, blacklistedAllProposals: 0, created: 1, updated: 0, deactivated: 0 })
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`))
+    })
+
+    const wrapper = mount(RebalancerView)
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Apply Approvals')
+    expect(wrapper.text()).toContain('does not execute real depot transactions')
+
+    const applyButton = wrapper.findAll('button').find((button) => button.text() === 'Apply Approvals')
+    await applyButton.trigger('click')
+    await flushPromises()
+
+    const decisionSelect = wrapper.find('select[aria-label="Decision for NEWREBAL1234"]')
+    expect(decisionSelect.text()).toContain('Block for Saving Plan Proposals')
+    expect(decisionSelect.text()).toContain('Block for all Proposals')
+    await decisionSelect.setValue('APPLY')
+    await wrapper.find('select[id^="approval-depot-"]').setValue('2')
+
+    const submitButton = wrapper.findAll('button').find((button) => button.text() === 'Save decisions')
+    await submitButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Saved decisions: 1 applied')
+  })
+
+  it('shows a user-friendly message for ambiguous rebalancer apply conflicts', async () => {
+    const summary = {
+      layerAllocations: [],
+      assetClassAllocations: [],
+      topPositions: [],
+      savingPlanSummary: { totalActiveAmountEur: 0, monthlyTotalAmountEur: 0, activeCount: 0, monthlyCount: 0, monthlyByLayer: [] },
+      savingPlanTargets: [],
+      savingPlanProposal: {
+        totalMonthlyAmountEur: 35,
+        targetWeightTotalPct: 100,
+        source: 'targets',
+        narrative: 'Resolve duplicate saving plans first.',
+        notes: [],
+        actualDistributionByLayer: { 2: 0 },
+        targetDistributionByLayer: { 2: 100 },
+        proposedDistributionByLayer: { 2: 100 },
+        deviationsByLayer: { 2: 0 },
+        withinTolerance: false,
+        constraints: [],
+        recommendation: 'Cannot apply automatically',
+        selectedProfileKey: 'BALANCED',
+        selectedProfileDisplayName: 'Balanced',
+        gating: { knowledgeBaseEnabled: true, kbComplete: true, missingIsins: [] },
+        instrumentWarnings: [],
+        instrumentWarningCodes: [],
+        instrumentProposals: [
+          {
+            isin: 'DE0006599905',
+            instrumentName: 'Shared ETF',
+            layer: 2,
+            currentAmountEur: 0,
+            proposedAmountEur: 35,
+            deltaEur: 35,
+            reasonCodes: ['KB_GAP_SUGGESTION']
+          }
+        ],
+        layers: []
+      }
+    }
+
+    apiRequest.mockImplementation((url, options = {}) => {
+      if (url === '/layer-targets') {
+        return Promise.resolve({ layerNames: { 2: 'Core-Plus' } })
+      }
+      if (url === '/rebalancer/run') {
+        return Promise.resolve({ job_id: 'job-4', status: 'PENDING' })
+      }
+      if (url === '/rebalancer/run/job-4') {
+        return Promise.resolve({ job_id: 'job-4', status: 'DONE', result: { summary } })
+      }
+      if (url === '/depots') {
+        return Promise.resolve([{ depotId: 2, depotCode: 'sc', name: 'Scalable Capital' }])
+      }
+      if (url === '/sparplans/apply-approvals') {
+        const body = JSON.parse(options.body)
+        expect(body.items[0].decision).toBe('APPLY')
+        return Promise.reject(new Error('Cannot apply proposal for ISIN DE0006599905 because multiple active saving plans exist across depots'))
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`))
+    })
+
+    const wrapper = mount(RebalancerView)
+    await flushPromises()
+    await flushPromises()
+
+    const applyButton = wrapper.findAll('button').find((button) => button.text() === 'Apply Approvals')
+    await applyButton.trigger('click')
+    await flushPromises()
+
+    const decisionSelect = wrapper.find('select[aria-label="Decision for DE0006599905"]')
+    expect(decisionSelect.text()).toContain('Block for Saving Plan Proposals')
+    expect(decisionSelect.text()).toContain('Block for all Proposals')
+    await decisionSelect.setValue('APPLY')
+    await wrapper.find('select[id^="approval-depot-"]').setValue('2')
+    const submitButton = wrapper.findAll('button').find((button) => button.text() === 'Save decisions')
+    await submitButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain("Can't apply this proposal for DE0006599905 because it already has active saving plans in more than one depot.")
+  })
 })

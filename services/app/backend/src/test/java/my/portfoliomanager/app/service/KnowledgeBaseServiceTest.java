@@ -177,6 +177,24 @@ class KnowledgeBaseServiceTest {
 	}
 
 	@Test
+	void approveExtractionAutoAppliesForDeletedBaseInstrumentWhenConfigured() throws Exception {
+		setApplyExtractionsToOverrides(true);
+		jdbcTemplate.update("update instruments set is_deleted = true where isin = 'DE0000000001'");
+
+		InstrumentDossier dossier = createDossier("Name: Reactivated by KB\nAsset Class: Equity");
+		InstrumentDossierExtraction extraction = createPendingExtraction(
+				dossier.getDossierId(),
+				objectMapper.valueToTree(payload("DE0000000001", "Reactivated by KB", "Equity"))
+		);
+
+		var approved = knowledgeBaseService.approveExtraction(extraction.getExtractionId(), "tester", false, true);
+
+		assertThat(approved.status()).isEqualTo(DossierExtractionStatus.APPLIED);
+		assertThat(overrideRepository.findById("DE0000000001")).isPresent();
+		assertThat(overrideRepository.findById("DE0000000001").orElseThrow().getName()).isEqualTo("Reactivated by KB");
+	}
+
+	@Test
 	void approveDossierActivatesPendingBlacklist() {
 		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
 				"DE0000000001",

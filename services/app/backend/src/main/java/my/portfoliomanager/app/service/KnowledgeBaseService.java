@@ -382,13 +382,19 @@ public class KnowledgeBaseService {
                 .orElseThrow(() -> new IllegalArgumentException(ERROR_DOSSIER_NOT_FOUND));
         JsonNode citations = ensureCitations(request.citations());
         String content = normalizeContent(request.contentMd());
+        String displayName = request.displayName() == null ? dossier.getDisplayName() : trimToNull(request.displayName());
+        boolean extractionRelevantChanged = !Objects.equals(dossier.getDisplayName(), displayName)
+                || !Objects.equals(dossier.getContentMd(), content)
+                || !Objects.equals(dossier.getCitationsJson(), citations);
         if (request.displayName() != null) {
-            dossier.setDisplayName(trimToNull(request.displayName()));
+            dossier.setDisplayName(displayName);
         }
         dossier.setContentMd(content);
         dossier.setCitationsJson(citations);
         dossier.setContentHash(hashContent(content));
-        dossier.setUpdatedAt(LocalDateTime.now());
+        if (extractionRelevantChanged) {
+            dossier.setUpdatedAt(LocalDateTime.now());
+        }
         DossierStatus targetStatus = resolveUpdatedDossierStatus(dossier, request);
         applyDossierStatus(dossier, targetStatus, updatedBy, false);
         InstrumentDossier saved = dossierRepository.save(dossier);
