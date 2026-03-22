@@ -26,8 +26,8 @@
         <p class="note">
           Apply: <strong>{{ applyCount }}</strong>
           <span> · Ignore: <strong>{{ ignoreCount }}</strong></span>
-          <span> · Saving plan proposals only: <strong>{{ savingPlanBlacklistCount }}</strong></span>
-          <span> · All buy proposals: <strong>{{ allProposalBlacklistCount }}</strong></span>
+          <span> · Block for Saving Plan Proposals: <strong>{{ savingPlanBlacklistCount }}</strong></span>
+          <span> · Block for all Proposals: <strong>{{ allProposalBlacklistCount }}</strong></span>
           <span v-if="applyNeedsDepotCount"> · Depot required: <strong>{{ applyNeedsDepotCount }}</strong></span>
         </p>
       </div>
@@ -246,18 +246,18 @@ function decisionOptions(row) {
   if (!row.applyDisabled) {
     options.unshift({ value: APPLY, label: 'Apply' })
   }
-  options.push({ value: BLACKLIST_SAVING_PLAN_ONLY, label: 'Saving plan proposals only' })
-  options.push({ value: BLACKLIST_ALL_PROPOSALS, label: 'All buy proposals' })
+  options.push({ value: BLACKLIST_SAVING_PLAN_ONLY, label: 'Block for Saving Plan Proposals' })
+  options.push({ value: BLACKLIST_ALL_PROPOSALS, label: 'Block for all Proposals' })
   return options
 }
 
 function decisionBadge(row) {
   const decision = currentDecision(row)
   if (decision === BLACKLIST_SAVING_PLAN_ONLY) {
-    return { label: 'Saving plan proposals only', className: 'caution' }
+    return { label: 'Block for Saving Plan Proposals', className: 'caution' }
   }
   if (decision === BLACKLIST_ALL_PROPOSALS) {
-    return { label: 'All buy proposals', className: 'warn' }
+    return { label: 'Block for all Proposals', className: 'warn' }
   }
   if (row.applyDisabled && decision === IGNORE) {
     return { label: 'Apply unavailable', className: 'warn' }

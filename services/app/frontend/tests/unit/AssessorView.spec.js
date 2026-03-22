@@ -205,7 +205,11 @@ describe('AssessorView', () => {
     await applyButton.trigger('click')
     await flushPromises()
 
-    await wrapper.find('select[aria-label="Decision for NEW123456789"]').setValue('APPLY')
+    const decisionSelect = wrapper.find('select[aria-label="Decision for NEW123456789"]')
+    expect(decisionSelect.text()).toContain('Block for Saving Plan Proposals')
+    expect(decisionSelect.text()).toContain('Block for all Proposals')
+
+    await decisionSelect.setValue('APPLY')
     await wrapper.find('select[id^="approval-depot-"]').setValue('1')
 
     const submitButton = wrapper.findAll('button').find((button) => button.text() === 'Save decisions')
@@ -287,7 +291,10 @@ describe('AssessorView', () => {
     await applyButton.trigger('click')
     await flushPromises()
 
-    await wrapper.find('select[aria-label="Decision for NEWBLACKLIST1"]').setValue('BLACKLIST_ALL_PROPOSALS')
+    const decisionSelect = wrapper.find('select[aria-label="Decision for NEWBLACKLIST1"]')
+    expect(decisionSelect.text()).toContain('Block for Saving Plan Proposals')
+    expect(decisionSelect.text()).toContain('Block for all Proposals')
+    await decisionSelect.setValue('BLACKLIST_ALL_PROPOSALS')
 
     const submitButton = wrapper.findAll('button').find((button) => button.text() === 'Save decisions')
     await submitButton.trigger('click')

@@ -298,7 +298,10 @@ describe('RebalancerView', () => {
     await applyButton.trigger('click')
     await flushPromises()
 
-    await wrapper.find('select[aria-label="Decision for NEWREBAL1234"]').setValue('APPLY')
+    const decisionSelect = wrapper.find('select[aria-label="Decision for NEWREBAL1234"]')
+    expect(decisionSelect.text()).toContain('Block for Saving Plan Proposals')
+    expect(decisionSelect.text()).toContain('Block for all Proposals')
+    await decisionSelect.setValue('APPLY')
     await wrapper.find('select[id^="approval-depot-"]').setValue('2')
 
     const submitButton = wrapper.findAll('button').find((button) => button.text() === 'Save decisions')
@@ -377,7 +380,10 @@ describe('RebalancerView', () => {
     await applyButton.trigger('click')
     await flushPromises()
 
-    await wrapper.find('select[aria-label="Decision for DE0006599905"]').setValue('APPLY')
+    const decisionSelect = wrapper.find('select[aria-label="Decision for DE0006599905"]')
+    expect(decisionSelect.text()).toContain('Block for Saving Plan Proposals')
+    expect(decisionSelect.text()).toContain('Block for all Proposals')
+    await decisionSelect.setValue('APPLY')
     await wrapper.find('select[id^="approval-depot-"]').setValue('2')
     const submitButton = wrapper.findAll('button').find((button) => button.text() === 'Save decisions')
     await submitButton.trigger('click')

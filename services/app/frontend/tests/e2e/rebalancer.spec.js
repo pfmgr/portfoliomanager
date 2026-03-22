@@ -96,6 +96,8 @@ test('rebalancer applies a new saving plan proposal with depot selection', async
   await page.goto('/rebalancer')
   await expect(page.getByText('Theme Builder ETF')).toBeVisible()
   await page.getByRole('button', { name: 'Apply Approvals' }).click()
+  await expect(page.getByLabel('Decision for NEWREBAL1234')).toContainText('Block for Saving Plan Proposals')
+  await expect(page.getByLabel('Decision for NEWREBAL1234')).toContainText('Block for all Proposals')
   await page.getByLabel('Decision for NEWREBAL1234').selectOption('APPLY')
   await page.getByLabel('Choose depot').selectOption('2')
   await page.getByRole('button', { name: 'Save decisions' }).click()
