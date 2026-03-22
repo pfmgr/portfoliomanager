@@ -10,7 +10,8 @@ currently being supported with security updates.
 | 0.1.x   | ⛔                 |
 | 0.2.x   | ⛔                 |
 | 0.3.x   | ⛔                 |
-| 0.4.x   | ✅                 |
+| 0.4.x   | ⛔                 |
+| 0.5.x   | ✅                 |
 
 ## Reporting a Vulnerability
 
