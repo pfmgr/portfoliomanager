@@ -55,6 +55,8 @@
 ## Dossier overview and blacklist management
 
 - Dossier detail exposes requested vs effective blacklist scope.
+- Dossier filter settings are collapsible in the UI and start hidden until the user expands them.
+- When dossier filters are collapsed, the UI summarizes which filters are currently active.
 - Dossier list supports filtering and sorting by:
   - dossier status
   - approval status (`APPROVED` vs `NOT_APPROVED`)

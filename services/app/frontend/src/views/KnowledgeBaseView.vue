@@ -52,65 +52,81 @@
         :id="panelId('DOSSIERS')"
         :aria-labelledby="tabId('DOSSIERS')"
       >
-        <form class="form inline kb-filter-form" @submit.prevent="applyDossierFilters">
-          <label class="field">
-            <span>Search</span>
-            <input ref="dossierSearchInput" v-model="dossierFilters.query" placeholder="ISIN or name" maxlength="120" />
-          </label>
-          <label class="field">
-            <span>Status</span>
-            <select v-model="dossierFilters.status">
-              <option value="">Any</option>
-              <option v-for="status in dossierStatusOptions" :key="status" :value="status">{{ status }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Approval</span>
-            <select v-model="dossierFilters.approvalStatus">
-              <option value="">Any</option>
-              <option v-for="status in approvalStatusOptions" :key="status.value" :value="status.value">{{ status.label }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Extraction</span>
-            <select v-model="dossierFilters.extractionStatus">
-              <option value="">Any</option>
-              <option v-for="status in extractionStatusOptions" :key="status" :value="status">{{ formatExtractionStatus(status) }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Freshness</span>
-            <select v-model="dossierFilters.freshnessStatus">
-              <option value="">Any</option>
-              <option v-for="status in freshnessStatusOptions" :key="status" :value="status">{{ formatExtractionFreshness(status) }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Proposal exclusions</span>
-            <select v-model="dossierFilters.blacklistStatus">
-              <option value="">Any</option>
-              <option v-for="status in blacklistStatusOptions" :key="status.value" :value="status.value">{{ status.label }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Stale</span>
-            <select v-model="dossierFilters.stale">
-              <option value="">Any</option>
-              <option value="true">Stale</option>
-              <option value="false">Fresh</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Page size</span>
-            <select v-model.number="dossierPage.size" @change="applyDossierFilters">
-              <option :value="25">25</option>
-              <option :value="50">50</option>
-              <option :value="100">100</option>
-            </select>
-          </label>
-          <button class="ghost" type="submit" :disabled="dossiersLoading">Refresh</button>
-        </form>
-        <p class="hint">Search matches dossier ISIN and names by prefix or contains (max 120 characters).</p>
+        <div class="kb-filter-toggle-row">
+          <button
+            ref="dossierFilterToggle"
+            class="ghost"
+            type="button"
+            :aria-expanded="showDossierFilters ? 'true' : 'false'"
+            aria-controls="kb-dossier-filters"
+            @click="toggleDossierFilters"
+          >
+            {{ showDossierFilters ? 'Hide Filter' : 'Show Filter' }}
+          </button>
+          <span class="muted">{{ dossierFilterSummary }}</span>
+        </div>
+
+        <div id="kb-dossier-filters" v-show="showDossierFilters" class="kb-filter-panel" role="region" aria-label="Dossier filters">
+          <form class="form inline kb-filter-form" @submit.prevent="applyDossierFilters">
+            <label class="field">
+              <span>Search</span>
+              <input ref="dossierSearchInput" v-model="dossierFilters.query" placeholder="ISIN or name" maxlength="120" />
+            </label>
+            <label class="field">
+              <span>Status</span>
+              <select v-model="dossierFilters.status">
+                <option value="">Any</option>
+                <option v-for="status in dossierStatusOptions" :key="status" :value="status">{{ status }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Approval</span>
+              <select v-model="dossierFilters.approvalStatus">
+                <option value="">Any</option>
+                <option v-for="status in approvalStatusOptions" :key="status.value" :value="status.value">{{ status.label }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Extraction</span>
+              <select v-model="dossierFilters.extractionStatus">
+                <option value="">Any</option>
+                <option v-for="status in extractionStatusOptions" :key="status" :value="status">{{ formatExtractionStatus(status) }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Freshness</span>
+              <select v-model="dossierFilters.freshnessStatus">
+                <option value="">Any</option>
+                <option v-for="status in freshnessStatusOptions" :key="status" :value="status">{{ formatExtractionFreshness(status) }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Proposal exclusions</span>
+              <select v-model="dossierFilters.blacklistStatus">
+                <option value="">Any</option>
+                <option v-for="status in blacklistStatusOptions" :key="status.value" :value="status.value">{{ status.label }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Stale</span>
+              <select v-model="dossierFilters.stale">
+                <option value="">Any</option>
+                <option value="true">Stale</option>
+                <option value="false">Fresh</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Page size</span>
+              <select v-model.number="dossierPage.size" @change="applyDossierFilters">
+                <option :value="25">25</option>
+                <option :value="50">50</option>
+                <option :value="100">100</option>
+              </select>
+            </label>
+            <button class="ghost" type="submit" :disabled="dossiersLoading">Refresh</button>
+          </form>
+          <p class="hint">Search matches dossier ISIN and names by prefix or contains (max 120 characters).</p>
+        </div>
 
         <div class="actions">
           <span class="muted">Total: {{ dossierPage.total }}</span>
@@ -1435,11 +1451,21 @@ const dossierFilters = ref({
   blacklistStatus: '',
   stale: ''
 })
+const appliedDossierFilters = ref({
+  query: '',
+  status: '',
+  approvalStatus: '',
+  extractionStatus: '',
+  freshnessStatus: '',
+  blacklistStatus: '',
+  stale: ''
+})
 const dossierPage = ref({
   page: 0,
   size: 50,
   total: 0
 })
+const showDossierFilters = ref(false)
 const dossierItems = ref([])
 const dossiersLoading = ref(false)
 const dossiersError = ref('')
@@ -1457,6 +1483,7 @@ const dossierActionError = ref('')
 const editMode = ref(false)
 const dossierTableWrap = ref(null)
 const dossierDetailHeading = ref(null)
+const dossierFilterToggle = ref(null)
 const dossierSearchInput = ref(null)
 const showDossierScrollHint = ref(false)
 const dossierLiveMessage = ref('')
@@ -1533,6 +1560,27 @@ const runsError = ref('')
 const runsSort = reactive({ key: 'startedAt', direction: 'desc' })
 
 const canApplyOverrides = computed(() => configForm.value.applyExtractionsToOverrides)
+const dossierActiveFilterLabels = computed(() => {
+  const labels = []
+  if (appliedDossierFilters.value.query.trim()) labels.push('Search')
+  if (appliedDossierFilters.value.status) labels.push('Status')
+  if (appliedDossierFilters.value.approvalStatus) labels.push('Approval')
+  if (appliedDossierFilters.value.extractionStatus) labels.push('Extraction')
+  if (appliedDossierFilters.value.freshnessStatus) labels.push('Freshness')
+  if (appliedDossierFilters.value.blacklistStatus) labels.push('Proposal exclusions')
+  if (appliedDossierFilters.value.stale) labels.push('Stale')
+  return labels
+})
+const dossierFilterSummary = computed(() => {
+  const labels = dossierActiveFilterLabels.value
+  if (labels.length === 0) {
+    return 'No filters applied'
+  }
+  if (labels.length === 1) {
+    return `1 filter active: ${labels[0]}`
+  }
+  return `${labels.length} filters active: ${labels.join(', ')}`
+})
 const selectedIsinsCount = computed(() => selectedIsins.value.size)
 const selectedOnPageCount = computed(
   () => dossierItems.value.filter((item) => item?.isin && selectedIsins.value.has(item.isin)).length
@@ -2090,6 +2138,15 @@ async function loadDossiers(options = {}) {
     const result = await apiRequest(`/kb/dossiers?${params.toString()}`)
     dossierItems.value = result.items || []
     dossierPage.value.total = result.total || 0
+    appliedDossierFilters.value = {
+      query: dossierFilters.value.query,
+      status: dossierFilters.value.status,
+      approvalStatus: dossierFilters.value.approvalStatus,
+      extractionStatus: dossierFilters.value.extractionStatus,
+      freshnessStatus: dossierFilters.value.freshnessStatus,
+      blacklistStatus: dossierFilters.value.blacklistStatus,
+      stale: dossierFilters.value.stale
+    }
     if (allowPageClamp) {
       const maxPage =
         dossierPage.value.total > 0 ? Math.max(0, Math.ceil(dossierPage.value.total / requestedSize) - 1) : 0
@@ -2116,6 +2173,10 @@ async function loadDossiers(options = {}) {
 function applyDossierFilters() {
   dossierPage.value.page = 0
   loadDossiers()
+}
+
+function toggleDossierFilters() {
+  showDossierFilters.value = !showDossierFilters.value
 }
 
 function buildDossierLiveMessage() {
@@ -2153,7 +2214,11 @@ async function focusDossierDetailHeading() {
 
 async function focusDossierSearchInput() {
   await nextTick()
-  dossierSearchInput.value?.focus()
+  if (showDossierFilters.value) {
+    dossierSearchInput.value?.focus()
+    return
+  }
+  dossierFilterToggle.value?.focus()
 }
 
 async function loadDossierDetail(isin) {
@@ -3441,6 +3506,18 @@ function formatManualApprovals(items) {
 
 .kb-filter-form {
   max-width: none;
+}
+
+.kb-filter-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.kb-filter-panel {
+  margin-bottom: 0.75rem;
 }
 
 .kb-split {

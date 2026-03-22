@@ -69,6 +69,83 @@ const stubApi = async (page) => {
       }
     }
 
+    const kbDossiers = [
+      {
+        isin: 'DE0000000001',
+        name: 'Alpha Knowledge Fund',
+        hasDossier: true,
+        latestDossierStatus: 'APPROVED',
+        latestUpdatedAt: '2025-01-01T00:00:00Z',
+        latestDossierVersion: 1,
+        approvalStatus: 'APPROVED',
+        latestExtractionStatus: 'APPROVED',
+        blacklistScope: 'NONE',
+        blacklistPendingChange: false,
+        hasApprovedDossier: true,
+        hasApprovedExtraction: true,
+        stale: false,
+        extractionFreshness: 'CURRENT'
+      },
+      {
+        isin: 'DE0000000002',
+        name: 'Beta Filtered Fund',
+        hasDossier: true,
+        latestDossierStatus: 'DRAFT',
+        latestUpdatedAt: '2025-01-02T00:00:00Z',
+        latestDossierVersion: 2,
+        approvalStatus: 'NOT_APPROVED',
+        latestExtractionStatus: 'PENDING_REVIEW',
+        blacklistScope: 'ALL_PROPOSALS',
+        blacklistPendingChange: false,
+        hasApprovedDossier: false,
+        hasApprovedExtraction: false,
+        stale: false,
+        extractionFreshness: 'OUTDATED'
+      }
+    ]
+
+    if (path === '/api/kb/config') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ enabled: true })
+      })
+    }
+    if (path === '/api/kb/dossiers') {
+      const query = (url.searchParams.get('q') || '').toLowerCase()
+      const stale = url.searchParams.get('stale')
+      const status = url.searchParams.get('status')
+      if (stale === 'true' && status === 'APPROVED') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ items: [], total: 0 })
+        })
+      }
+      const items = query
+        ? kbDossiers.filter((item) => item.isin.toLowerCase().includes(query) || item.name.toLowerCase().includes(query))
+        : kbDossiers
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items, total: items.length })
+      })
+    }
+    if (path === '/api/kb/runs') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], total: 0 })
+      })
+    }
+    if (path === '/api/kb/llm-actions') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([])
+      })
+    }
+
     if (path === '/api/rulesets') {
       return route.fulfill({
         status: 200,
@@ -403,6 +480,35 @@ test('rebalancer displays savings plan rebalancing', async ({ page }) => {
   await expect(page.getByText('60000.00')).toBeVisible()
   await expect(page.getByText('Proposal source')).toBeVisible()
   await expect(page.getByText('Valuation glossary', { exact: true })).toBeVisible()
+})
+
+test('knowledge base dossier filters are hidden by default and can be applied', async ({ page }) => {
+  await page.goto('/knowledge-base')
+
+  await expect(page.getByRole('heading', { name: 'Knowledge Base' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Show Filter' })).toBeVisible()
+  await expect(page.getByText('No filters applied')).toBeVisible()
+  await expect(page.locator('form.kb-filter-form')).toBeHidden()
+
+  await page.getByRole('button', { name: 'Show Filter' }).click()
+  await expect(page.getByRole('button', { name: 'Hide Filter' })).toBeVisible()
+  await expect(page.locator('form.kb-filter-form')).toBeVisible()
+
+  await page.getByPlaceholder('ISIN or name').fill('beta')
+  const filteredResponse = page.waitForResponse((response) => {
+    return response.url().includes('/api/kb/dossiers?') && response.url().includes('q=beta')
+  })
+  await page.getByRole('button', { name: 'Refresh' }).click()
+  await filteredResponse
+
+  await expect(page.getByText('Beta Filtered Fund')).toBeVisible()
+  await expect(page.getByText('Alpha Knowledge Fund')).not.toBeVisible()
+  await expect(page.getByText('1 filter active: Search')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Hide Filter' }).click()
+  await expect(page.getByRole('button', { name: 'Show Filter' })).toBeVisible()
+  await expect(page.locator('form.kb-filter-form')).toBeHidden()
+  await expect(page.getByText('1 filter active: Search')).toBeVisible()
 })
 
 test('rebalancer history loads narrative', async ({ page }) => {
