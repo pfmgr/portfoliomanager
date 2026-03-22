@@ -87,7 +87,7 @@ test('rebalancer applies a new saving plan proposal with depot selection', async
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ applied: 1, created: 1, updated: 0, deactivated: 0 })
+        body: JSON.stringify({ applied: 1, ignored: 0, blacklistedSavingPlanOnly: 0, blacklistedAllProposals: 0, created: 1, updated: 0, deactivated: 0 })
       })
     }
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
@@ -96,11 +96,12 @@ test('rebalancer applies a new saving plan proposal with depot selection', async
   await page.goto('/rebalancer')
   await expect(page.getByText('Theme Builder ETF')).toBeVisible()
   await page.getByRole('button', { name: 'Apply Approvals' }).click()
-  await page.getByLabel('Select proposal for NEWREBAL1234').check()
+  await page.getByLabel('Decision for NEWREBAL1234').selectOption('APPLY')
   await page.getByLabel('Choose depot').selectOption('2')
-  await page.getByRole('button', { name: 'Apply selected proposals' }).click()
+  await page.getByRole('button', { name: 'Save decisions' }).click()
 
-  await expect(page.getByText('Applied 1 proposal(s)')).toBeVisible()
+  await expect(page.getByText('Saved decisions: 1 applied')).toBeVisible()
+  expect(applyPayload.items[0].decision).toBe('APPLY')
   expect(applyPayload.items[0].layer).toBe(4)
   expect(applyPayload.items[0].depotId).toBe(2)
 })

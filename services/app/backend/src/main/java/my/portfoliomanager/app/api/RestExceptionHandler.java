@@ -25,7 +25,7 @@ public class RestExceptionHandler {
 		logger.warn("Bad request on {}: {}", request.getRequestURI(), ex.getMessage());
 		ProblemDetail detail = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
 		detail.setTitle("Bad Request");
-		detail.setDetail("Invalid request.");
+		detail.setDetail(ex.getMessage() == null || ex.getMessage().isBlank() ? "Invalid request." : ex.getMessage());
 		detail.setProperty("path", request.getRequestURI());
 		return detail;
 	}

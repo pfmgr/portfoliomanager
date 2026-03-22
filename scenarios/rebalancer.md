@@ -17,12 +17,15 @@
   - their reason code is `BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS`
   - runtime narrative and UI should describe them as `Blacklisted from Saving Plan Proposals`
 - Selected rebalancer saving-plan proposals can be applied to persisted saving plans from the UI.
+- Each proposal row in the apply table supports four immediate decisions: `Apply`, `Ignore`, `Saving plan proposals only`, and `All buy proposals`.
 - Applying proposals does not execute depot transactions; it only updates Portfolio Manager saving-plan records.
-- New saving-plan proposals require explicit depot selection before apply.
+- Blacklist decisions use the same scope semantics as Knowledge Base blacklist settings and become effective immediately from the table.
+- New saving-plan proposals require explicit depot selection before apply, but blacklist and ignore decisions never do.
 - If the ISIN has no base instrument, Portfolio Manager materializes one from Knowledge Base metadata.
 - If the base instrument exists but is soft-deleted, it is reactivated and becomes effective again.
 - New saving plans created from proposals must keep the proposal layer in the effective instrument view.
 - If the same ISIN already has multiple active saving plans across depots, apply is blocked instead of auto-distributing the proposal.
+- In this conflict case, blacklist decisions remain available because they are instrument-scoped and do not need depot selection.
 - Verification skill: `backend-junit-tests` - validate instrument proposal redistribution, discard reasons, and gating behavior in deterministic service tests.
 
 ## APIs
@@ -83,6 +86,8 @@
 - LLM unavailability must not change deterministic proposal targets.
 - Blacklisted saving plans must still appear as discard proposals even when other instrument proposals are gated.
 - Applying a new proposal without a depot selection must be blocked.
+- Ignored proposals must not change saving plans or blacklists.
+- Blacklist decisions must update proposal exclusions immediately with KB-equivalent semantics.
 - Applying a proposal for an ISIN without an instrument must create a synthetic effective instrument.
 - Applying a proposal for a soft-deleted instrument must reactivate the instrument instead of duplicating it.
 - Ambiguous existing saving plans for the same ISIN across multiple depots must fail apply with a clear validation error.

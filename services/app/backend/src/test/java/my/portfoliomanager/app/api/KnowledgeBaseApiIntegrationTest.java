@@ -389,6 +389,53 @@ class KnowledgeBaseApiIntegrationTest {
 				.andExpect(jsonPath("$.items[0].approvalStatus").value("NOT_APPROVED"));
 	}
 
+	@Test
+	void blacklistOnlyKbUpdateDoesNotMarkExtractionOutdated() throws Exception {
+		createDossier("DE5555555555", "Freshness ETF");
+
+		String detailPayload = mockMvc.perform(get("/api/kb/dossiers/DE5555555555")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		long dossierId = objectMapper.readTree(detailPayload).at("/latestDossier/dossierId").asLong();
+		jdbcTemplate.update("update instrument_dossiers set status = 'APPROVED', approved_at = ?, approved_by = 'tester' where dossier_id = ?", LocalDateTime.now(), dossierId);
+		jdbcTemplate.update(
+				"""
+				insert into instrument_dossier_extractions (
+				  dossier_id, model, extracted_json, missing_fields_json, warnings_json, status, created_at, approved_at, auto_approved
+				) values (?, 'test', cast(? as jsonb), cast(? as jsonb), cast(? as jsonb), 'APPROVED', ?, ?, false)
+				""",
+				dossierId,
+				"{}",
+				"[]",
+				"[]",
+				LocalDateTime.now().plusMinutes(1),
+				LocalDateTime.now().plusMinutes(1)
+		);
+
+		mockMvc.perform(put("/api/kb/dossiers/" + dossierId)
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "displayName": "Freshness ETF",
+								  "contentMd": "# DE5555555555\\n\\nName: Freshness ETF",
+								  "status": "APPROVED",
+								  "citations": [],
+								  "blacklistScope": "ALL_PROPOSALS"
+								}
+								"""))
+				.andExpect(status().isOk());
+
+		mockMvc.perform(get("/api/kb/dossiers")
+						.with(adminJwt())
+						.param("q", "DE5555555555"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].extractionFreshness").value("CURRENT"));
+	}
+
 	private void createDossier(String isin, String displayName) throws Exception {
 		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
 				isin,

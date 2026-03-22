@@ -1,6 +1,6 @@
 <template>
   <section v-if="visibleRows.length || message" class="approval-panel">
-	  <div class="approval-panel__header">
+    <div class="approval-panel__header">
       <button
         v-if="visibleRows.length"
         class="primary"
@@ -15,25 +15,29 @@
       <p class="note approval-panel__hint">
         Applying approvals does not execute real depot transactions. It only updates the saving plans shown in Portfolio Manager.
       </p>
+      <p v-if="open && visibleRows.length" class="note approval-panel__hint">
+        Blacklist decisions take effect immediately from this table and follow the same proposal exclusion rules as the Knowledge Base.
+      </p>
     </div>
 
     <div v-if="open && visibleRows.length" :id="panelId" class="approval-panel__body card">
       <div class="approval-panel__summary">
+        <p class="note">Choose how each approved saving-plan proposal should be handled.</p>
         <p class="note">
-          Choose which approved saving-plan proposals to apply.
-        </p>
-        <p class="note" v-if="selectedCount">
-          Selected: <strong>{{ selectedCount }}</strong>
-          <span v-if="selectedNeedsDepotCount"> · Depot required: <strong>{{ selectedNeedsDepotCount }}</strong></span>
+          Apply: <strong>{{ applyCount }}</strong>
+          <span> · Ignore: <strong>{{ ignoreCount }}</strong></span>
+          <span> · Saving plan proposals only: <strong>{{ savingPlanBlacklistCount }}</strong></span>
+          <span> · All buy proposals: <strong>{{ allProposalBlacklistCount }}</strong></span>
+          <span v-if="applyNeedsDepotCount"> · Depot required: <strong>{{ applyNeedsDepotCount }}</strong></span>
         </p>
       </div>
 
       <div class="table-wrap">
         <table class="table">
-          <caption class="sr-only">Saving plan proposals ready to apply.</caption>
+          <caption class="sr-only">Saving plan proposals ready to apply or blacklist.</caption>
           <thead>
             <tr>
-              <th scope="col">Select</th>
+              <th scope="col">Decision</th>
               <th scope="col">Action</th>
               <th scope="col">ISIN</th>
               <th scope="col">Name</th>
@@ -48,14 +52,18 @@
           <tbody>
             <tr v-for="row in visibleRows" :key="row.key">
               <td>
-                <label class="checkbox checkbox--compact">
-                  <input
-                    :checked="isSelected(row.key)"
-                    type="checkbox"
-                    :aria-label="`Select proposal for ${row.isin}`"
-                    @change="toggleSelection(row.key)"
-                  />
-                </label>
+                <label class="sr-only" :for="`approval-decision-${row.key}`">Decision for {{ row.isin }}</label>
+                <select
+                  :id="`approval-decision-${row.key}`"
+                  v-model="decisions[row.key]"
+                  class="approval-panel__select"
+                  :aria-label="`Decision for ${row.isin}`"
+                  @change="handleDecisionChange(row)"
+                >
+                  <option v-for="option in decisionOptions(row)" :key="option.value" :value="option.value">
+                    {{ option.label }}
+                  </option>
+                </select>
               </td>
               <td><span :class="['badge', row.actionClass]">{{ row.action }}</span></td>
               <th scope="row">{{ row.isin }}</th>
@@ -65,8 +73,8 @@
               <td class="num">{{ formatAmount(row.proposedAmountEur) }}</td>
               <td class="num">{{ formatSigned(row.deltaEur) }}</td>
               <td>
-                <template v-if="row.requiresDepotSelection && isSelected(row.key)">
-                  <label class="sr-only" :for="`approval-depot-${row.key}`">Choose depot</label>
+                <template v-if="requiresDepot(row)">
+                  <label class="sr-only" :for="`approval-depot-${row.key}`">Choose depot for {{ row.isin }}</label>
                   <select
                     :id="`approval-depot-${row.key}`"
                     v-model="depotSelections[row.key]"
@@ -84,22 +92,27 @@
                     :id="`approval-depot-error-${row.key}`"
                     class="note warn"
                   >
-                    Select a depot to create this new saving plan.
+                    Select a depot to apply this new saving plan.
                   </span>
                 </template>
                 <template v-else>
-                  {{ row.depotName || row.depotCode || (row.requiresDepotSelection ? 'Depot required' : '—') }}
+                  {{ depotLabel(row) }}
                 </template>
               </td>
-              <td>{{ row.rationale || '—' }}</td>
+              <td>
+                <span>{{ row.rationale || '—' }}</span>
+                <span v-if="decisionBadge(row)" :class="['badge', decisionBadge(row).className]">
+                  {{ decisionBadge(row).label }}
+                </span>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <div class="actions approval-panel__actions">
-        <button class="primary" type="button" :disabled="!canApply || busy" @click="applySelected">
-          {{ busy ? 'Applying...' : 'Apply selected proposals' }}
+        <button class="primary" type="button" :disabled="!canSubmit || busy" @click="saveDecisions">
+          {{ busy ? 'Saving...' : 'Save decisions' }}
         </button>
         <button class="ghost" type="button" :disabled="busy" @click="closePanel">Cancel</button>
       </div>
@@ -112,6 +125,11 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { apiRequest } from '../api'
+
+const IGNORE = 'IGNORE'
+const APPLY = 'APPLY'
+const BLACKLIST_SAVING_PLAN_ONLY = 'BLACKLIST_SAVING_PLAN_ONLY'
+const BLACKLIST_ALL_PROPOSALS = 'BLACKLIST_ALL_PROPOSALS'
 
 const props = defineProps({
   source: {
@@ -136,27 +154,34 @@ const submitAttempted = ref(false)
 const error = ref('')
 const message = ref('')
 const depots = ref([])
-const selected = reactive({})
+const decisions = reactive({})
 const depotSelections = reactive({})
 const panelId = `approval-panel-${Math.random().toString(36).slice(2)}`
 const dismissedKeys = ref(new Set())
 
 const visibleRows = computed(() => props.rows.filter((row) => !dismissedKeys.value.has(row.key)))
-const selectedRows = computed(() => visibleRows.value.filter((row) => selected[row.key]))
-const selectedCount = computed(() => selectedRows.value.length)
-const selectedNeedsDepotCount = computed(() =>
-  selectedRows.value.filter((row) => row.requiresDepotSelection && !depotSelections[row.key]).length
-)
-const canApply = computed(() => selectedCount.value > 0 && selectedNeedsDepotCount.value === 0)
+const actionableRows = computed(() => visibleRows.value)
+const applyRows = computed(() => visibleRows.value.filter((row) => currentDecision(row) === APPLY))
+const applyCount = computed(() => applyRows.value.length)
+const ignoreCount = computed(() => visibleRows.value.filter((row) => currentDecision(row) === IGNORE).length)
+const savingPlanBlacklistCount = computed(() => visibleRows.value.filter((row) => currentDecision(row) === BLACKLIST_SAVING_PLAN_ONLY).length)
+const allProposalBlacklistCount = computed(() => visibleRows.value.filter((row) => currentDecision(row) === BLACKLIST_ALL_PROPOSALS).length)
+const applyNeedsDepotCount = computed(() => applyRows.value.filter((row) => requiresDepot(row) && !depotSelections[row.key]).length)
+const canSubmit = computed(() => visibleRows.value.length > 0 && applyNeedsDepotCount.value === 0)
 
 watch(
   () => props.rows,
   (rows) => {
     dismissedKeys.value = new Set()
     const keys = new Set(rows.map((row) => row.key))
-    Object.keys(selected).forEach((key) => {
+    rows.forEach((row) => {
+      if (!decisions[row.key]) {
+        decisions[row.key] = defaultDecision(row)
+      }
+    })
+    Object.keys(decisions).forEach((key) => {
       if (!keys.has(key)) {
-        delete selected[key]
+        delete decisions[key]
       }
     })
     Object.keys(depotSelections).forEach((key) => {
@@ -168,7 +193,7 @@ watch(
       open.value = false
     }
   },
-  { deep: true }
+  { deep: true, immediate: true }
 )
 
 async function toggleOpen() {
@@ -176,23 +201,12 @@ async function toggleOpen() {
   error.value = ''
   message.value = ''
   submitAttempted.value = false
-  if (open.value) {
-    await ensureDepotsLoaded()
-  }
 }
 
 function closePanel() {
   open.value = false
   submitAttempted.value = false
   error.value = ''
-}
-
-function toggleSelection(key) {
-  selected[key] = !selected[key]
-}
-
-function isSelected(key) {
-  return Boolean(selected[key])
 }
 
 async function ensureDepotsLoaded() {
@@ -202,22 +216,70 @@ async function ensureDepotsLoaded() {
   depots.value = await apiRequest('/depots')
 }
 
-async function applySelected() {
+function currentDecision(row) {
+  return decisions[row.key] || defaultDecision(row)
+}
+
+function defaultDecision(row) {
+  return IGNORE
+}
+
+async function handleDecisionChange(row) {
+  if (requiresDepot(row)) {
+    await ensureDepotsLoaded()
+  }
+}
+
+function requiresDepot(row) {
+  return currentDecision(row) === APPLY && row.requiresDepotSelection
+}
+
+function depotLabel(row) {
+  if (currentDecision(row) !== APPLY) {
+    return 'Not needed'
+  }
+  return row.depotName || row.depotCode || (row.requiresDepotSelection ? 'Depot required' : '—')
+}
+
+function decisionOptions(row) {
+  const options = [{ value: IGNORE, label: 'Ignore' }]
+  if (!row.applyDisabled) {
+    options.unshift({ value: APPLY, label: 'Apply' })
+  }
+  options.push({ value: BLACKLIST_SAVING_PLAN_ONLY, label: 'Saving plan proposals only' })
+  options.push({ value: BLACKLIST_ALL_PROPOSALS, label: 'All buy proposals' })
+  return options
+}
+
+function decisionBadge(row) {
+  const decision = currentDecision(row)
+  if (decision === BLACKLIST_SAVING_PLAN_ONLY) {
+    return { label: 'Saving plan proposals only', className: 'caution' }
+  }
+  if (decision === BLACKLIST_ALL_PROPOSALS) {
+    return { label: 'All buy proposals', className: 'warn' }
+  }
+  if (row.applyDisabled && decision === IGNORE) {
+    return { label: 'Apply unavailable', className: 'warn' }
+  }
+  return null
+}
+
+async function saveDecisions() {
   submitAttempted.value = true
   message.value = ''
   error.value = ''
-  if (!canApply.value) {
-    error.value = selectedCount.value === 0
-      ? 'Select at least one proposal to apply.'
-      : 'Select a depot for each new saving plan before applying.'
+  if (!canSubmit.value) {
+    error.value = 'Select a depot for each apply decision that creates a new saving plan.'
     return
   }
   busy.value = true
   try {
-    const items = selectedRows.value.map((row) => ({
+    const items = actionableRows.value.map((row) => ({
       savingPlanId: row.savingPlanId ?? null,
-      depotId: row.requiresDepotSelection ? Number(depotSelections[row.key]) : (row.depotId ?? null),
+      depotId: requiresDepot(row) ? Number(depotSelections[row.key]) : (row.depotId ?? null),
       isin: row.isin,
+      decision: currentDecision(row),
       instrumentName: row.instrumentName ?? null,
       layer: row.layer ?? null,
       targetAmountEur: Number(row.proposedAmountEur ?? 0),
@@ -230,29 +292,42 @@ async function applySelected() {
         items
       })
     })
-    const appliedKeys = selectedRows.value.map((row) => row.key)
+    const appliedKeys = actionableRows.value.map((row) => row.key)
     const nextDismissed = new Set(dismissedKeys.value)
     appliedKeys.forEach((key) => nextDismissed.add(key))
     dismissedKeys.value = nextDismissed
     message.value = buildSuccessMessage(response)
-    selectedRows.value.forEach((row) => {
-      delete selected[row.key]
-      delete depotSelections[row.key]
+    appliedKeys.forEach((key) => {
+      delete decisions[key]
+      delete depotSelections[key]
     })
     emit('applied', { response, appliedKeys })
   } catch (err) {
-    error.value = err.message || 'Applying proposals failed.'
+    error.value = formatErrorMessage(err?.message)
   } finally {
     busy.value = false
   }
 }
 
+function formatErrorMessage(message) {
+  const fallback = 'Saving decisions failed.'
+  if (!message) {
+    return fallback
+  }
+  if (message.includes('multiple active saving plans exist across depots')) {
+    const isinMatch = message.match(/ISIN\s+([A-Z0-9]+)/)
+    const isinSuffix = isinMatch ? ` for ${isinMatch[1]}` : ''
+    return `Can't apply this proposal${isinSuffix} because it already has active saving plans in more than one depot. Choose the correct depot or resolve the duplicate saving plans first.`
+  }
+  return message
+}
+
 function buildSuccessMessage(response) {
   const applied = Number(response?.applied ?? 0)
-  const created = Number(response?.created ?? 0)
-  const updated = Number(response?.updated ?? 0)
-  const deactivated = Number(response?.deactivated ?? 0)
-  return `Applied ${applied} proposal(s): created=${created}, updated=${updated}, deactivated=${deactivated}. No real depot transaction was executed.`
+  const ignored = Number(response?.ignored ?? 0)
+  const savingPlanOnly = Number(response?.blacklistedSavingPlanOnly ?? 0)
+  const allProposals = Number(response?.blacklistedAllProposals ?? 0)
+  return `Saved decisions: ${applied} applied, ${ignored} ignored, ${savingPlanOnly} saving-plan blacklist, ${allProposals} all-buy blacklist. No real depot transaction was executed.`
 }
 
 function formatAmount(value) {
@@ -306,10 +381,6 @@ function formatSigned(value) {
 
 .approval-panel__actions {
   justify-content: flex-start;
-}
-
-.checkbox--compact {
-  margin: 0;
 }
 
 @media (max-width: 900px) {

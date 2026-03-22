@@ -173,6 +173,7 @@ class SavingPlanApiIntegrationTest {
 								  "source": "assessor",
 								  "items": [
 								    {
+								      "decision": "APPLY",
 								      "depotId": 1,
 								      "isin": "LU0000000003",
 								      "instrumentName": "Assessor Growth ETF",
@@ -211,6 +212,7 @@ class SavingPlanApiIntegrationTest {
 								  "source": "rebalancer",
 								  "items": [
 								    {
+								      "decision": "APPLY",
 								      "depotId": 2,
 								      "isin": "LU0000000004",
 								      "instrumentName": "Rebalancer Value ETF",
@@ -248,6 +250,7 @@ class SavingPlanApiIntegrationTest {
 								  "source": "rebalancer",
 								  "items": [
 								    {
+								      "decision": "APPLY",
 								      "isin": "LU0000000005",
 								      "instrumentName": "Shared ETF",
 								      "layer": 2,
@@ -256,7 +259,101 @@ class SavingPlanApiIntegrationTest {
 								  ]
 								}
 								"""))
-				.andExpect(status().isBadRequest());
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.detail").value("Cannot apply proposal for ISIN LU0000000005 because multiple active saving plans exist across depots"));
+	}
+
+	@Test
+	void applyApprovalsCanBlacklistImmediatelyWithoutDepot() throws Exception {
+		createApprovedExtraction("LU0000000006", "Blacklist ETF", 2);
+
+		mockMvc.perform(post("/api/sparplans/apply-approvals")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "source": "assessor",
+								  "items": [
+								    {
+								      "decision": "BLACKLIST_SAVING_PLAN_ONLY",
+								      "isin": "LU0000000006",
+								      "instrumentName": "Blacklist ETF",
+								      "layer": 2,
+								      "targetAmountEur": 25.00
+								    }
+								  ]
+								}
+								"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.applied").value(0))
+				.andExpect(jsonPath("$.blacklistedSavingPlanOnly").value(1));
+
+		assertThat(jdbcTemplate.queryForObject(
+				"select effective_scope from instrument_blacklists where isin = 'LU0000000006'",
+				String.class
+		)).isEqualTo("SAVING_PLAN_ONLY");
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from sparplans where isin = 'LU0000000006'",
+				Integer.class
+		)).isZero();
+	}
+
+	@Test
+	void applyApprovalsCanIgnoreRowsWithoutMutation() throws Exception {
+		mockMvc.perform(post("/api/sparplans/apply-approvals")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "source": "assessor",
+								  "items": [
+								    {
+								      "decision": "IGNORE",
+								      "isin": "LU0000000007",
+								      "instrumentName": "Ignored ETF",
+								      "layer": 2,
+								      "targetAmountEur": 10.00
+								    }
+								  ]
+								}
+								"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.ignored").value(1));
+
+		assertThat(jdbcTemplate.queryForObject("select count(*) from sparplans", Integer.class)).isZero();
+		assertThat(jdbcTemplate.queryForObject("select count(*) from instrument_blacklists", Integer.class)).isZero();
+	}
+
+	@Test
+	void applyApprovalsAllowsBlacklistWhenRebalancerApplyWouldBeAmbiguous() throws Exception {
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, is_deleted) values ('LU0000000008', 'Shared ETF', 'tr', 2, false)");
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (11, 1, 'LU0000000008', 20.00, 'monthly', true)");
+		jdbcTemplate.update("insert into sparplans (sparplan_id, depot_id, isin, amount_eur, frequency, active) values (12, 2, 'LU0000000008', 30.00, 'monthly', true)");
+
+		mockMvc.perform(post("/api/sparplans/apply-approvals")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "source": "rebalancer",
+								  "items": [
+								    {
+								      "decision": "BLACKLIST_ALL_PROPOSALS",
+								      "isin": "LU0000000008",
+								      "instrumentName": "Shared ETF",
+								      "layer": 2,
+								      "targetAmountEur": 45.00
+								    }
+								  ]
+								}
+								"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.blacklistedAllProposals").value(1));
+
+		assertThat(jdbcTemplate.queryForObject(
+				"select effective_scope from instrument_blacklists where isin = 'LU0000000008'",
+				String.class
+		)).isEqualTo("ALL_PROPOSALS");
 	}
 
 	private RequestPostProcessor adminJwt() {

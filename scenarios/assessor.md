@@ -17,8 +17,10 @@
   - `SAVING_PLAN_ONLY` excludes the instrument from saving-plan proposals only.
   - Existing saving plans affected by either blacklist scope are proposed as `discard` with rationale `Blacklisted from Saving Plan Proposals`.
 - Approved saving-plan proposals can be applied to persisted saving plans from the assessor UI.
+- Each proposal row in the apply table supports four immediate decisions: `Apply`, `Ignore`, `Saving plan proposals only`, and `All buy proposals`.
 - Applying proposals does not execute depot transactions; it only updates Portfolio Manager saving-plan records.
-- New saving-plan proposals require the user to choose a depot before apply.
+- Blacklist decisions use the same scope semantics as Knowledge Base blacklist settings and become effective immediately from the table.
+- New saving-plan proposals require the user to choose a depot before apply, but blacklist and ignore decisions never require a depot.
 - If the ISIN has no base instrument, Portfolio Manager materializes one from Knowledge Base metadata.
 - If the base instrument exists but is soft-deleted, it is reactivated and becomes effective again.
 - Newly created saving plans must keep the proposal layer in the effective instrument view after apply.
@@ -74,6 +76,8 @@
 - Negative deltas that violate minimum plan size constraints: controlled plan disable fallback.
 - Blacklisted saving-plan instruments must be shown as discard proposals instead of silent omission when an active saving plan exists.
 - Applying a new proposal without a depot selection must be blocked.
+- Ignored proposals must not change saving plans or blacklists.
+- Applying blacklist decisions must update proposal exclusions immediately with KB-equivalent semantics.
 - Applying a new proposal for an ISIN without an instrument must create a synthetic effective instrument.
 - Applying a proposal for a soft-deleted instrument must reactivate the instrument instead of duplicating it.
 - The layer shown after apply must match the assessor proposal layer for new saving plans.

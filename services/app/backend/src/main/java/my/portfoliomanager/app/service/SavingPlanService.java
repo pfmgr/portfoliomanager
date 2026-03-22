@@ -4,6 +4,7 @@ import my.portfoliomanager.app.domain.Depot;
 import my.portfoliomanager.app.domain.Instrument;
 import my.portfoliomanager.app.domain.SavingPlan;
 import my.portfoliomanager.app.dto.SavingPlanApprovalApplyItemDto;
+import my.portfoliomanager.app.dto.SavingPlanApprovalDecision;
 import my.portfoliomanager.app.dto.SavingPlanApprovalApplyRequestDto;
 import my.portfoliomanager.app.dto.SavingPlanApprovalApplyResponseDto;
 import my.portfoliomanager.app.dto.SavingPlanDto;
@@ -46,15 +47,18 @@ public class SavingPlanService {
 	private final DepotRepository depotRepository;
 	private final InstrumentRepository instrumentRepository;
 	private final InstrumentMaterializationService instrumentMaterializationService;
+	private final InstrumentBlacklistService instrumentBlacklistService;
 
 	public SavingPlanService(SavingPlanRepository savingPlanRepository,
 					   DepotRepository depotRepository,
 					   InstrumentRepository instrumentRepository,
-					   InstrumentMaterializationService instrumentMaterializationService) {
+					   InstrumentMaterializationService instrumentMaterializationService,
+					   InstrumentBlacklistService instrumentBlacklistService) {
 		this.savingPlanRepository = savingPlanRepository;
 		this.depotRepository = depotRepository;
 		this.instrumentRepository = instrumentRepository;
 		this.instrumentMaterializationService = instrumentMaterializationService;
+		this.instrumentBlacklistService = instrumentBlacklistService;
 	}
 
 	public List<SavingPlanDto> list() {
@@ -125,6 +129,9 @@ public class SavingPlanService {
 	@Transactional
 	public SavingPlanApprovalApplyResponseDto applyApprovals(SavingPlanApprovalApplyRequestDto request) {
 		int applied = 0;
+		int ignored = 0;
+		int blacklistedSavingPlanOnly = 0;
+		int blacklistedAllProposals = 0;
 		int created = 0;
 		int updated = 0;
 		int deactivated = 0;
@@ -134,6 +141,18 @@ public class SavingPlanService {
 
 		for (SavingPlanApprovalApplyItemDto item : request.items()) {
 			AppliedSavingPlanResult result = applyApprovalItem(item);
+			if (result.ignored()) {
+				ignored += 1;
+				continue;
+			}
+			if (result.blacklistedSavingPlanOnly()) {
+				blacklistedSavingPlanOnly += 1;
+				continue;
+			}
+			if (result.blacklistedAllProposals()) {
+				blacklistedAllProposals += 1;
+				continue;
+			}
 			if (!result.applied()) {
 				skipped += 1;
 				continue;
@@ -156,6 +175,9 @@ public class SavingPlanService {
 
 		return new SavingPlanApprovalApplyResponseDto(
 				applied,
+				ignored,
+				blacklistedSavingPlanOnly,
+				blacklistedAllProposals,
 				created,
 				updated,
 				deactivated,
@@ -473,7 +495,17 @@ public class SavingPlanService {
 	}
 
 	private AppliedSavingPlanResult applyApprovalItem(SavingPlanApprovalApplyItemDto item) {
+		SavingPlanApprovalDecision decision = normalizeDecision(item.decision());
 		String isin = normalizeIsin(item.isin());
+		if (decision == SavingPlanApprovalDecision.IGNORE) {
+			return AppliedSavingPlanResult.ignoredResult();
+		}
+		if (!decision.requiresSavingPlanMutation()) {
+			instrumentBlacklistService.setEffectiveScopeDirectly(isin, decision.blacklistScope());
+			return decision == SavingPlanApprovalDecision.BLACKLIST_SAVING_PLAN_ONLY
+					? AppliedSavingPlanResult.blacklistedSavingPlanOnlyResult()
+					: AppliedSavingPlanResult.blacklistedAllProposalsResult();
+		}
 		SavingPlan existing = resolveExistingSavingPlan(item, isin);
 		BigDecimal targetAmount = item.targetAmountEur();
 		if (targetAmount.signum() <= 0) {
@@ -516,7 +548,7 @@ public class SavingPlanService {
 			savingPlan.setFrequency("monthly");
 		}
 		savingPlanRepository.save(savingPlan);
-		return new AppliedSavingPlanResult(true, created, false, materialization.created(), materialization.reactivated());
+		return new AppliedSavingPlanResult(true, false, false, false, created, false, materialization.created(), materialization.reactivated());
 	}
 
 	private SavingPlan resolveExistingSavingPlan(SavingPlanApprovalApplyItemDto item, String isin) {
@@ -551,6 +583,10 @@ public class SavingPlanService {
 		}
 		return depotRepository.findById(depotId)
 				.orElseThrow(() -> new IllegalArgumentException("Depot not found"));
+	}
+
+	private SavingPlanApprovalDecision normalizeDecision(SavingPlanApprovalDecision decision) {
+		return decision == null ? SavingPlanApprovalDecision.APPLY : decision;
 	}
 
 	private byte[] readFile(MultipartFile file) {
@@ -603,16 +639,31 @@ public class SavingPlanService {
 	}
 
 	private record AppliedSavingPlanResult(boolean applied,
+									boolean ignored,
+									boolean blacklistedSavingPlanOnly,
+									boolean blacklistedAllProposals,
 									boolean created,
 									boolean deactivated,
 									boolean instrumentCreated,
 									boolean instrumentReactivated) {
 		private static AppliedSavingPlanResult skipped() {
-			return new AppliedSavingPlanResult(false, false, false, false, false);
+			return new AppliedSavingPlanResult(false, false, false, false, false, false, false, false);
 		}
 
 		private static AppliedSavingPlanResult deactivatedResult() {
-			return new AppliedSavingPlanResult(true, false, true, false, false);
+			return new AppliedSavingPlanResult(true, false, false, false, false, true, false, false);
+		}
+
+		private static AppliedSavingPlanResult ignoredResult() {
+			return new AppliedSavingPlanResult(false, true, false, false, false, false, false, false);
+		}
+
+		private static AppliedSavingPlanResult blacklistedSavingPlanOnlyResult() {
+			return new AppliedSavingPlanResult(false, false, true, false, false, false, false, false);
+		}
+
+		private static AppliedSavingPlanResult blacklistedAllProposalsResult() {
+			return new AppliedSavingPlanResult(false, false, false, true, false, false, false, false);
 		}
 	}
 }

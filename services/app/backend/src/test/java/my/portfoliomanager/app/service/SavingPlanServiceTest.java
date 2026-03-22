@@ -41,6 +41,9 @@ class SavingPlanServiceTest {
 	@Mock
 	private InstrumentMaterializationService instrumentMaterializationService;
 
+	@Mock
+	private InstrumentBlacklistService instrumentBlacklistService;
+
 	@InjectMocks
 	private SavingPlanService savingPlanService;
 

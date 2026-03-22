@@ -10,6 +10,7 @@ public record SavingPlanApprovalApplyItemDto(
 		Long savingPlanId,
 		Long depotId,
 		@NotBlank String isin,
+		SavingPlanApprovalDecision decision,
 		String instrumentName,
 		Integer layer,
 		@NotNull @DecimalMin("0.00") BigDecimal targetAmountEur,
