@@ -175,7 +175,8 @@ class ClassificationServiceTest {
 		KnowledgeBaseClassificationService.Suggestion kbSuggestion =
 				new KnowledgeBaseClassificationService.Suggestion(
 						"KB Name",
-						new ClassificationDto("ETF", "Equity", "Global", 1)
+						new ClassificationDto("ETF", "Equity", "Global", 1),
+						null
 				);
 		when(knowledgeBaseClassificationService.findSuggestions(anyList()))
 				.thenReturn(Map.of("ISIN-KB", kbSuggestion));

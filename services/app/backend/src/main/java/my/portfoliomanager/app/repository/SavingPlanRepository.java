@@ -11,6 +11,8 @@ import java.util.Optional;
 public interface SavingPlanRepository extends JpaRepository<SavingPlan, Long> {
 	Optional<SavingPlan> findByDepotIdAndIsin(Long depotId, String isin);
 
+	List<SavingPlan> findAllByIsinAndActiveTrueOrderByDepotIdAsc(String isin);
+
 	@Query(value = "select isin, sum(amount_eur) as amount_eur from sparplans where active = true group by isin", nativeQuery = true)
 	List<Object[]> sumActiveAmountsByIsin();
 

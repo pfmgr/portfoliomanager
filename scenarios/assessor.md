@@ -16,6 +16,12 @@
   - `ALL_PROPOSALS` excludes the instrument from one-time and saving-plan proposals.
   - `SAVING_PLAN_ONLY` excludes the instrument from saving-plan proposals only.
   - Existing saving plans affected by either blacklist scope are proposed as `discard` with rationale `Blacklisted from Saving Plan Proposals`.
+- Approved saving-plan proposals can be applied to persisted saving plans from the assessor UI.
+- Applying proposals does not execute depot transactions; it only updates Portfolio Manager saving-plan records.
+- New saving-plan proposals require the user to choose a depot before apply.
+- If the ISIN has no base instrument, Portfolio Manager materializes one from Knowledge Base metadata.
+- If the base instrument exists but is soft-deleted, it is reactivated and becomes effective again.
+- Newly created saving plans must keep the proposal layer in the effective instrument view after apply.
 - Verification skill: `backend-junit-tests` - cover assessor service, suggestion service, and API contract behavior for blacklist filtering, discard output, and layer-budget logic.
 
 ## Scoring model
@@ -31,6 +37,7 @@
 ## APIs
 
 - `GET /api/assessor/**`
+- `POST /api/sparplans/apply-approvals` for persisting selected assessor saving-plan proposals.
 - Verification skill: `running-instance-smoke-tests` - verify authenticated assessor API access and one changed runtime path against the running stack.
 
 ## LLM narrative config
@@ -49,6 +56,7 @@
 ## UI
 
 - `services/app/frontend/src/views/AssessorView.vue`
+- `services/app/frontend/src/components/SavingPlanApprovalsPanel.vue`
 - Verification skill: `frontend-vitest-tests` - validate discard badges, rationale rendering, and one-time vs saving-plan blacklist presentation.
 
 ## Code map
@@ -65,4 +73,8 @@
 - No eligible new candidates for positive layer delta: fallback to existing-plan distribution.
 - Negative deltas that violate minimum plan size constraints: controlled plan disable fallback.
 - Blacklisted saving-plan instruments must be shown as discard proposals instead of silent omission when an active saving plan exists.
+- Applying a new proposal without a depot selection must be blocked.
+- Applying a new proposal for an ISIN without an instrument must create a synthetic effective instrument.
+- Applying a proposal for a soft-deleted instrument must reactivate the instrument instead of duplicating it.
+- The layer shown after apply must match the assessor proposal layer for new saving plans.
 - Verification skill: `frontend-e2e-tests` - cover user-visible blacklist discard flows and gap-handling edge cases across frontend plus backend.

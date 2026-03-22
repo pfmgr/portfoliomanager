@@ -67,6 +67,13 @@ public class KnowledgeBaseClassificationService {
 		return results;
 	}
 
+	public Suggestion findSuggestion(String isin) {
+		if (isin == null || isin.isBlank()) {
+			return null;
+		}
+		return findSuggestions(List.of(isin)).values().stream().findFirst().orElse(null);
+	}
+
 	private Suggestion parseSuggestion(String isin, String json, String displayName) {
 		if (json == null || json.isBlank()) {
 			return null;
@@ -91,10 +98,11 @@ public class KnowledgeBaseClassificationService {
 					&& classification.instrumentType() == null
 					&& classification.assetClass() == null
 					&& classification.subClass() == null
-					&& classification.layer() == null) {
+					&& classification.layer() == null
+					&& trimToNull(payload.layerNotes()) == null) {
 				return null;
 			}
-			return new Suggestion(name, classification);
+			return new Suggestion(name, classification, trimToNull(payload.layerNotes()));
 		} catch (Exception ex) {
 			logger.warn("Failed to parse KB extraction payload for {}: {}", isin, ex.getMessage());
 			return null;
@@ -123,6 +131,6 @@ public class KnowledgeBaseClassificationService {
 		return trimmed.isEmpty() ? null : trimmed;
 	}
 
-	public record Suggestion(String name, ClassificationDto classification) {
+	public record Suggestion(String name, ClassificationDto classification, String layerNotes) {
 	}
 }

@@ -16,11 +16,19 @@
   - instruments excluded from saving plans are proposed at `0 EUR`
   - their reason code is `BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS`
   - runtime narrative and UI should describe them as `Blacklisted from Saving Plan Proposals`
+- Selected rebalancer saving-plan proposals can be applied to persisted saving plans from the UI.
+- Applying proposals does not execute depot transactions; it only updates Portfolio Manager saving-plan records.
+- New saving-plan proposals require explicit depot selection before apply.
+- If the ISIN has no base instrument, Portfolio Manager materializes one from Knowledge Base metadata.
+- If the base instrument exists but is soft-deleted, it is reactivated and becomes effective again.
+- New saving plans created from proposals must keep the proposal layer in the effective instrument view.
+- If the same ISIN already has multiple active saving plans across depots, apply is blocked instead of auto-distributing the proposal.
 - Verification skill: `backend-junit-tests` - validate instrument proposal redistribution, discard reasons, and gating behavior in deterministic service tests.
 
 ## APIs
 
 - `GET /api/rebalancer/**` (analysis/history/reclassifications)
+- `POST /api/sparplans/apply-approvals` for persisting selected rebalancer saving-plan proposals.
 - `GET /api/layer-targets`
 - `PUT /api/layer-targets`
 - `POST /api/layer-targets/reset`
@@ -37,6 +45,7 @@
 ## UI
 
 - `services/app/frontend/src/views/RebalancerView.vue`
+- `services/app/frontend/src/components/SavingPlanApprovalsPanel.vue`
 - `services/app/frontend/src/views/RebalancerHistoryView.vue`
 - `services/app/frontend/src/views/ProfileConfigurationView.vue`
 - Verification skill: `frontend-vitest-tests` - confirm discard action badges, reason text, and proposal table rendering.
@@ -73,6 +82,11 @@
 - Profile constraints can produce warnings even when tolerance checks pass.
 - LLM unavailability must not change deterministic proposal targets.
 - Blacklisted saving plans must still appear as discard proposals even when other instrument proposals are gated.
+- Applying a new proposal without a depot selection must be blocked.
+- Applying a proposal for an ISIN without an instrument must create a synthetic effective instrument.
+- Applying a proposal for a soft-deleted instrument must reactivate the instrument instead of duplicating it.
+- Ambiguous existing saving plans for the same ISIN across multiple depots must fail apply with a clear validation error.
+- The layer shown after apply must match the rebalancer proposal layer for new saving plans.
 - Verification skill: `frontend-e2e-tests` - exercise discard presentation, gated states, and zero-proposal edge conditions end to end.
 
 ## LLM narrative config

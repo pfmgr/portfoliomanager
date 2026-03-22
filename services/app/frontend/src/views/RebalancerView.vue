@@ -516,6 +516,12 @@
         <p v-if="instrumentProposals.length" class="note">
           Net saving plan delta: {{ formatSignedAmount(instrumentNetDelta) }} EUR ({{ instrumentNetDeltaLabel }}).
         </p>
+        <SavingPlanApprovalsPanel
+          v-if="approvalRows.length"
+          source="rebalancer"
+          :rows="approvalRows"
+          :layer-label="layerLabel"
+        />
       </div>
     </div>
   </div>
@@ -524,6 +530,7 @@
 <script setup>
 import { onMounted, ref, computed } from 'vue'
 import { apiRequest } from '../api'
+import SavingPlanApprovalsPanel from '../components/SavingPlanApprovalsPanel.vue'
 import { formatNarrative } from '../utils/narrativeFormat'
 
 const summary = ref(emptySummary())
@@ -597,6 +604,29 @@ const instrumentSortMode = ref('layer')
 const instrumentWarningDetails = computed(() => buildWarningDetails(instrumentWarningCodes.value, instrumentWarnings.value))
 const sortedInstrumentProposals = computed(() => sortInstrumentProposals(instrumentProposals.value))
 const groupedInstrumentProposals = computed(() => groupInstrumentProposals(sortedInstrumentProposals.value))
+const approvalRows = computed(() =>
+  instrumentProposals.value
+    .map((row) => {
+      const action = proposalActionLabel(row)
+      return {
+        key: row.isin,
+        action,
+        actionClass: proposalActionClass(row),
+        isin: row.isin,
+        instrumentName: row.instrumentName,
+        layer: row.layer,
+        depotId: null,
+        depotName: null,
+        depotCode: null,
+        currentAmountEur: Number(row.currentAmountEur ?? 0),
+        proposedAmountEur: Number(row.proposedAmountEur ?? 0),
+        deltaEur: Number(row.deltaEur ?? 0),
+        rationale: formatReasons(row.reasonCodes),
+        requiresDepotSelection: action === 'New'
+      }
+    })
+    .filter((row) => !(row.action === 'Keep' && row.deltaEur === 0))
+)
 
 async function load() {
   await startRebalancerRun({ saveRun: false })

@@ -3,6 +3,9 @@ package my.portfoliomanager.app.service;
 import my.portfoliomanager.app.domain.Depot;
 import my.portfoliomanager.app.domain.Instrument;
 import my.portfoliomanager.app.domain.SavingPlan;
+import my.portfoliomanager.app.dto.SavingPlanApprovalApplyItemDto;
+import my.portfoliomanager.app.dto.SavingPlanApprovalApplyRequestDto;
+import my.portfoliomanager.app.dto.SavingPlanApprovalApplyResponseDto;
 import my.portfoliomanager.app.dto.SavingPlanDto;
 import my.portfoliomanager.app.dto.SavingPlanImportResultDto;
 import my.portfoliomanager.app.dto.SavingPlanUpsertRequest;
@@ -42,13 +45,16 @@ public class SavingPlanService {
 	private final SavingPlanRepository savingPlanRepository;
 	private final DepotRepository depotRepository;
 	private final InstrumentRepository instrumentRepository;
+	private final InstrumentMaterializationService instrumentMaterializationService;
 
 	public SavingPlanService(SavingPlanRepository savingPlanRepository,
-						   DepotRepository depotRepository,
-						   InstrumentRepository instrumentRepository) {
+					   DepotRepository depotRepository,
+					   InstrumentRepository instrumentRepository,
+					   InstrumentMaterializationService instrumentMaterializationService) {
 		this.savingPlanRepository = savingPlanRepository;
 		this.depotRepository = depotRepository;
 		this.instrumentRepository = instrumentRepository;
+		this.instrumentMaterializationService = instrumentMaterializationService;
 	}
 
 	public List<SavingPlanDto> list() {
@@ -62,13 +68,11 @@ public class SavingPlanService {
 		Depot depot = depotRepository.findById(request.depotId())
 				.orElseThrow(() -> new IllegalArgumentException("Depot not found"));
 		String isin = normalizeIsin(request.isin());
-		Instrument instrument = instrumentRepository.findById(isin)
-				.orElseThrow(() -> new IllegalArgumentException("ISIN not found in instruments"));
-
 		Optional<SavingPlan> existing = savingPlanRepository.findByDepotIdAndIsin(depot.getDepotId(), isin);
 		if (existing.isPresent()) {
 			throw new IllegalArgumentException("SavingPlan already exists for this depot/ISIN");
 		}
+		Instrument instrument = instrumentMaterializationService.ensureInstrument(isin, depot, null, null).instrument();
 
 		SavingPlan savingPlan = new SavingPlan();
 		savingPlan.setDepotId(depot.getDepotId());
@@ -89,6 +93,7 @@ public class SavingPlanService {
 				.orElseThrow(() -> new IllegalArgumentException("SavingPlan not found"));
 		Depot depot = depotRepository.findById(savingPlan.getDepotId())
 				.orElseThrow(() -> new IllegalArgumentException("Depot not found"));
+		Instrument instrument = instrumentMaterializationService.ensureInstrument(savingPlan.getIsin(), depot, null, null).instrument();
 
 		String name = trimOrNull(request.name());
 		BigDecimal amount = request.amountEur();
@@ -114,8 +119,50 @@ public class SavingPlanService {
 		}
 
 		SavingPlan saved = savingPlanRepository.save(savingPlan);
-		String instrumentName = instrumentRepository.findById(saved.getIsin()).map(Instrument::getName).orElse(null);
-		return toDto(saved, depot, instrumentName);
+		return toDto(saved, depot, instrument.getName());
+	}
+
+	@Transactional
+	public SavingPlanApprovalApplyResponseDto applyApprovals(SavingPlanApprovalApplyRequestDto request) {
+		int applied = 0;
+		int created = 0;
+		int updated = 0;
+		int deactivated = 0;
+		int skipped = 0;
+		int instrumentsCreated = 0;
+		int instrumentsReactivated = 0;
+
+		for (SavingPlanApprovalApplyItemDto item : request.items()) {
+			AppliedSavingPlanResult result = applyApprovalItem(item);
+			if (!result.applied()) {
+				skipped += 1;
+				continue;
+			}
+			applied += 1;
+			if (result.created()) {
+				created += 1;
+			} else if (result.deactivated()) {
+				deactivated += 1;
+			} else {
+				updated += 1;
+			}
+			if (result.instrumentCreated()) {
+				instrumentsCreated += 1;
+			}
+			if (result.instrumentReactivated()) {
+				instrumentsReactivated += 1;
+			}
+		}
+
+		return new SavingPlanApprovalApplyResponseDto(
+				applied,
+				created,
+				updated,
+				deactivated,
+				skipped,
+				instrumentsCreated,
+				instrumentsReactivated
+		);
 	}
 
 	@Transactional
@@ -425,6 +472,87 @@ public class SavingPlanService {
 		return instrumentRepository.findEffectiveLayer(isin);
 	}
 
+	private AppliedSavingPlanResult applyApprovalItem(SavingPlanApprovalApplyItemDto item) {
+		String isin = normalizeIsin(item.isin());
+		SavingPlan existing = resolveExistingSavingPlan(item, isin);
+		BigDecimal targetAmount = item.targetAmountEur();
+		if (targetAmount.signum() <= 0) {
+			if (existing == null) {
+				return AppliedSavingPlanResult.skipped();
+			}
+			existing.setAmountEur(BigDecimal.ZERO);
+			existing.setActive(false);
+			existing.setLastChanged(LocalDate.now());
+			savingPlanRepository.save(existing);
+			return AppliedSavingPlanResult.deactivatedResult();
+		}
+
+		Depot depot = resolveDepot(item, existing);
+		InstrumentMaterializationService.MaterializationResult materialization = instrumentMaterializationService.ensureInstrument(
+				isin,
+				depot,
+				item.layer(),
+				item.instrumentName()
+		);
+
+		SavingPlan savingPlan = existing;
+		boolean created = false;
+		if (savingPlan == null) {
+			savingPlan = new SavingPlan();
+			savingPlan.setDepotId(depot.getDepotId());
+			savingPlan.setIsin(isin);
+			savingPlan.setFrequency("monthly");
+			created = true;
+		}
+		String resolvedName = trimOrNull(item.instrumentName());
+		if (resolvedName == null) {
+			resolvedName = materialization.instrument().getName();
+		}
+		savingPlan.setName(resolvedName);
+		savingPlan.setAmountEur(targetAmount);
+		savingPlan.setActive(true);
+		savingPlan.setLastChanged(LocalDate.now());
+		if (savingPlan.getFrequency() == null || savingPlan.getFrequency().isBlank()) {
+			savingPlan.setFrequency("monthly");
+		}
+		savingPlanRepository.save(savingPlan);
+		return new AppliedSavingPlanResult(true, created, false, materialization.created(), materialization.reactivated());
+	}
+
+	private SavingPlan resolveExistingSavingPlan(SavingPlanApprovalApplyItemDto item, String isin) {
+		if (item.savingPlanId() != null) {
+			SavingPlan savingPlan = savingPlanRepository.findById(item.savingPlanId())
+					.orElseThrow(() -> new IllegalArgumentException("SavingPlan not found"));
+			if (!isin.equals(savingPlan.getIsin())) {
+				throw new IllegalArgumentException("SavingPlan does not match ISIN");
+			}
+			if (item.depotId() != null && !item.depotId().equals(savingPlan.getDepotId())) {
+				throw new IllegalArgumentException("SavingPlan does not match depot");
+			}
+			return savingPlan;
+		}
+		if (item.depotId() != null) {
+			return savingPlanRepository.findByDepotIdAndIsin(item.depotId(), isin).orElse(null);
+		}
+		List<SavingPlan> activePlans = savingPlanRepository.findAllByIsinAndActiveTrueOrderByDepotIdAsc(isin);
+		if (activePlans.size() > 1) {
+			throw new IllegalArgumentException("Cannot apply proposal for ISIN " + isin + " because multiple active saving plans exist across depots");
+		}
+		return activePlans.isEmpty() ? null : activePlans.get(0);
+	}
+
+	private Depot resolveDepot(SavingPlanApprovalApplyItemDto item, SavingPlan existing) {
+		Long depotId = item.depotId();
+		if (existing != null) {
+			depotId = existing.getDepotId();
+		}
+		if (depotId == null) {
+			throw new IllegalArgumentException("Select a depot for new saving plan proposals");
+		}
+		return depotRepository.findById(depotId)
+				.orElseThrow(() -> new IllegalArgumentException("Depot not found"));
+	}
+
 	private byte[] readFile(MultipartFile file) {
 		try {
 			byte[] payload = file.getBytes();
@@ -472,5 +600,19 @@ public class SavingPlanService {
 								  boolean active,
 								  boolean activeExplicit,
 								  LocalDate lastChanged) {
+	}
+
+	private record AppliedSavingPlanResult(boolean applied,
+									boolean created,
+									boolean deactivated,
+									boolean instrumentCreated,
+									boolean instrumentReactivated) {
+		private static AppliedSavingPlanResult skipped() {
+			return new AppliedSavingPlanResult(false, false, false, false, false);
+		}
+
+		private static AppliedSavingPlanResult deactivatedResult() {
+			return new AppliedSavingPlanResult(true, false, true, false, false);
+		}
 	}
 }
