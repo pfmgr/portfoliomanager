@@ -1,6 +1,5 @@
 package my.portfoliomanager.app.service;
 
-import my.portfoliomanager.app.config.AppProperties;
 import my.portfoliomanager.app.llm.LlmActionSupport;
 import my.portfoliomanager.app.llm.LlmActionType;
 import org.junit.jupiter.api.Test;
@@ -17,7 +16,7 @@ class LlmPromptPolicyTest {
 		Mockito.when(support.isExternalProviderFor(LlmActionType.NARRATIVE)).thenReturn(false);
 		Mockito.when(support.isExternalProviderFor(LlmActionType.EXTRACTION)).thenReturn(false);
 
-		LlmPromptPolicy policy = new LlmPromptPolicy(buildProperties(), objectProvider(support));
+		LlmPromptPolicy policy = new LlmPromptPolicy(objectProvider(support));
 
 		String blocked = policy.validatePrompt("Please use user_id and account_id from context", LlmPromptPurpose.KB_DOSSIER_WEBSEARCH);
 		String allowed = policy.validatePrompt("Please use user_id and account_id from context", LlmPromptPurpose.REBALANCER_NARRATIVE);
@@ -27,26 +26,12 @@ class LlmPromptPolicyTest {
 	}
 
 	@Test
-	void fallsBackToLocalBaseUrlCheckWhenNoActionSupport() {
-		AppProperties.Security security = new AppProperties.Security("admin", "admin");
-		AppProperties.Jwt jwt = new AppProperties.Jwt("secret", "hash-secret", "issuer", 3600L, 300L, 1000, true);
-		AppProperties.Llm.OpenAi openAi = new AppProperties.Llm.OpenAi("key", "http://localhost:1234", "model", 300, 300);
-		AppProperties.Llm.Action websearch = new AppProperties.Llm.Action("openai", "key", "https://api.openai.com/v1", "model");
-		AppProperties.Llm llm = new AppProperties.Llm("openai", openAi, false, websearch, null, null);
-		AppProperties.Kb kb = new AppProperties.Kb(true, true);
-		LlmPromptPolicy policy = new LlmPromptPolicy(new AppProperties(security, jwt, llm, kb), objectProvider(null));
+	void treatsMissingActionSupportAsExternalFailSafe() {
+		LlmPromptPolicy policy = new LlmPromptPolicy(objectProvider(null));
 
-		assertThat(policy.isExternalProvider(LlmPromptPurpose.REBALANCER_NARRATIVE)).isFalse();
+		assertThat(policy.isExternalProvider(LlmPromptPurpose.REBALANCER_NARRATIVE)).isTrue();
 		assertThat(policy.isExternalProvider(LlmPromptPurpose.KB_DOSSIER_WEBSEARCH)).isTrue();
-	}
-
-	private AppProperties buildProperties() {
-		AppProperties.Security security = new AppProperties.Security("admin", "admin");
-		AppProperties.Jwt jwt = new AppProperties.Jwt("secret", "hash-secret", "issuer", 3600L, 300L, 1000, true);
-		AppProperties.Llm.OpenAi openAi = new AppProperties.Llm.OpenAi("key", "https://api.openai.com/v1", "model", 300, 300);
-		AppProperties.Llm llm = new AppProperties.Llm("openai", openAi, false, null, null, null);
-		AppProperties.Kb kb = new AppProperties.Kb(true, true);
-		return new AppProperties(security, jwt, llm, kb);
+		assertThat(policy.validatePrompt("Please use user_id and account_id from context", LlmPromptPurpose.KB_DOSSIER_WEBSEARCH)).isNull();
 	}
 
 	private ObjectProvider<LlmActionSupport> objectProvider(LlmActionSupport support) {

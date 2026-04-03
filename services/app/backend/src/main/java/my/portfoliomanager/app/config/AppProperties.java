@@ -9,7 +9,8 @@ import org.springframework.validation.annotation.Validated;
 public record AppProperties(
 		Security security,
 		Jwt jwt,
-		Llm llm,
+		String llmConfigEncryptionPassword,
+		LegacyLlm legacyLlm,
 		Kb kb
 ) {
 	public record Security(
@@ -29,30 +30,12 @@ public record AppProperties(
 	) {
 	}
 
-	public record Llm(
-			@NotBlank String provider,
-			OpenAi openai,
-			Boolean externalProvider,
-			Action websearch,
-			Action extraction,
-			Action narrative
+	public record LegacyLlm(
+			String provider,
+			String baseUrl,
+			String model,
+			String apiKey
 	) {
-		public record OpenAi(
-				String apiKey,
-				String baseUrl,
-				String model,
-				Integer connectTimeoutSeconds,
-				Integer readTimeoutSeconds
-		) {
-		}
-
-		public record Action(
-				String provider,
-				String apiKey,
-				String baseUrl,
-				String model
-		) {
-		}
 	}
 
 	public record Kb(

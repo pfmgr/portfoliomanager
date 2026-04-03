@@ -25,17 +25,11 @@
 - Allowed domains seed file:
   - `services/app/backend/src/main/resources/kb_websearch_allowed_domains.json`
 - Provider support: currently only OpenAI is supported (`openai`; `none` disables).
-- Action-specific env vars for websearch (also used by alternatives):
-  - `LLM_WEBSEARCH_PROVIDER`
-  - `LLM_WEBSEARCH_PROVIDER_API_KEY`
-  - `LLM_WEBSEARCH_PROVIDER_BASE_URL`
-  - `LLM_WEBSEARCH_PROVIDER_MODEL`
-- Fallback chain:
-  - `provider`/`base-url`/`model`: websearch-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
-  - `api-key`: websearch-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
-- OpenAI timeouts:
-  - `app.llm.openai.connect-timeout-seconds`
-  - `app.llm.openai.read-timeout-seconds`
+- LLM settings are managed in UI (`Profile Configuration -> LLM-Konfiguration`) and stored in DB (`llm_config`).
+- UI editing is enabled only when `LLM_CONFIG_ENCRYPTION_PASSWORD` is set.
+- Default mode for websearch is `STANDARD` (inherits provider/base-url/model/API key from standard config).
+- If standard API key is missing, websearch in `STANDARD` mode is disabled.
+- Optional per-function override is `CUSTOM` mode with its own provider/base-url/model/API key.
 - Bulk research parallelism:
   - `max_parallel_bulk_batches` in KB settings (default `2`)
 - Verification skill: `backend-junit-tests` - cover config fallback and provider gating in fast backend checks.

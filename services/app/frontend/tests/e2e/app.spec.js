@@ -111,6 +111,44 @@ const stubApi = async (page) => {
         body: JSON.stringify({ enabled: true })
       })
     }
+    if (path === '/api/llm/config') {
+      if (route.request().method() === 'PUT') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            editable: true,
+            password_set: true,
+            standard: {
+              provider: 'openai',
+              base_url: 'https://api.openai.com/v1',
+              model: 'gpt-5-mini',
+              api_key_set: true
+            },
+            websearch: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: true, enabled: true },
+            extraction: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: true, enabled: true },
+            narrative: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: true, enabled: true }
+          })
+        })
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          editable: true,
+          password_set: true,
+          standard: {
+            provider: 'openai',
+            base_url: 'https://api.openai.com/v1',
+            model: 'gpt-5-mini',
+            api_key_set: false
+          },
+          websearch: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: false, enabled: false },
+          extraction: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: false, enabled: false },
+          narrative: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: false, enabled: false }
+        })
+      })
+    }
     if (path === '/api/kb/dossiers') {
       const query = (url.searchParams.get('q') || '').toLowerCase()
       const stale = url.searchParams.get('stale')
@@ -533,4 +571,12 @@ test('layer targets save custom overrides', async ({ page }) => {
 
   await expect(page.getByText('Layer targets saved.')).toBeVisible()
   await expect(page.getByText('Custom overrides are active.')).toBeVisible()
+})
+
+test('llm tab shows standard-based default status', async ({ page }) => {
+  await page.goto('/layer-targets')
+  await page.getByRole('tab', { name: 'LLM-Konfiguration' }).click({ force: true })
+  await expect(page.getByRole('heading', { name: 'LLM-Konfiguration' })).toBeVisible()
+  await expect(page.getByText('API key configured: No')).toBeVisible()
+  await expect(page.getByText('Standard API key is not configured.').first()).toBeVisible()
 })

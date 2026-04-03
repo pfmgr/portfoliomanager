@@ -37,14 +37,10 @@
 ## Config and gating
 
 - KB endpoints require `KB_ENABLED=true` and a configured and enabled LLM provider.
-- Extraction uses action-specific env vars when provided:
-  - `LLM_EXTRACTION_PROVIDER`
-  - `LLM_EXTRACTION_PROVIDER_API_KEY`
-  - `LLM_EXTRACTION_PROVIDER_BASE_URL`
-  - `LLM_EXTRACTION_PROVIDER_MODEL`
-- Fallback chain:
-  - `provider`/`base-url`/`model`: extraction-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
-  - `api-key`: extraction-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
+- LLM settings are configured in UI (`Profile Configuration -> LLM-Konfiguration`) and persisted in `llm_config`.
+- UI editing requires `LLM_CONFIG_ENCRYPTION_PASSWORD` to be set.
+- Extraction mode defaults to `STANDARD` and uses the standard API key unless switched to `CUSTOM`.
+- If extraction stays in `STANDARD` mode and no standard API key is set, extraction is disabled.
 - Provider support is currently OpenAI only (`openai`; `none` disables).
 - LLM-enabled KB endpoints return `503` when the required action config is unavailable:
   - websearch endpoints require websearch action config
@@ -77,5 +73,6 @@
 - Unknown ISIN dossiers are allowed and do not require an existing instrument row.
 - Large valuation values (for example trillion-scale `market_cap` or `enterprise_value`) must be persisted in `instrument_facts.fact_value_num` without numeric overflow during approve/apply flows.
 - Backup and import logic must include all KB tables in truncate, import, and sequence-reset order after schema changes.
+- Knowledge Base backup/export scope excludes `llm_config`; KB import must not overwrite existing runtime LLM configuration.
 - Rejected dossier blacklist changes must not become effective.
 - Verification skill: `knowledge-base-dossier-checks` - verify pending changes are cleared or kept inactive when approval is not granted.

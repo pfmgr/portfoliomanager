@@ -47,6 +47,16 @@
         >
           Quality gates
         </button>
+        <button
+          type="button"
+          class="tab-button"
+          :class="{ 'tab-active': activePanel === 'LLM' }"
+          role="tab"
+          :aria-selected="activePanel === 'LLM'"
+          @click="activePanel = 'LLM'"
+        >
+          LLM-Konfiguration
+        </button>
       </div>
     </div>
 
@@ -396,6 +406,123 @@
       </div>
       <p class="note small">Saving aligns quality gates to the selected profile.</p>
     </div>
+
+    <div v-else-if="activePanel === 'LLM'" class="card" role="tabpanel">
+      <h2>LLM-Konfiguration</h2>
+      <p>Konfiguriere den Standard-LLM und optionale Custom-Setups für einzelne Funktionen.</p>
+      <p class="toast error">
+        Full database backups include this LLM configuration. Exported backups currently contain LLM API keys in
+        plaintext.
+      </p>
+      <p v-if="llmLoading" class="note">Loading LLM configuration...</p>
+      <p v-if="llmMessage" :class="['toast', llmMessageType]">{{ llmMessage }}</p>
+      <p v-if="!llmEditable" class="toast error">
+        {{ llmEditableReason }}
+      </p>
+
+      <h3>Standard configuration</h3>
+      <div class="grid grid-2">
+        <label class="field">
+          <span>Provider</span>
+          <input v-model="llmStandard.provider" class="input" :disabled="!canEditLlm" />
+        </label>
+        <label class="field">
+          <span>Base URL</span>
+          <input v-model="llmStandard.baseUrl" class="input" :disabled="!canEditLlm" />
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <input v-model="llmStandard.model" class="input" :disabled="!canEditLlm" />
+        </label>
+        <label class="field">
+          <span>API key (replace)</span>
+          <input
+            v-model="llmStandard.apiKeyInput"
+            class="input"
+            type="password"
+            autocomplete="new-password"
+            :disabled="!canEditLlm"
+            @input="llmStandard.clearApiKey = false"
+          />
+        </label>
+      </div>
+      <div class="llm-status-row">
+        <span :class="['llm-badge', llmStandard.apiKeyConfigured ? 'ok' : 'warn']">
+          API key configured: {{ llmStandard.apiKeyConfigured ? 'Yes' : 'No' }}
+        </span>
+        <button class="secondary" :disabled="!canEditLlm" @click="clearStandardApiKey">
+          Clear configured key
+        </button>
+      </div>
+
+      <h3>Function configurations</h3>
+      <div
+        v-for="functionKey in llmFunctionKeys"
+        :key="functionKey"
+        class="llm-function-card"
+      >
+        <h4>{{ llmFunctionLabel(functionKey) }}</h4>
+        <div class="llm-status-row">
+          <span :class="['llm-badge', llmEffectiveStatus(functionKey).enabled ? 'ok' : 'warn']">
+            Effective: {{ llmEffectiveStatus(functionKey).enabled ? 'Enabled' : 'Disabled' }}
+          </span>
+          <span class="note" v-if="llmEffectiveStatus(functionKey).reason">
+            {{ llmEffectiveStatus(functionKey).reason }}
+          </span>
+        </div>
+
+        <label class="field">
+          <span>Mode</span>
+          <select
+            class="input"
+            :disabled="!canEditLlm"
+            v-model="llmFunctions[functionKey].mode"
+            @change="onFunctionModeChanged(functionKey)"
+          >
+            <option value="STANDARD">STANDARD</option>
+            <option value="CUSTOM">CUSTOM</option>
+          </select>
+        </label>
+
+        <div v-if="llmFunctions[functionKey].mode === 'CUSTOM'" class="grid grid-2">
+          <label class="field">
+            <span>Provider</span>
+            <input v-model="llmFunctions[functionKey].custom.provider" class="input" :disabled="!canEditLlm" />
+          </label>
+          <label class="field">
+            <span>Base URL</span>
+            <input v-model="llmFunctions[functionKey].custom.baseUrl" class="input" :disabled="!canEditLlm" />
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <input v-model="llmFunctions[functionKey].custom.model" class="input" :disabled="!canEditLlm" />
+          </label>
+          <label class="field">
+            <span>API key (replace)</span>
+            <input
+              v-model="llmFunctions[functionKey].custom.apiKeyInput"
+              class="input"
+              type="password"
+              autocomplete="new-password"
+              :disabled="!canEditLlm"
+              @input="llmFunctions[functionKey].custom.clearApiKey = false"
+            />
+          </label>
+        </div>
+        <p v-if="llmFunctions[functionKey].mode === 'CUSTOM'" class="note small">
+          Custom API key configured: {{ llmFunctions[functionKey].custom.apiKeyConfigured ? 'Yes' : 'No' }}
+        </p>
+      </div>
+
+      <div class="actions" style="margin-top: 1rem;">
+        <button class="primary" @click="saveLlmConfig" :disabled="llmSaving || llmLoading || !llmEditable">
+          {{ llmSaving ? 'Saving…' : 'Save LLM configuration' }}
+        </button>
+        <button class="secondary" @click="loadLlmConfig" :disabled="llmSaving || llmLoading">
+          Reload
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -415,6 +542,8 @@ const MIN_PROJECTION_BLEND = 0
 const MAX_PROJECTION_BLEND = 1
 const activePanel = ref('ALLOCATIONS')
 const qualityGateCategories = ['FUND', 'EQUITY', 'REIT', 'UNKNOWN']
+const llmFunctionKeys = ['websearch', 'extraction', 'narrative']
+const LLM_ENDPOINT = '/llm/config'
 const qualityGateEvidenceKeys = [
   'benchmark_index',
   'ongoing_charges_pct',
@@ -477,12 +606,21 @@ const qualityGateMessage = ref('')
 const qualityGateMessageType = ref('success')
 const qualityGateLoading = ref(false)
 const qualityGateSaving = ref(false)
+const llmLoading = ref(false)
+const llmSaving = ref(false)
+const llmMessage = ref('')
+const llmMessageType = ref('success')
+const llmEditable = ref(true)
+const llmEditableReason = ref('')
+const llmStandard = ref(buildDefaultLlmStandard())
+const llmFunctions = ref(buildDefaultLlmFunctions())
 
 const selectedProfileName = computed(() => profiles.value[selectedProfileKey.value]?.displayName || 'Custom')
 const selectedProfileDescription = computed(() => profiles.value[selectedProfileKey.value]?.description || '')
 const seedProfile = computed(() => resolveSeedProfile(selectedProfileKey.value))
 const hasVarianceBreaches = computed(() => layers.some((layer) => deltaExceeded(layer)))
 const sourceLabel = computed(() => (customOverridesEnabled.value ? 'Custom overrides' : selectedProfileName.value))
+const canEditLlm = computed(() => llmEditable.value && !llmSaving.value && !llmLoading.value)
 const qualityGateProfileDefaults = computed(() => resolveQualityGateProfile(qualityGateProfiles.value))
 const profileVariancePct = computed(() => {
   const value = seedProfile.value?.acceptableVariancePct
@@ -569,6 +707,46 @@ async function loadQualityGateConfig() {
   }
 }
 
+async function loadLlmConfig() {
+  llmLoading.value = true
+  llmMessage.value = ''
+  llmMessageType.value = 'success'
+  try {
+    const data = await apiRequest(LLM_ENDPOINT)
+    applyLlmResponse(data)
+  } catch (err) {
+    llmMessageType.value = 'error'
+    llmMessage.value = err?.message || 'Failed to load LLM configuration.'
+  } finally {
+    llmLoading.value = false
+  }
+}
+
+async function saveLlmConfig() {
+  llmSaving.value = true
+  llmMessage.value = ''
+  llmMessageType.value = 'success'
+  try {
+    const payload = buildLlmPayload()
+    const result = await apiRequest(LLM_ENDPOINT, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    })
+    if (result) {
+      applyLlmResponse(result)
+    } else {
+      await loadLlmConfig()
+    }
+    llmMessage.value = 'LLM configuration saved.'
+  } catch (err) {
+    llmMessageType.value = 'error'
+    llmMessage.value = err?.message || 'Failed to save LLM configuration.'
+  } finally {
+    clearLlmKeyInputs()
+    llmSaving.value = false
+  }
+}
+
 function applyResponse(data) {
   if (!data) {
     return
@@ -604,6 +782,197 @@ function applyQualityGateConfig(raw) {
   qualityGateCustomProfiles.value = normalized.customProfiles
   qualityGateCustomOverridesEnabled.value = normalized.customOverridesEnabled
   applyQualityGateProfileOverrides()
+}
+
+function buildDefaultLlmStandard() {
+  return {
+    provider: '',
+    baseUrl: '',
+    model: '',
+    apiKeyConfigured: false,
+    apiKeyInput: '',
+    clearApiKey: false
+  }
+}
+
+function buildDefaultLlmCustomConfig() {
+  return {
+    provider: '',
+    baseUrl: '',
+    model: '',
+    apiKeyConfigured: false,
+    apiKeyInput: '',
+    clearApiKey: false
+  }
+}
+
+function buildDefaultLlmFunctions() {
+  const output = {}
+  llmFunctionKeys.forEach((key) => {
+    output[key] = {
+      mode: 'STANDARD',
+      custom: buildDefaultLlmCustomConfig(),
+      effectiveEnabled: false,
+      effectiveReason: ''
+    }
+  })
+  return output
+}
+
+function applyLlmResponse(raw) {
+  const data = raw || {}
+  llmEditable.value = data.editable !== false
+  llmEditableReason.value =
+    data.editableReason ||
+    data.editable_reason ||
+    (llmEditable.value
+      ? ''
+      : 'LLM configuration is read-only because no encryption password is configured on the backend.')
+
+  const standardRaw = data.standard || {}
+  llmStandard.value = {
+    provider: normalizeText(standardRaw.provider),
+    baseUrl: normalizeText(standardRaw.baseUrl ?? standardRaw.base_url),
+    model: normalizeText(standardRaw.model),
+    apiKeyConfigured: Boolean(standardRaw.apiKeyConfigured ?? standardRaw.api_key_configured ?? standardRaw.api_key_set),
+    apiKeyInput: '',
+    clearApiKey: false
+  }
+
+  const functionsRaw = {
+    websearch: data.websearch || {},
+    extraction: data.extraction || {},
+    narrative: data.narrative || {}
+  }
+  const nextFunctions = buildDefaultLlmFunctions()
+  llmFunctionKeys.forEach((key) => {
+    const functionRaw = functionsRaw[key] || {}
+    const mode = normalizeLlmMode(functionRaw.mode)
+    const customRaw = mode === 'CUSTOM' ? functionRaw : {}
+    const effectiveEnabledFromBackend = functionRaw.enabled !== undefined ? Boolean(functionRaw.enabled) : undefined
+    const fallbackDisabled = mode === 'STANDARD' && !llmStandard.value.apiKeyConfigured
+    const effectiveEnabled =
+      effectiveEnabledFromBackend !== undefined ? effectiveEnabledFromBackend : !fallbackDisabled
+    const effectiveReason =
+      normalizeText(functionRaw.disableReason ?? functionRaw.disable_reason ?? functionRaw.reason) ||
+      (fallbackDisabled ? 'Standard API key is not configured.' : '')
+
+    nextFunctions[key] = {
+      mode,
+      custom: {
+        provider: normalizeText(customRaw.provider),
+        baseUrl: normalizeText(customRaw.baseUrl ?? customRaw.base_url),
+        model: normalizeText(customRaw.model),
+        apiKeyConfigured: Boolean(functionRaw.apiKeyConfigured ?? functionRaw.api_key_configured ?? functionRaw.api_key_set),
+        apiKeyInput: '',
+        clearApiKey: false
+      },
+      effectiveEnabled,
+      effectiveReason
+    }
+  })
+  llmFunctions.value = nextFunctions
+}
+
+function normalizeText(value) {
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+function normalizeLlmMode(value) {
+  return String(value || 'STANDARD').toUpperCase() === 'CUSTOM' ? 'CUSTOM' : 'STANDARD'
+}
+
+function normalizeOptionalText(value) {
+  const normalized = normalizeText(value).trim()
+  return normalized || null
+}
+
+function clearLlmKeyInputs() {
+  llmStandard.value.apiKeyInput = ''
+  llmFunctionKeys.forEach((key) => {
+    llmFunctions.value[key].custom.apiKeyInput = ''
+  })
+}
+
+function clearStandardApiKey() {
+  llmStandard.value.apiKeyInput = ''
+  llmStandard.value.clearApiKey = true
+}
+
+function onFunctionModeChanged(functionKey) {
+  const entry = llmFunctions.value[functionKey]
+  if (!entry) return
+  const mode = normalizeLlmMode(entry.mode)
+  entry.mode = mode
+  if (mode === 'STANDARD') {
+    entry.custom.apiKeyInput = ''
+    entry.custom.clearApiKey = true
+  } else {
+    entry.custom.clearApiKey = false
+  }
+}
+
+function llmFunctionLabel(functionKey) {
+  if (functionKey === 'websearch') return 'Websearch'
+  if (functionKey === 'extraction') return 'Extraction'
+  if (functionKey === 'narrative') return 'Narrative'
+  return functionKey
+}
+
+function llmEffectiveStatus(functionKey) {
+  const entry = llmFunctions.value[functionKey]
+  if (!entry) {
+    return { enabled: false, reason: '' }
+  }
+  if (entry.mode === 'STANDARD' && !llmStandard.value.apiKeyConfigured) {
+    return {
+      enabled: false,
+      reason: entry.effectiveReason || 'Standard API key is not configured.'
+    }
+  }
+  return {
+    enabled: Boolean(entry.effectiveEnabled),
+    reason: entry.effectiveReason
+  }
+}
+
+function buildLlmPayload() {
+  const actionPayload = (key) => {
+    const entry = llmFunctions.value[key]
+    const mode = normalizeLlmMode(entry.mode)
+    let apiKeyValue = null
+    if (mode === 'STANDARD') {
+      apiKeyValue = null
+    } else if (entry.custom.clearApiKey) {
+      apiKeyValue = ''
+    } else {
+      apiKeyValue = normalizeOptionalText(entry.custom.apiKeyInput)
+    }
+    return {
+      mode,
+      provider: normalizeOptionalText(entry.custom.provider),
+      base_url: normalizeOptionalText(entry.custom.baseUrl),
+      model: normalizeOptionalText(entry.custom.model),
+      api_key: apiKeyValue
+    }
+  }
+
+  const standardApiKeyValue = llmStandard.value.clearApiKey
+    ? ''
+    : normalizeOptionalText(llmStandard.value.apiKeyInput)
+
+  return {
+    standard: {
+      provider: normalizeOptionalText(llmStandard.value.provider),
+      base_url: normalizeOptionalText(llmStandard.value.baseUrl),
+      model: normalizeOptionalText(llmStandard.value.model),
+      api_key: standardApiKeyValue
+    },
+    websearch: actionPayload('websearch'),
+    extraction: actionPayload('extraction'),
+    narrative: actionPayload('narrative')
+  }
 }
 
 function normalizeQualityGateConfig(raw) {
@@ -1366,6 +1735,7 @@ watch(qualityGateCustomOverridesEnabled, () => {
 onMounted(() => {
   loadConfig()
   loadQualityGateConfig()
+  loadLlmConfig()
 })
 </script>
 
@@ -1404,6 +1774,45 @@ onMounted(() => {
 
 .quality-gate-category {
   margin-top: 1rem;
+}
+
+.llm-function-card {
+  border: 1px solid #eee6d8;
+  border-radius: 12px;
+  padding: 0.9rem;
+  margin-top: 1rem;
+  background: #fcfaf6;
+}
+
+.llm-function-card h4 {
+  margin: 0 0 0.6rem;
+}
+
+.llm-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0.5rem 0 0.8rem;
+}
+
+.llm-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid #ddd0b7;
+  font-size: 0.82rem;
+}
+
+.llm-badge.ok {
+  background: #e7f6ea;
+  border-color: #b8dfc0;
+}
+
+.llm-badge.warn {
+  background: #f9ede8;
+  border-color: #efc2b6;
 }
 
 .note.warn {

@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import my.portfoliomanager.app.dto.BackupImportResultDto;
+import my.portfoliomanager.app.dto.LlmConfigBackupDto;
 import my.portfoliomanager.app.service.util.ZipEntryReader;
 
 import java.io.ByteArrayOutputStream;
@@ -47,11 +48,13 @@ import java.util.zip.ZipOutputStream;
 
 @Service
 public class BackupService {
-	private static final int FORMAT_VERSION = 1;
+	private static final int FORMAT_VERSION = 2;
 	private static final String METADATA_ENTRY = "metadata.json";
 	private static final String DATA_PREFIX = "data/";
+	private static final String LLM_CONFIG_ENTRY = "llm-config.json";
 	private static final String TABLE_DEPOTS = "depots";
 	private static final String TABLE_INSTRUMENT_DOSSIERS = "instrument_dossiers";
+	private static final String TABLE_LLM_CONFIG = "llm_config";
 	private static final String COLUMN_DEPOT_ID = "depot_id";
 	private static final String COLUMN_DOSSIER_ID = "dossier_id";
 	private static final String COLUMN_ACTIVE_SNAPSHOT_ID = "active_snapshot_id";
@@ -101,16 +104,19 @@ public class BackupService {
 	private final JdbcTemplate jdbcTemplate;
 	private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
 	private final DataSource dataSource;
+	private final LlmRuntimeConfigService llmRuntimeConfigService;
 	private final ObjectMapper objectMapper;
 	private final String databaseProductName;
 	private final Map<String, Map<String, ColumnInfo>> columnInfoCache = new ConcurrentHashMap<>();
 
 	public BackupService(JdbcTemplate jdbcTemplate,
 						 NamedParameterJdbcTemplate namedParameterJdbcTemplate,
-						 DataSource dataSource) {
+						 DataSource dataSource,
+						 LlmRuntimeConfigService llmRuntimeConfigService) {
 		this.jdbcTemplate = jdbcTemplate;
 		this.namedParameterJdbcTemplate = namedParameterJdbcTemplate;
 		this.dataSource = dataSource;
+		this.llmRuntimeConfigService = llmRuntimeConfigService;
 		this.objectMapper = JsonMapper.builder()
 				.disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
 				.build();
@@ -122,12 +128,19 @@ public class BackupService {
 		List<TableExport> exports = tables.stream()
 				.map(this::exportTable)
 				.collect(Collectors.toList());
+		LlmConfigBackupDto llmConfig = llmRuntimeConfigService.exportBackupConfig();
 		List<String> importOrder = buildImportOrder(tables);
 		List<TableMetadata> metadataTables = exports.stream()
 				.map(export -> new TableMetadata(export.tableName(), export.rowCount(), export.sha256()))
 				.toList();
-		BackupMetadata metadata = new BackupMetadata(FORMAT_VERSION, Instant.now().toString(), metadataTables, importOrder);
-		return writeZip(metadata, exports);
+		BackupMetadata metadata = new BackupMetadata(
+				FORMAT_VERSION,
+				Instant.now().toString(),
+				metadataTables,
+				importOrder,
+				llmConfig == null ? null : new LlmConfigMetadata(LLM_CONFIG_ENTRY, sha256(writeJson(llmConfig)))
+		);
+		return writeZip(metadata, exports, llmConfig);
 	}
 
 	@Transactional
@@ -143,16 +156,19 @@ public class BackupService {
 				throw new IllegalArgumentException("Unsupported backup format version: " + metadata.formatVersion());
 			}
 
-			Map<String, byte[]> tableData = prepareTableData(metadata, entries);
-			List<String> tables = metadata.tables().stream()
+			LlmConfigBackupDto llmConfig = readLlmConfig(metadata, entries);
+			List<TableMetadata> importedTables = filterImportedTables(metadata.tables());
+			Map<String, byte[]> tableData = prepareTableData(importedTables, entries);
+			List<String> tables = importedTables.stream()
 					.map(TableMetadata::name)
 					.toList();
 			truncateTables(tables);
 			List<String> importOrder = determineImportOrder(metadata);
 			List<DepotActiveSnapshot> depotActiveSnapshots = new ArrayList<>();
-			long rowsImported = insertTables(importOrder, metadata.tables(), tableData, depotActiveSnapshots);
+			long rowsImported = insertTables(importOrder, importedTables, tableData, depotActiveSnapshots);
 			applyDepotActiveSnapshotUpdates(depotActiveSnapshots);
 			resetSequences(tables);
+			llmRuntimeConfigService.importBackupConfig(llmConfig);
 			return new BackupImportResultDto(tables.size(), rowsImported, metadata.formatVersion(), metadata.exportedAt());
 		} catch (IOException e) {
 			throw new IllegalArgumentException("Unable to read backup archive.", e);
@@ -169,6 +185,7 @@ public class BackupService {
 		return jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("table_name"))
 				.stream()
 				.filter(name -> !EXCLUDED_TABLES.contains(name.toLowerCase(Locale.ROOT)))
+				.filter(name -> !TABLE_LLM_CONFIG.equalsIgnoreCase(name))
 				.sorted(String.CASE_INSENSITIVE_ORDER)
 				.toList();
 	}
@@ -181,9 +198,9 @@ public class BackupService {
 		return new TableExport(tableName, rows.size(), bytes, sha);
 	}
 
-	private byte[] writeJson(List<Map<String, Object>> rows) {
+	private byte[] writeJson(Object value) {
 		try {
-			return objectMapper.writeValueAsBytes(rows);
+			return objectMapper.writeValueAsBytes(value);
 		} catch (JacksonException e) {
 			throw new IllegalStateException("Unable to serialize table data.", e);
 		}
@@ -206,13 +223,19 @@ public class BackupService {
 		return ordered;
 	}
 
-	private byte[] writeZip(BackupMetadata metadata, List<TableExport> exports) {
+	private byte[] writeZip(BackupMetadata metadata, List<TableExport> exports, LlmConfigBackupDto llmConfig) {
 		try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			 ZipOutputStream zip = new ZipOutputStream(baos, StandardCharsets.UTF_8)) {
 			for (TableExport export : exports) {
 				ZipEntry entry = new ZipEntry(DATA_PREFIX + export.tableName() + ".json");
 				zip.putNextEntry(entry);
 				zip.write(export.bytes());
+				zip.closeEntry();
+			}
+			if (llmConfig != null) {
+				ZipEntry llmEntry = new ZipEntry(LLM_CONFIG_ENTRY);
+				zip.putNextEntry(llmEntry);
+				zip.write(writeJson(llmConfig));
 				zip.closeEntry();
 			}
 			byte[] metadataBytes = objectMapper.writeValueAsBytes(metadata);
@@ -227,9 +250,9 @@ public class BackupService {
 		}
 	}
 
-	private Map<String, byte[]> prepareTableData(BackupMetadata metadata, Map<String, byte[]> entries) {
+	private Map<String, byte[]> prepareTableData(List<TableMetadata> tables, Map<String, byte[]> entries) {
 		Map<String, byte[]> tableData = new HashMap<>();
-		for (TableMetadata table : metadata.tables()) {
+		for (TableMetadata table : tables) {
 			String entryName = DATA_PREFIX + table.name() + ".json";
 			byte[] data = entries.remove(entryName);
 			if (data == null) {
@@ -244,14 +267,115 @@ public class BackupService {
 		return tableData;
 	}
 
+	private List<TableMetadata> filterImportedTables(List<TableMetadata> tables) {
+		if (tables == null) {
+			return List.of();
+		}
+		return tables.stream()
+				.filter(table -> table != null && !TABLE_LLM_CONFIG.equalsIgnoreCase(table.name()))
+				.toList();
+	}
+
 	private List<String> determineImportOrder(BackupMetadata metadata) {
 		List<String> importOrder = metadata.importOrder();
 		if (importOrder != null && !importOrder.isEmpty()) {
-			return importOrder;
+			return importOrder.stream()
+					.filter(table -> !TABLE_LLM_CONFIG.equalsIgnoreCase(table))
+					.toList();
 		}
-		return buildImportOrder(metadata.tables().stream()
+		return buildImportOrder(filterImportedTables(metadata.tables()).stream()
 				.map(TableMetadata::name)
 				.toList());
+	}
+
+	private LlmConfigBackupDto readLlmConfig(BackupMetadata metadata, Map<String, byte[]> entries) throws IOException {
+		LlmConfigMetadata llmConfig = metadata.llmConfig();
+		if (llmConfig != null) {
+			String entryName = llmConfig.entryName() == null || llmConfig.entryName().isBlank()
+					? LLM_CONFIG_ENTRY
+					: llmConfig.entryName();
+			byte[] data = entries.remove(entryName);
+			if (data == null) {
+				throw new IllegalArgumentException("Missing data for llm_config backup.");
+			}
+			String computed = sha256(data);
+			if (!computed.equals(llmConfig.sha256())) {
+				throw new IllegalArgumentException("Backup corrupted for llm_config backup.");
+			}
+			return objectMapper.readValue(data, LlmConfigBackupDto.class);
+		}
+
+		TableMetadata legacyTable = metadata.tables() == null ? null : metadata.tables().stream()
+				.filter(table -> table != null && TABLE_LLM_CONFIG.equalsIgnoreCase(table.name()))
+				.findFirst()
+				.orElse(null);
+		if (legacyTable == null) {
+			return null;
+		}
+		String entryName = DATA_PREFIX + legacyTable.name() + ".json";
+		byte[] data = entries.remove(entryName);
+		if (data == null) {
+			throw new IllegalArgumentException("Missing data for legacy llm_config backup.");
+		}
+		String computed = sha256(data);
+		if (!computed.equals(legacyTable.sha256())) {
+			throw new IllegalArgumentException("Backup corrupted for legacy llm_config backup.");
+		}
+		return readLegacyLlmConfig(data);
+	}
+
+	private LlmConfigBackupDto readLegacyLlmConfig(byte[] data) throws IOException {
+		JsonNode rows = objectMapper.readTree(data);
+		if (!rows.isArray() || rows.isEmpty()) {
+			return null;
+		}
+		JsonNode config = rows.get(0).path("config_json");
+		if (config.isMissingNode() || config.isNull()) {
+			return null;
+		}
+		return new LlmConfigBackupDto(
+				new LlmConfigBackupDto.StandardBackupDto(
+						textOrNull(config, "standardProvider"),
+						textOrNull(config, "standardBaseUrl"),
+						textOrNull(config, "standardModel"),
+						legacyApiKey(config, "standardApiKey", "standardApiKeyEncrypted")
+				),
+				legacyAction(config.path("websearch")),
+				legacyAction(config.path("extraction")),
+				legacyAction(config.path("narrative"))
+		);
+	}
+
+	private LlmConfigBackupDto.ActionBackupDto legacyAction(JsonNode node) {
+		if (node == null || node.isMissingNode() || node.isNull()) {
+			return new LlmConfigBackupDto.ActionBackupDto("STANDARD", null, null, null, null);
+		}
+		return new LlmConfigBackupDto.ActionBackupDto(
+				textOrNull(node, "mode"),
+				textOrNull(node, "provider"),
+				textOrNull(node, "baseUrl"),
+				textOrNull(node, "model"),
+				legacyApiKey(node, "apiKey", "apiKeyEncrypted")
+		);
+	}
+
+	private String legacyApiKey(JsonNode node, String plaintextField, String encryptedField) {
+		return llmRuntimeConfigService.resolveLegacyBackupApiKey(
+				textOrNull(node, plaintextField),
+				textOrNull(node, encryptedField)
+		);
+	}
+
+	private String textOrNull(JsonNode node, String field) {
+		if (node == null || node.isMissingNode() || node.isNull()) {
+			return null;
+		}
+		JsonNode value = node.path(field);
+		if (value.isMissingNode() || value.isNull()) {
+			return null;
+		}
+		String text = value.asText();
+		return text == null || text.isBlank() ? null : text;
 	}
 
 	private long insertTables(List<String> importOrder,
@@ -867,7 +991,11 @@ public class BackupService {
 	private record BackupMetadata(int formatVersion,
 								  String exportedAt,
 								  List<TableMetadata> tables,
-								  List<String> importOrder) {
+								  List<String> importOrder,
+								  LlmConfigMetadata llmConfig) {
+	}
+
+	private record LlmConfigMetadata(String entryName, String sha256) {
 	}
 
 	private record TableMetadata(String name, int rowCount, String sha256) {

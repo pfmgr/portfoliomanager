@@ -20,14 +20,7 @@ services:
       JWT_ISSUER: portfolio-manager-e2e
       JWT_SECRET: ${JWT_SECRET:?required}
       JWT_JTI_HASH_SECRET: ${JWT_JTI_HASH_SECRET:?required}
-      LLM_PROVIDER: none
-      LLM_PROVIDER_API_KEY: ""
-      LLM_WEBSEARCH_PROVIDER: none
-      LLM_WEBSEARCH_PROVIDER_API_KEY: ""
-      LLM_EXTRACTION_PROVIDER: none
-      LLM_EXTRACTION_PROVIDER_API_KEY: ""
-      LLM_NARRATIVE_PROVIDER: none
-      LLM_NARRATIVE_PROVIDER_API_KEY: ""
+      LLM_CONFIG_ENCRYPTION_PASSWORD: ${LLM_CONFIG_ENCRYPTION_PASSWORD:-}
     depends_on:
       - e2e_db_portfolio
     networks:

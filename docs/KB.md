@@ -4,21 +4,26 @@
 
 KB endpoints require both:
 - `KB_ENABLED=true` (default), and
-- an enabled LLM provider (otherwise `/api/kb/**` returns `503`).
+- available LLM action configuration for websearch and extraction (otherwise `/api/kb/**` returns `503`).
 
-Relevant environment variables (see `services/app/backend/src/main/resources/application.yaml`):
+Relevant environment variables:
 - `KB_ENABLED` -> enables `/api/kb/**` (default: `true`)
 - `KB_LLM_ENABLED` -> enables `LlmExtractorService` for extraction runs (default: `false`)
-- `LLM_PROVIDER` -> set to `openai` to enable the LLM client (default: `none`)
-- `LLM_PROVIDER_API_KEY` (or `OPENAI_API_KEY` fallback)
-- `LLM_PROVIDER_MODEL` (must support `web_search` for dossier research)
-- `LLM_PROVIDER_BASE_URL` (optional; default OpenAI API base URL)
+- `LLM_CONFIG_ENCRYPTION_PASSWORD` -> required to edit LLM API settings in UI; default is empty (read-only)
+
+LLM provider/model/base URL/API key are configured in the UI (`Profile Configuration -> LLM-Konfiguration`) and persisted in DB (`llm_config`). Full database backups include `llm_config`; Knowledge Base backups do not. Exported full backups currently contain LLM API keys in plaintext.
 
 ## KB settings (database)
 
 Knowledge Base settings live in the `kb_config` table and are managed via:
 - `GET /api/kb/config`
 - `PUT /api/kb/config`
+
+LLM runtime settings live in `llm_config` and are managed via:
+- `GET /api/llm/config`
+- `PUT /api/llm/config`
+
+When importing a full database backup, existing LLM configuration is replaced only if the backup contains `llm_config`. Older backups without `llm_config` leave the current LLM configuration unchanged.
 
 Minimum config fields:
 - `enabled` (auto-refresh on/off)

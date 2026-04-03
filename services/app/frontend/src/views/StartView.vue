@@ -58,7 +58,7 @@
       </li>
       <li class="start-card">
         <h3>Imports & Exports</h3>
-        <p>Import depot statements and manage backups and overrides.</p>
+        <p>Import depot statements and manage full backups, Knowledge Base backups, and overrides.</p>
         <RouterLink class="ghost" to="/imports-exports">Open imports</RouterLink>
       </li>
     </ul>

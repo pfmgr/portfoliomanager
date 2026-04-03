@@ -1552,3 +1552,31 @@ databaseChangeLog:
             columns:
               - column:
                   name: requested_scope
+  - changeSet:
+      id: 020-llm-runtime-config
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: llm_config
+      changes:
+        - createTable:
+            tableName: llm_config
+            columns:
+              - column:
+                  name: id
+                  type: INT
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: config_json
+                  type: JSONB
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false

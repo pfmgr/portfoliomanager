@@ -49,6 +49,20 @@ test.beforeEach(async ({ page }) => {
   await stubDepots(page)
 })
 
+test('shows backup copy for full and KB backups', async ({ page }) => {
+  await page.goto('/imports-exports')
+
+  const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
+  await expect(databaseBackupSection).toContainText('include unencrypted LLM API keys')
+  await expect(databaseBackupSection).toContainText('Store them securely and do not share them')
+  await expect(databaseBackupSection).toContainText('Older backups without saved LLM settings leave the current LLM configuration unchanged')
+  await expect(databaseBackupSection.getByLabel('I understand that importing a full backup may replace LLM configuration and API keys when they are present in the backup.')).toBeVisible()
+
+  const knowledgeBaseSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Knowledge Base (KB) Backup' }) })
+  await expect(knowledgeBaseSection).toContainText('They do not include LLM configuration or API keys')
+  await expect(knowledgeBaseSection).toContainText('Importing replaces existing KB data')
+})
+
 test('imports Deka CSV sample via UI', async ({ page }) => {
   await stubImport(page, { instrumentsImported: 20, positions: 20, snapshotStatus: 'imported' })
   await page.goto('/imports-exports')
@@ -90,9 +104,12 @@ test('imports TR PDF sample via UI', async ({ page }) => {
 })
 
 test('imports database backup via UI', async ({ page }) => {
-  await stubBackupImport(page, { tablesImported: 5, rowsImported: 123, formatVersion: 1 })
+  await stubBackupImport(page, { tablesImported: 5, rowsImported: 123, formatVersion: 2 })
   await page.goto('/imports-exports')
-  await page.getByLabel('I understand that importing a backup replaces every table in the database.').check()
-  await page.setInputFiles('input[accept=".zip"]', path.join(fixturesDir, 'database-backup.zip'))
-  await expect(page.getByText('Backup imported: tables=5, rows=123, format=v1.')).toBeVisible()
+  const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
+  await expect(databaseBackupSection).toContainText('include unencrypted LLM API keys')
+  await expect(databaseBackupSection).toContainText('Store them securely and do not share them')
+  await databaseBackupSection.getByLabel('I understand that importing a full backup may replace LLM configuration and API keys when they are present in the backup.').check()
+  await databaseBackupSection.locator('input[accept=".zip"]').setInputFiles(path.join(fixturesDir, 'database-backup.zip'))
+  await expect(page.getByText('Backup imported: tables=5, rows=123, format=v2.')).toBeVisible()
 })

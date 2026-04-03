@@ -96,13 +96,12 @@
 
 ## LLM narrative config
 
-- Rebalancer narrative uses action-specific env vars when provided:
-  - `LLM_NARRATIVE_PROVIDER`
-  - `LLM_NARRATIVE_PROVIDER_API_KEY`
-  - `LLM_NARRATIVE_PROVIDER_BASE_URL`
-  - `LLM_NARRATIVE_PROVIDER_MODEL`
-- Fallback chain:
-  - `provider`/`base-url`/`model`: narrative-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
-  - `api-key`: narrative-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
+- Rebalancer narrative configuration is managed in UI (`Profile Configuration -> LLM-Konfiguration`) and stored in `llm_config`.
+- UI editing requires `LLM_CONFIG_ENCRYPTION_PASSWORD`.
+- Narrative action defaults to `STANDARD` mode (uses standard provider/base-url/model/API key).
+- If narrative is in `STANDARD` mode and no standard API key is configured, narrative generation is disabled.
+- Switching from `CUSTOM` back to `STANDARD` clears function-specific narrative API key.
 - Provider support is currently OpenAI only (`openai`; `none` disables).
+- Full database backups include `llm_config`; exported backup payloads currently carry plaintext API keys for backup/import round-trips.
+- Importing a full backup without `llm_config` must preserve the current narrative configuration.
 - Verification skill: `running-instance-smoke-tests` - confirm runtime narrative-enabled responses remain reachable after rebalancer changes.

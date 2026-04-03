@@ -12,7 +12,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class KnowledgeBaseAvailabilityService {
-	private final AppProperties properties;
 	private final LlmActionSupport llmActionSupport;
 	private final boolean fallbackConfigured;
 	private final boolean kbEnabled;
@@ -21,7 +20,6 @@ public class KnowledgeBaseAvailabilityService {
 	public KnowledgeBaseAvailabilityService(AppProperties properties,
 										LlmClient llmClient,
 										ObjectProvider<LlmActionSupport> llmActionSupportProvider) {
-		this.properties = properties;
 		this.llmActionSupport = llmActionSupportProvider == null ? null : llmActionSupportProvider.getIfAvailable();
 		this.fallbackConfigured = !(llmClient instanceof NoopLlmClient);
 		this.kbEnabled = properties.kb() != null && properties.kb().enabled();

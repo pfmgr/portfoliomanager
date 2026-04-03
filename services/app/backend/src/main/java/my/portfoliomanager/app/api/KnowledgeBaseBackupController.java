@@ -26,6 +26,10 @@ public class KnowledgeBaseBackupController {
 		byte[] payload = knowledgeBaseBackupService.exportKnowledgeBase();
 		return ResponseEntity.ok()
 				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=knowledge-base.zip")
+				.header(HttpHeaders.CACHE_CONTROL, "no-store, no-cache, must-revalidate, private")
+				.header(HttpHeaders.PRAGMA, "no-cache")
+				.header(HttpHeaders.EXPIRES, "0")
+				.header("X-Content-Type-Options", "nosniff")
 				.contentType(MediaType.APPLICATION_OCTET_STREAM)
 				.body(payload);
 	}
