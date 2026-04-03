@@ -394,3 +394,6 @@ If you change UI files or observe UI issues, run this review and add the output 
 ### Lombok Usage Review (optional)
 - Evaluate Lombok only for plain model/POJO classes to reduce boilerplate.
 - Do NOT use Lombok on JPA entities (risk of Equals/HashCode pitfalls).
+
+## 16) Development workflow
+Distribute implementation and planning tasks between dev subagents (dev1, dev2 and dev3) whenever possible and useful. When implementation is done, implementations must be reviewed at by review subagent, ui changes must also be reviewed by uxreview subagent. If a security relevant change is implemented, also security-auditor must perform a review. After implementation changes must be tested by subagent tester (if applicable). Any problems encountered during testing and/or verification should be resolved without further consultation.
