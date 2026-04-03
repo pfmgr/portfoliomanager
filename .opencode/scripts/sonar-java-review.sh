@@ -47,6 +47,15 @@ log() {
   echo "$@"
 }
 
+load_runtime_env() {
+  if [[ -f "${RUNTIME_ENV}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${RUNTIME_ENV}" 2>/dev/null || true
+    set +a
+  fi
+}
+
 if [[ ! -x "${START_SCRIPT}" ]]; then
   echo "Missing start script: ${START_SCRIPT}" >&2
   exit 12
@@ -114,22 +123,24 @@ cleanup() {
 trap cleanup EXIT
 
 log "Starting SonarQube for review..."
-START_OUTPUT="$(${START_SCRIPT} --quiet || true)"
-if [[ -z "${START_OUTPUT}" ]]; then
+if ! START_OUTPUT="$(${START_SCRIPT} --quiet 2>&1)"; then
+  if [[ -n "${START_OUTPUT}" ]]; then
+    printf '%s\n' "${START_OUTPUT}" >&2
+  fi
   echo "SonarQube start failed." >&2
   exit 12
 fi
 
 SONAR_URL="$(printf '%s' "${START_OUTPUT}" | grep '^SONAR_URL=' | cut -d= -f2-)"
 START_TOKEN="$(printf '%s' "${START_OUTPUT}" | grep '^SONAR_TOKEN=' | cut -d= -f2-)"
+load_runtime_env
+
+if [[ -n "${SONAR_DEFAULT_QUALITY_GATE:-}" ]]; then
+  DEFAULT_QUALITY_GATE="${SONAR_DEFAULT_QUALITY_GATE}"
+fi
+
 if [[ -z "${SONAR_URL}" ]]; then
-  if [[ -f "${RUNTIME_ENV}" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "${RUNTIME_ENV}"
-    set +a
-    SONAR_URL="${SONAR_URL:-}"
-  fi
+  SONAR_URL="${SONAR_URL:-}"
 fi
 
 if [[ -z "${SONAR_TOKEN}" ]]; then
@@ -137,10 +148,7 @@ if [[ -z "${SONAR_TOKEN}" ]]; then
 fi
 
 if [[ -z "${SONAR_TOKEN}" && -f "${RUNTIME_ENV}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${RUNTIME_ENV}"
-  set +a
+  load_runtime_env
   SONAR_TOKEN="${SONAR_TOKEN:-${SONAR_ADMIN_TOKEN:-}}"
 fi
 
@@ -156,6 +164,29 @@ fi
 
 sonar_api() {
   curl -sf -H "Authorization: Bearer ${SONAR_TOKEN}" "$@"
+}
+
+wait_for_quality_gate_status() {
+  local timeout_seconds="${1:-120}"
+  local deadline
+  local status_json
+  local gate_status
+
+  deadline=$((SECONDS + timeout_seconds))
+  while (( SECONDS < deadline )); do
+    status_json="$(sonar_api "${SONAR_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}" 2>/dev/null || true)"
+    gate_status="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";
+print(json.loads(payload).get("projectStatus",{}).get("status","")) if payload else print("")' "${status_json}" 2>/dev/null || true)"
+
+    if [[ -n "${gate_status}" && "${gate_status}" != "NONE" ]]; then
+      printf '%s\n' "${status_json}"
+      return 0
+    fi
+
+    sleep 2
+  done
+
+  return 1
 }
 
 log "Running SonarQube scan on ${PROJECT_DIR}..."
@@ -203,7 +234,7 @@ if [[ -n "${DEFAULT_QUALITY_GATE}" ]]; then
 fi
 
 log "Fetching quality gate status..."
-STATUS_JSON="$(sonar_api "${SONAR_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")"
+STATUS_JSON="$(wait_for_quality_gate_status 180 || true)"
 GATE_STATUS="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
 print(json.loads(payload).get("projectStatus",{}).get("status","")) if payload else print("")' "${STATUS_JSON}" 2>/dev/null || true)"
 

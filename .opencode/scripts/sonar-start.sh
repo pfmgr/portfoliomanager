@@ -83,7 +83,7 @@ if [[ -z "${PORT_OVERRIDE}" && -f "${RUNTIME_ENV}" ]]; then
   EXISTING_SONAR_TOKEN_NAME=""
   set -a
   # shellcheck disable=SC1090
-  source "${RUNTIME_ENV}"
+  source "${RUNTIME_ENV}" 2>/dev/null || true
   set +a
   EXISTING_COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
   EXISTING_SONAR_PORT="${SONAR_PORT:-}"
@@ -162,13 +162,59 @@ is_true() {
 
 write_runtime_env() {
   cat > "${RUNTIME_ENV}" <<EOF
-REPO_PREFIX=${REPO_PREFIX}
-COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
-SONAR_PORT=${SONAR_PORT}
-SONAR_URL=${SONAR_URL}
-SONAR_TOKEN=${SONAR_TOKEN}
-SONAR_TOKEN_NAME=${SONAR_TOKEN_NAME}
+REPO_PREFIX=$(printf '%q' "${REPO_PREFIX}")
+COMPOSE_PROJECT_NAME=$(printf '%q' "${COMPOSE_PROJECT_NAME}")
+SONAR_PORT=$(printf '%q' "${SONAR_PORT}")
+SONAR_URL=$(printf '%q' "${SONAR_URL}")
+SONAR_TOKEN=$(printf '%q' "${SONAR_TOKEN}")
+SONAR_TOKEN_NAME=$(printf '%q' "${SONAR_TOKEN_NAME}")
+SONAR_DEFAULT_QUALITY_GATE=$(printf '%q' "${DEFAULT_QUALITY_GATE}")
 EOF
+}
+
+count_quality_gates_named() {
+  local gates_json="$1"
+  local gate_name="$2"
+
+  "${PYTHON_BIN}" -c 'import json,sys
+payload=sys.argv[1] if len(sys.argv)>1 else ""
+target=sys.argv[2] if len(sys.argv)>2 else ""
+data=json.loads(payload) if payload else {}
+print(sum(1 for gate in data.get("qualitygates", []) if gate.get("name") == target))' "${gates_json}" "${gate_name}" 2>/dev/null || printf '0'
+}
+
+resolve_default_quality_gate_name() {
+  if [[ -z "${DEFAULT_QUALITY_GATE}" ]]; then
+    return 0
+  fi
+
+  local gates_json
+  local duplicate_count
+  local candidate
+  local suffix
+  local attempt
+
+  gates_json="$(sonar_api "${SONAR_URL}/api/qualitygates/list" || true)"
+  if [[ -z "${gates_json}" ]]; then
+    log "Warning: unable to inspect quality gates for duplicate names."
+    return 0
+  fi
+
+  duplicate_count="$(count_quality_gates_named "${gates_json}" "${DEFAULT_QUALITY_GATE}")"
+  if [[ "${duplicate_count}" -le 1 ]]; then
+    return 0
+  fi
+
+  suffix="${REPO_PREFIX}"
+  candidate="${DEFAULT_QUALITY_GATE} ${suffix}"
+  attempt=2
+  while [[ "$(count_quality_gates_named "${gates_json}" "${candidate}")" -gt 0 ]]; do
+    candidate="${DEFAULT_QUALITY_GATE} ${suffix} ${attempt}"
+    attempt=$((attempt + 1))
+  done
+
+  log "Warning: found ${duplicate_count} quality gates named '${DEFAULT_QUALITY_GATE}'. Using fallback gate name '${candidate}'."
+  DEFAULT_QUALITY_GATE="${candidate}"
 }
 
 token_is_valid() {
@@ -381,6 +427,8 @@ configure_default_quality_gate() {
     return 0
   fi
 
+  resolve_default_quality_gate_name
+
   GATES_JSON="$(sonar_api "${SONAR_URL}/api/qualitygates/list" || true)"
   if [[ -z "${GATES_JSON}" ]]; then
     log "Warning: unable to read quality gates; skipping default gate setup."
@@ -421,8 +469,8 @@ print(next((g.get("name","") for g in data.get("qualitygates",[]) if g.get("isDe
       log "Default quality gate already set to '${DEFAULT_QUALITY_GATE}'."
       return 0
     fi
-    log "Error: unable to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
-    exit 5
+    log "Warning: unable to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
+    return 0
   fi
 
   GATE_ID="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
@@ -437,8 +485,8 @@ print(next((str(g.get("id","")) for g in data.get("qualitygates",[]) if g.get("n
       log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
       return 0
     fi
-    log "Error: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
-    exit 5
+    log "Warning: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
+    return 0
   fi
 
   if [[ -n "${GATE_ID}" ]] && sonar_api -X POST \
@@ -448,12 +496,12 @@ print(next((str(g.get("id","")) for g in data.get("qualitygates",[]) if g.get("n
       log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
       return 0
     fi
-    log "Error: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
-    exit 5
+    log "Warning: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
+    return 0
   fi
 
-  log "Error: failed to set default quality gate '${DEFAULT_QUALITY_GATE}'."
-  exit 5
+  log "Warning: failed to set default quality gate '${DEFAULT_QUALITY_GATE}'. Continuing without changing SonarQube global default."
+  return 0
 }
 
 write_runtime_env
@@ -465,8 +513,8 @@ if [[ "${REUSE_RUNNING}" == "true" ]]; then
     echo "Unable to ensure SonarQube token." >&2
     exit 4
   fi
-  write_runtime_env
   configure_default_quality_gate
+  write_runtime_env
   log "SonarQube is already running and quality gate policy is ensured."
   echo "SONAR_PORT=${SONAR_PORT}"
   echo "SONAR_URL=${SONAR_URL}"
@@ -476,8 +524,12 @@ fi
 
 log "Starting SonarQube stack (${COMPOSE_PROJECT_NAME}) on port ${SONAR_PORT}..."
 if ! docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" up -d; then
-  echo "Failed to start SonarQube stack." >&2
-  exit 4
+  log "Warning: initial SonarQube startup failed; cleaning up existing stack artifacts and retrying once."
+  docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" down --remove-orphans >/dev/null 2>&1 || true
+  if ! docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" up -d; then
+    echo "Failed to start SonarQube stack." >&2
+    exit 4
+  fi
 fi
 
 deadline=$((SECONDS + TIMEOUT_SECONDS))
@@ -487,8 +539,8 @@ while (( SECONDS < deadline )); do
       echo "Unable to ensure SonarQube token." >&2
       exit 4
     fi
-    write_runtime_env
     configure_default_quality_gate
+    write_runtime_env
     log "SonarQube is UP."
     echo "SONAR_PORT=${SONAR_PORT}"
     echo "SONAR_URL=${SONAR_URL}"
@@ -502,4 +554,3 @@ echo "SonarQube did not become ready within ${TIMEOUT_SECONDS}s." >&2
 docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=200 sonarqube || true
 docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=200 sonar_db || true
 exit 3
-
