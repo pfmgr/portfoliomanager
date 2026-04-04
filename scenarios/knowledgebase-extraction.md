@@ -5,6 +5,20 @@
 - KB extraction enriches instruments and dossiers and feeds downstream classification, rebalancer, and assessor workflows.
 - Verification skill: `scenario-lifecycle` - keep Knowledge Base extraction docs, tests, and downstream scenarios aligned after feature changes.
 
+## Preconditions
+
+- KB runtime checks require `KB_ENABLED=true`, an enabled provider configuration, and valid admin credentials on the standard stack.
+- Standard stack tests must derive backend and frontend URLs from `.env` plus `docker-compose.yml` instead of assuming isolated E2E ports.
+- Dossier approval and blacklist checks require seeded dossiers and extraction rows.
+- Verification skills: `running-instance-smoke-tests` for standard-stack API checks, `frontend-running-stack-e2e-tests` for standard-stack browser checks, `frontend-e2e-tests` for isolated E2E coverage, and `knowledge-base-dossier-checks` for KB-specific runtime verification.
+
+## Minimal fixture set
+
+- One approved dossier with effective extraction data.
+- One pending-review dossier with a pending blacklist change.
+- One dossier eligible for extraction or missing-data completion.
+- One downstream consumer ISIN that rebalancer or assessor can read after approval.
+
 ## Core behavior
 
 - On import and reclassification, KB extraction data by ISIN has precedence over ruleset output.
@@ -14,6 +28,21 @@
 - Missing-data patch can be triggered for a dossier and fills only absent fields while preserving existing structure.
 - Approved dossier blacklist policy is configured in KB dossier detail and becomes effective only after dossier approval or auto-approval.
 - Verification skill: `backend-junit-tests` - validate extraction lifecycle, blacklist activation timing, and downstream state synchronization.
+
+## Canonical runtime flow
+
+1. Authenticate through `/auth/token` and verify protected KB endpoint access.
+2. Read dossier list and detail endpoints for the seeded fixtures.
+3. Start one extraction or missing-data completion request and capture the runtime response.
+4. Approve or inspect the resulting dossier state through protected KB endpoints.
+5. Verify that downstream KB-dependent state becomes visible to assessor or rebalancer only after the effective approval state is reached.
+
+## Canonical assertions
+
+- Protected KB endpoints return `503` when the required KB or provider configuration is disabled and succeed when enabled.
+- Pending blacklist changes remain visible but inactive until dossier approval or auto-approval occurs.
+- Approved extraction state is reflected in downstream eligibility checks.
+- Import and backup flows do not overwrite unrelated runtime LLM configuration.
 
 ## APIs
 
@@ -62,6 +91,21 @@
   - blacklist status
 - Pending blacklist changes are visible in the UI but do not count as effective until approval or auto-approval.
 - Verification skill: `knowledge-base-dossier-checks` - exercise dossier list sort/filter behavior and pending-versus-effective state transitions.
+
+## UI
+
+- Route: `/knowledge-base`
+- Stable UI oracles: dossier filter summary when collapsed, blacklist requested versus effective state, approval status, and extraction freshness markers.
+- Verification skill: `frontend-vitest-tests` - cover KB list and detail rendering with mocked payloads.
+- Verification skill: `frontend-e2e-tests` - keep a small number of isolated-stack UI flows for dossier list, detail, and approval transitions.
+
+## Test layer mapping
+
+- `frontend-vitest-tests`: cover filter state, list rendering, and pending-versus-effective blacklist presentation with mocked responses.
+- `backend-junit-tests`: cover extraction lifecycle, approval state transitions, schema interactions, and downstream synchronization.
+- `running-instance-smoke-tests`: verify auth, protected KB endpoint access, and one changed runtime approval or extraction path on the standard stack.
+- `frontend-running-stack-e2e-tests`: reuse the running standard stack for browser checks when seeded KB dossiers already exist there.
+- `knowledge-base-dossier-checks`: use seeded running-stack checks for dossier detail, approval, blacklist, and list behavior.
 
 ## Code map
 

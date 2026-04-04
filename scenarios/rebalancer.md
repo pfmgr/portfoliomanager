@@ -5,6 +5,14 @@
 - Rebalancer computes deterministic allocation proposals across portfolio layers and records run history. LLM output is optional and only used for narrative and explanation.
 - Verification skill: `scenario-lifecycle` - keep rebalancer docs, tests, and runtime verification aligned when proposal behavior changes.
 
+## Preconditions
+
+- Standard stack runtime checks use `.env` plus `docker-compose.yml` and must derive frontend/backend URLs from the running `admin_frontend` and `admin_spring` bindings.
+- Runtime checks require valid admin credentials for `/auth/token` and a seeded portfolio state with at least one active saving plan.
+- Instrument-level proposal tests require KB extraction state to be present for eligible ISINs.
+- Verification skills: `running-instance-smoke-tests` for standard-stack API checks, `frontend-running-stack-e2e-tests` for standard-stack browser checks, and `frontend-e2e-tests` for the isolated E2E stack.
+- Use `running-stack-fixtures` before standard-stack rebalancer browser checks when the blacklist runtime fixture set is not already seeded.
+
 ## Core behavior
 
 - Uses layer target profiles from `services/app/backend/src/main/resources/layer_targets.json`.
@@ -28,9 +36,36 @@
 - In this conflict case, blacklist decisions remain available because they are instrument-scoped and do not need depot selection.
 - Verification skill: `backend-junit-tests` - validate instrument proposal redistribution, discard reasons, and gating behavior in deterministic service tests.
 
+## Minimal fixture set
+
+- One active profile in `layer_target_config`.
+- One or more active saving plans across at least one depot.
+- One KB-approved instrument eligible for a positive proposal.
+- One blacklisted instrument with an existing saving plan so the result contains a zero-amount discard row.
+- Optional duplicate active saving plans for the same ISIN across multiple depots for conflict validation.
+
+## Canonical runtime flow
+
+1. Authenticate through `/auth/token` and verify a protected endpoint before starting the scenario-specific run.
+2. Read `/api/layer-targets` to capture the active profile and constraints.
+3. Trigger a protected rebalancer run and store the returned job identifier.
+4. Poll the run endpoint until a terminal result is available.
+5. Assert that KB gating, blacklist-driven zero proposals, and visible reason text are present in the result when fixtures demand them.
+6. Submit one approval set via `POST /api/sparplans/apply-approvals` and verify the resulting saving-plan state or validation error.
+
+## Canonical assertions
+
+- Protected rebalancer calls succeed only with a valid JWT.
+- Blacklisted instruments appear with proposed amount `0 EUR`, reason code `BLACKLISTED_FROM_SAVING_PLAN_PROPOSALS`, and user-visible rationale `Blacklisted from Saving Plan Proposals`.
+- Apply without required depot selection is rejected.
+- Ambiguous multi-depot matches fail with a clear validation error instead of silently distributing the proposal.
+- Newly created saving plans preserve the proposal layer in the effective instrument view.
+
 ## APIs
 
-- `GET /api/rebalancer/**` (analysis/history/reclassifications)
+- `POST /api/rebalancer/run`
+- `GET /api/rebalancer/run/{jobId}`
+- `GET /api/rebalancer/history`
 - `POST /api/sparplans/apply-approvals` for persisting selected rebalancer saving-plan proposals.
 - `GET /api/layer-targets`
 - `PUT /api/layer-targets`
@@ -47,11 +82,22 @@
 
 ## UI
 
+- Route: `/rebalancer`
 - `services/app/frontend/src/views/RebalancerView.vue`
 - `services/app/frontend/src/components/SavingPlanApprovalsPanel.vue`
 - `services/app/frontend/src/views/RebalancerHistoryView.vue`
 - `services/app/frontend/src/views/ProfileConfigurationView.vue`
+- Stable UI oracles: `Apply Approvals`, `Discard`, `Blacklisted from Saving Plan Proposals`, and the `Rebalancing Proposal (Savings plan amounts, EUR)` table.
 - Verification skill: `frontend-vitest-tests` - confirm discard action badges, reason text, and proposal table rendering.
+
+## Test layer mapping
+
+- `frontend-vitest-tests`: cover proposal-table rendering, profile form state, and discard labeling using mocked API payloads.
+- `backend-junit-tests`: cover deterministic target computation, run history persistence, gating, and apply-approval validation.
+- `running-instance-smoke-tests`: verify auth, protected rebalancer access, one seeded run, and one changed apply or discard runtime path on the standard stack.
+- `running-stack-fixtures`: seed and reset the reusable rebalancer runtime fixture rows on the standard stack.
+- `frontend-running-stack-e2e-tests`: run real browser verification against the already running standard stack when suitable fixtures exist there.
+- `frontend-e2e-tests`: keep isolated-stack user journeys for full browser coverage across frontend and backend.
 
 ## Savings plan proposal table semantics
 
@@ -92,6 +138,7 @@
 - Applying a proposal for a soft-deleted instrument must reactivate the instrument instead of duplicating it.
 - Ambiguous existing saving plans for the same ISIN across multiple depots must fail apply with a clear validation error.
 - The layer shown after apply must match the rebalancer proposal layer for new saving plans.
+- Verification skill: `frontend-running-stack-e2e-tests` - reuse the running standard stack for browser flows once fixtures cover blacklist and apply paths.
 - Verification skill: `frontend-e2e-tests` - exercise discard presentation, gated states, and zero-proposal edge conditions end to end.
 
 ## LLM narrative config

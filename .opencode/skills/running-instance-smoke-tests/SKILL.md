@@ -15,22 +15,29 @@ Use this skill for quick runtime validation against a live local instance.
 
 ## Preconditions
 
-- Stack is running (`docker compose up -d`).
+- Stack is running from repo root `docker-compose.yml`.
 - Credentials are available in `.env` (`ADMIN_USER`, `ADMIN_PASS`).
+- Host and port bindings may differ by `.env`; do not hardcode `127.0.0.1:8089` when executing this skill.
 
-## Smoke test flow
+## Preferred command
 
-1. Health endpoint:
-   - `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8089/auth/health`
-   - Expect `200`.
-2. Login and capture JWT:
-   - `curl -s -X POST http://127.0.0.1:8089/auth/token -H "Content-Type: application/json" -d '{"username":"<ADMIN_USER>","password":"<ADMIN_PASS>"}'`
-3. Access protected endpoint with JWT:
-   - `curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer <TOKEN>" http://127.0.0.1:8089/api/rulesets`
-   - Expect `200`.
-4. Logout:
-   - `curl -s -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer <TOKEN>" http://127.0.0.1:8089/auth/logout`
-   - Expect `204`.
-5. Reuse revoked token:
-   - same protected endpoint call as step 3
-   - Expect `401`.
+- `services/app/scripts/run-running-stack-smoke.sh`
+- This loads `.env`, derives frontend/backend URLs from the current standard-stack bindings, checks readiness, performs login, calls a protected API, logs out, and verifies token revocation.
+
+## Script building blocks
+
+- Readiness only:
+  - `services/app/scripts/check-running-stack-ready.sh`
+- Login and print JWT:
+  - `services/app/scripts/auth-login.sh`
+- Override the protected endpoint when the scenario needs a different protected check:
+  - `SMOKE_PROTECTED_PATH=/api/<scenario-path> services/app/scripts/run-running-stack-smoke.sh`
+
+## Manual alternative
+
+1. Load `.env` and resolve the current auth URL from the standard-stack bindings.
+2. Check the auth health endpoint.
+3. Login with `.env` credentials and capture the returned JWT from `$.token`.
+4. Call a protected endpoint with `Authorization: Bearer <TOKEN>` and expect `200`.
+5. Logout and expect `204`.
+6. Reuse the revoked token and expect `401`.

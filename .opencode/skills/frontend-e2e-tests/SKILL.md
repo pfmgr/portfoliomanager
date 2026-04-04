@@ -7,6 +7,8 @@ description: Run Playwright E2E tests against the isolated test stack
 
 Use this skill for end-to-end verification of UI flows across frontend + backend.
 
+- Use `frontend-running-stack-e2e-tests` instead when the standard stack is already running and must be reused as-is.
+
 ## Scenario-first test scope
 
 - Select E2E flows from relevant `scenarios/*.md`.

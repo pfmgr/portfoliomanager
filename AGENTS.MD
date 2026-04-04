@@ -81,6 +81,7 @@ Feature-level behavior and edge cases are documented in scenario files:
 
 - `scenarios/rebalancer.md`
 - `scenarios/assessor.md`
+- `scenarios/saving-plans.md`
 - `scenarios/knowledgebase-extraction.md`
 - `scenarios/llm-websearch.md`
 
@@ -91,6 +92,10 @@ OpenCode command wrappers for these scenarios are available in `.opencode/comman
 - Scenario updates are required for every feature change.
   - If an existing feature behavior changes, update the corresponding `scenarios/*.md` in the same task.
   - If a new feature is introduced, create a new `scenarios/<feature>.md` in the same task.
+- Scenario updates must also keep verification skills current.
+  - If an existing skill still matches the new behavior, reference that skill explicitly from the scenario section that owns the behavior.
+  - If no existing skill cleanly covers the new workflow, add or extend a `.opencode/skills/*/SKILL.md` file in the same task.
+  - Prefer scenario references to skills over raw script paths so agents can execute the right workflow without rediscovering commands.
 - Implementation plans must include scenario work explicitly (create/update scenario + tests derived from scenario).
 - Test planning must always be scenario-driven:
   - Derive test cases from scenario sections such as core behavior, API contracts, data dependencies, and edge cases.
@@ -179,7 +184,9 @@ Build/test/run instructions are maintained in OpenCode skills:
 - `.opencode/skills/backend-junit-tests/SKILL.md`
 - `.opencode/skills/frontend-vitest-tests/SKILL.md`
 - `.opencode/skills/frontend-e2e-tests/SKILL.md`
+- `.opencode/skills/frontend-running-stack-e2e-tests/SKILL.md`
 - `.opencode/skills/running-instance-smoke-tests/SKILL.md`
+- `.opencode/skills/running-stack-fixtures/SKILL.md`
 
 OpenCode command wrappers for scenario loading are under `.opencode/commands/`.
 
@@ -250,6 +257,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - **Feature scenarios (source of truth)**:
   - `scenarios/rebalancer.md`
   - `scenarios/assessor.md`
+  - `scenarios/saving-plans.md`
   - `scenarios/knowledgebase-extraction.md`
   - `scenarios/llm-websearch.md`
 
@@ -284,6 +292,7 @@ Use the Admin UI (Import page). The upload updates instruments, applies rules, a
 - Add a short instruction in AGENTS.MD whenever new agent actions/configuration require special coordination, ensuring future sessions know to adjust this file proactively.
 - In case of missmatches between AGENTS.MD, other documentation and the real project contents always update AGENTS.MD and documentation to match the reality.
 - Treat `scenarios/*.md` as required living docs for feature behavior; every feature change/new feature must update or add scenarios in the same change set.
+- Treat `.opencode/skills/*/SKILL.md` as required living docs for executable agent workflows; every new runtime/test workflow must update or add a skill in the same change set when existing skills are insufficient.
 
 ---
 
@@ -361,6 +370,7 @@ Findings (3-10):
 
 - Whenever you learn something new that affects coordination (new requirements, tooling behavior, environment quirks, or handover notes), add a short entry to AGENTS.MD describing the change. Treat this guide as living documentation so future sessions automatically benefit from the latest context and avoid repeating the same problems.
 - Keep `.opencode/skills/*/SKILL.md` and `scenarios/*.md` aligned with reality.
+- For new feature requirements, extend the owning `scenarios/*.md` and attach the relevant verification skills there. If a required verification flow has no suitable skill yet, create or extend the skill before considering the task complete.
 
 ## 14) Knowledge Base notes
 
