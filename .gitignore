@@ -4,6 +4,7 @@
 .settings/
 .jdk-temurin-25/
 e2e/test-results*/
+test-results/
 .jdk-temurin-25/
 .env
 # Byte-compiled / optimized / DLL files
@@ -213,4 +214,3 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-

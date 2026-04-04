@@ -577,7 +577,7 @@ test('llm configuration view shows standard-based default status', async ({ page
   await page.goto('/llm-configuration')
   await expect(page.getByRole('heading', { name: 'LLM Configuration' })).toBeVisible()
   await expect(page.getByText('API key configured: No')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Add API key' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Set API key' })).toBeVisible()
   await expect(page.locator('#standard-api-key-editor')).toHaveCount(0)
   await expect(page.getByText('Standard API key is not configured.').first()).toBeVisible()
 })
@@ -585,10 +585,17 @@ test('llm configuration view shows standard-based default status', async ({ page
 test('llm configuration opens and closes the key editor explicitly', async ({ page }) => {
   await page.goto('/llm-configuration')
 
-  await page.getByRole('button', { name: 'Add API key' }).click()
+  await page.getByRole('button', { name: 'Set API key' }).click()
   await expect(page.locator('#standard-api-key-editor')).toBeVisible()
-  await expect(page.getByText("Changes are saved when you click 'Save LLM configuration'.").first()).toBeVisible()
 
   await page.locator('#standard-api-key-editor').getByRole('button', { name: 'Cancel' }).click()
   await expect(page.locator('#standard-api-key-editor')).toHaveCount(0)
+})
+
+test('llm configuration shows a pending status after switching websearch to custom', async ({ page }) => {
+  await page.goto('/llm-configuration')
+  const websearchCard = page.locator('.llm-function-card').filter({ has: page.getByRole('heading', { name: 'Websearch' }) })
+
+  await websearchCard.getByRole('combobox').selectOption('CUSTOM')
+  await expect(websearchCard.getByText('Pending: custom configuration')).toBeVisible()
 })

@@ -45,9 +45,10 @@ describe('LlmConfigurationView', () => {
 
     expect(wrapper.text()).toContain('LLM Configuration')
     expect(wrapper.text()).toContain('API key configured: Yes')
+    expect(wrapper.text()).toContain('Saved: standard configuration')
     expect(wrapper.find('#standard-api-key-editor').exists()).toBe(false)
 
-    const openButton = wrapper.findAll('button').find((button) => button.text() === 'Replace API key')
+    const openButton = wrapper.findAll('button').find((button) => button.text() === 'Edit API key')
     await openButton.trigger('click')
     await flushPromises()
 
@@ -68,7 +69,7 @@ describe('LlmConfigurationView', () => {
     const wrapper = mount(LlmConfigurationView)
     await flushPromises()
 
-    const openButton = wrapper.findAll('button').find((button) => button.text() === 'Replace API key')
+    const openButton = wrapper.findAll('button').find((button) => button.text() === 'Edit API key')
     await openButton.trigger('click')
     await flushPromises()
     await wrapper.find('#standard-api-key-editor input[type="password"]').setValue('temporary-secret')
@@ -139,6 +140,8 @@ describe('LlmConfigurationView', () => {
     await narrativeSelect.setValue('STANDARD')
     await flushPromises()
 
+    expect(wrapper.text()).toContain('Pending: standard configuration')
+    expect(wrapper.text()).toContain('Save to apply this change.')
     expect(wrapper.text()).toContain('Saving this change will remove the saved custom API key.')
 
     const saveButton = wrapper.findAll('button').find((button) => button.text().includes('Save LLM configuration'))
@@ -166,9 +169,12 @@ describe('LlmConfigurationView', () => {
     const wrapper = mount(LlmConfigurationView)
     await flushPromises()
 
+    expect(wrapper.text()).toContain('Saved: custom configuration')
+
     const functionCards = wrapper.findAll('.llm-function-card')
     const websearchCard = functionCards.find((card) => card.text().includes('Websearch'))
-    const replaceButton = websearchCard.findAll('button').find((button) => button.text() === 'Replace API key')
+
+    const replaceButton = websearchCard.findAll('button').find((button) => button.text() === 'Edit API key')
     await replaceButton.trigger('click')
     await flushPromises()
 
@@ -200,6 +206,12 @@ describe('LlmConfigurationView', () => {
     const wrapper = mount(LlmConfigurationView)
     await flushPromises()
 
+    const functionCards = wrapper.findAll('.llm-function-card')
+    const websearchCard = functionCards.find((card) => card.text().includes('Websearch'))
+    const modeSelect = websearchCard.find('select.input')
+    await modeSelect.setValue('CUSTOM')
+    await flushPromises()
+
     const saveButton = wrapper.findAll('button').find((button) => button.text().includes('Save LLM configuration'))
     await saveButton.trigger('click')
     await flushPromises()
@@ -207,6 +219,20 @@ describe('LlmConfigurationView', () => {
     const putCall = apiRequest.mock.calls.find(([path, options]) => path === '/llm/config' && options?.method === 'PUT')
     const payload = JSON.parse(putCall[1].body)
     expect(payload.websearch.api_key).toBeNull()
+  })
+
+  it('shows a pending custom state when switching from standard to custom', async () => {
+    mockApi()
+    const wrapper = mount(LlmConfigurationView)
+    await flushPromises()
+
+    const websearchCard = wrapper.findAll('.llm-function-card').find((card) => card.text().includes('Websearch'))
+    const modeSelect = websearchCard.find('select.input')
+    await modeSelect.setValue('CUSTOM')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Pending: custom configuration')
+    expect(wrapper.text()).toContain('Save to apply this change.')
   })
 
   it('shows read-only state when backend disables editing', async () => {

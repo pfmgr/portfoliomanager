@@ -3,6 +3,7 @@
     <div class="card">
       <h2>LLM Configuration</h2>
       <p>Configure the standard LLM and optional custom setups for individual functions.</p>
+      <p class="note small">API keys are write-only. Edit them only when needed, then save the configuration.</p>
       <p class="toast error">
         Full database backups include this LLM configuration. Exported backups currently contain LLM API keys in
         plaintext.
@@ -41,7 +42,7 @@
           :disabled="!canEditLlm"
           @click="openStandardApiKeyEditor"
         >
-          {{ llmStandard.apiKeyConfigured ? 'Replace API key' : 'Add API key' }}
+          {{ llmStandard.apiKeyConfigured ? 'Edit API key' : 'Set API key' }}
         </button>
         <button
           v-if="llmStandard.apiKeyConfigured"
@@ -58,7 +59,7 @@
       </p>
       <div v-if="llmStandard.apiKeyEditorOpen" id="standard-api-key-editor" class="secret-editor">
         <label class="field">
-          <span>{{ llmStandard.apiKeyConfigured ? 'Replace API key' : 'Add API key' }}</span>
+          <span>API key</span>
           <input
             ref="standardApiKeyInput"
             v-model="llmStandard.apiKeyInput"
@@ -69,8 +70,6 @@
             @input="llmStandard.clearApiKey = false"
           />
         </label>
-        <p class="note small">Existing API key is never shown.</p>
-        <p class="note small">Changes are saved when you click 'Save LLM configuration'.</p>
         <div class="actions compact-actions">
           <button type="button" class="secondary" :disabled="!canEditLlm" @click="cancelStandardApiKeyEdit">
             Cancel
@@ -81,30 +80,31 @@
       <h3>Function configurations</h3>
       <div v-for="functionKey in llmFunctionKeys" :key="functionKey" class="llm-function-card">
         <h4>{{ llmFunctionLabel(functionKey) }}</h4>
-        <div class="llm-status-row">
-          <span :class="['llm-badge', llmEffectiveStatus(functionKey).enabled ? 'ok' : 'warn']">
-            Effective: {{ llmEffectiveStatus(functionKey).enabled ? 'Enabled' : 'Disabled' }}
-          </span>
-          <span class="note" v-if="llmEffectiveStatus(functionKey).reason">
-            {{ llmEffectiveStatus(functionKey).reason }}
-          </span>
-        </div>
-
         <label class="field">
           <span>Mode</span>
           <select
             class="input"
             :disabled="!canEditLlm"
-            v-model="llmFunctions[functionKey].mode"
-            @change="onFunctionModeChanged(functionKey)"
+            :value="llmFunctions[functionKey].mode"
+            @input="setFunctionMode(functionKey, $event.target.value)"
+            @change="setFunctionMode(functionKey, $event.target.value)"
           >
             <option value="STANDARD">Use standard configuration</option>
             <option value="CUSTOM">Use custom configuration</option>
           </select>
         </label>
 
+        <div class="llm-status-row">
+          <span :class="['llm-badge', functionStatuses[functionKey].badgeClass]">
+            {{ functionStatuses[functionKey].label }}
+          </span>
+          <span class="note" v-if="functionStatuses[functionKey].note">
+            {{ functionStatuses[functionKey].note }}
+          </span>
+        </div>
+
         <p v-if="llmFunctions[functionKey].mode === 'STANDARD'" class="note small">
-          Uses provider, model, base URL, and API key from the standard configuration.
+          Uses the saved standard provider, model, base URL, and API key.
         </p>
         <p v-if="showsCustomKeyRemovalWarning(functionKey)" class="toast error">
           Saving this change will remove the saved custom API key.
@@ -137,7 +137,7 @@
             :disabled="!canEditLlm"
             @click="openFunctionApiKeyEditor(functionKey)"
           >
-            {{ llmFunctions[functionKey].custom.apiKeyConfigured ? 'Replace API key' : 'Add API key' }}
+            {{ llmFunctions[functionKey].custom.apiKeyConfigured ? 'Edit API key' : 'Set API key' }}
           </button>
           <button
             v-if="llmFunctions[functionKey].custom.apiKeyConfigured"
@@ -158,7 +158,7 @@
           class="secret-editor"
         >
           <label class="field">
-            <span>{{ llmFunctions[functionKey].custom.apiKeyConfigured ? 'Replace API key' : 'Add API key' }}</span>
+            <span>API key</span>
             <input
               :ref="(element) => registerFunctionApiKeyInput(functionKey, element)"
               v-model="llmFunctions[functionKey].custom.apiKeyInput"
@@ -169,8 +169,6 @@
               @input="llmFunctions[functionKey].custom.clearApiKey = false"
             />
           </label>
-          <p class="note small">Existing API key is never shown.</p>
-          <p class="note small">Changes are saved when you click 'Save LLM configuration'.</p>
           <div class="actions compact-actions">
             <button type="button" class="secondary" :disabled="!canEditLlm" @click="cancelFunctionApiKeyEdit(functionKey)">
               Cancel
@@ -218,6 +216,13 @@ const standardApiKeyBadgeText = computed(() => {
   return `API key configured: ${llmStandard.value.apiKeyConfigured ? 'Yes' : 'No'}`
 })
 const standardApiKeyBadgeClass = computed(() => (llmStandard.value.clearApiKey ? 'warn' : llmStandard.value.apiKeyConfigured ? 'ok' : 'warn'))
+const functionStatuses = computed(() => {
+  const statuses = {}
+  llmFunctionKeys.forEach((key) => {
+    statuses[key] = computeFunctionStatus(llmFunctions.value[key])
+  })
+  return statuses
+})
 
 onMounted(() => {
   loadLlmConfig()
@@ -281,7 +286,11 @@ function buildDefaultLlmCustomConfig() {
     apiKeyConfigured: false,
     apiKeyInput: '',
     clearApiKey: false,
-    apiKeyEditorOpen: false
+    apiKeyEditorOpen: false,
+    savedProvider: '',
+    savedBaseUrl: '',
+    savedModel: '',
+    savedApiKeyConfigured: false
   }
 }
 
@@ -339,7 +348,11 @@ function applyLlmResponse(raw) {
         apiKeyConfigured: Boolean(functionRaw.apiKeyConfigured ?? functionRaw.api_key_configured ?? functionRaw.api_key_set),
         apiKeyInput: '',
         clearApiKey: false,
-        apiKeyEditorOpen: false
+        apiKeyEditorOpen: false,
+        savedProvider: normalizeText(customRaw.provider),
+        savedBaseUrl: normalizeText(customRaw.baseUrl ?? customRaw.base_url),
+        savedModel: normalizeText(customRaw.model),
+        savedApiKeyConfigured: Boolean(functionRaw.apiKeyConfigured ?? functionRaw.api_key_configured ?? functionRaw.api_key_set)
       },
       effectiveEnabled,
       effectiveReason
@@ -414,6 +427,10 @@ function clearLlmTransientKeyEditors() {
     entry.custom.apiKeyEditorOpen = false
     entry.custom.clearApiKey = false
     entry.savedMode = entry.mode
+    entry.custom.savedProvider = entry.custom.provider
+    entry.custom.savedBaseUrl = entry.custom.baseUrl
+    entry.custom.savedModel = entry.custom.model
+    entry.custom.savedApiKeyConfigured = entry.custom.apiKeyConfigured
   })
 }
 
@@ -448,14 +465,23 @@ function keepStandardApiKey() {
   llmStandard.value.clearApiKey = false
 }
 
-function onFunctionModeChanged(functionKey) {
+function setFunctionMode(functionKey, modeValue) {
   const entry = llmFunctions.value[functionKey]
   if (!entry) return
-  entry.mode = normalizeLlmMode(entry.mode)
-  if (entry.mode === 'STANDARD') {
-    entry.custom.apiKeyInput = ''
-    entry.custom.apiKeyEditorOpen = false
-    entry.custom.clearApiKey = false
+  const nextMode = normalizeLlmMode(modeValue)
+  const nextCustom = { ...entry.custom }
+  if (nextMode === 'STANDARD') {
+    nextCustom.apiKeyInput = ''
+    nextCustom.apiKeyEditorOpen = false
+    nextCustom.clearApiKey = false
+  }
+  llmFunctions.value = {
+    ...llmFunctions.value,
+    [functionKey]: {
+      ...entry,
+      mode: nextMode,
+      custom: nextCustom
+    }
   }
 }
 
@@ -531,15 +557,38 @@ function llmFunctionLabel(functionKey) {
   return functionKey
 }
 
-function llmEffectiveStatus(functionKey) {
-  const entry = llmFunctions.value[functionKey]
+function computeFunctionStatus(entry) {
   if (!entry) {
-    return { enabled: false, reason: '' }
+    return { badgeClass: 'warn', label: 'Saved: standard configuration', note: '' }
   }
+  if (!isFunctionDirty(entry)) {
+    const savedLabel = entry.mode === 'CUSTOM' ? 'Saved: custom configuration' : 'Saved: standard configuration'
+    return {
+      badgeClass: entry.effectiveEnabled ? 'ok' : 'warn',
+      label: savedLabel,
+      note: entry.effectiveReason
+    }
+  }
+
   return {
-    enabled: Boolean(entry.effectiveEnabled),
-    reason: entry.effectiveReason
+    badgeClass: 'warn',
+    label: entry.mode === 'CUSTOM' ? 'Pending: custom configuration' : 'Pending: standard configuration',
+    note: 'Save to apply this change.'
   }
+}
+
+function isFunctionDirty(entry) {
+  if (!entry) return false
+  if (entry.mode !== entry.savedMode) return true
+  const custom = entry.custom || {}
+  return (
+    normalizeText(custom.provider) !== normalizeText(custom.savedProvider) ||
+    normalizeText(custom.baseUrl) !== normalizeText(custom.savedBaseUrl) ||
+    normalizeText(custom.model) !== normalizeText(custom.savedModel) ||
+    Boolean(custom.apiKeyConfigured) !== Boolean(custom.savedApiKeyConfigured) ||
+    Boolean(custom.apiKeyInput) ||
+    Boolean(custom.clearApiKey)
+  )
 }
 
 function showsCustomKeyRemovalWarning(functionKey) {
