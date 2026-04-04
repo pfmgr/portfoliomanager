@@ -26,6 +26,10 @@ public class BackupController {
 		byte[] payload = backupService.exportBackup();
 		return ResponseEntity.ok()
 				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=backup.zip")
+				.header(HttpHeaders.CACHE_CONTROL, "no-store, no-cache, must-revalidate, private")
+				.header(HttpHeaders.PRAGMA, "no-cache")
+				.header(HttpHeaders.EXPIRES, "0")
+				.header("X-Content-Type-Options", "nosniff")
 				.contentType(MediaType.APPLICATION_OCTET_STREAM)
 				.body(payload);
 	}

@@ -51,8 +51,14 @@
     </div>
 
     <div class="section">
-      <h3>Database Backup</h3>
-      <p class="hint">Exports are versioned (v1) and each import replaces the entire database atomically.</p>
+      <h3>Full Database Backup</h3>
+      <p class="toast error">
+        Warning: full backup ZIPs include unencrypted LLM API keys. Store them securely and do not share them.
+      </p>
+      <p class="hint">
+        Full database backups are versioned (v2). Importing a full backup replaces application data atomically. Older
+        backups without saved LLM settings leave the current LLM configuration unchanged.
+      </p>
       <div class="actions">
         <button class="ghost" type="button" :disabled="backupBusy" @click="exportBackup">Export Backup</button>
         <label class="ghost file" :aria-disabled="!backupConfirmed">
@@ -68,13 +74,17 @@
       </div>
       <label class="checkbox" id="backup-import-warning">
         <input type="checkbox" v-model="backupConfirmed" />
-        I understand that importing a backup replaces every table in the database.
+        I understand that importing a full backup may replace LLM configuration and API keys when they are present in
+        the backup.
       </label>
     </div>
 
     <div class="section">
-      <h3>Knowledge Base Backup</h3>
-      <p class="hint">Exports include dossiers and extractions only. Importing replaces existing KB data.</p>
+      <h3>Knowledge Base (KB) Backup</h3>
+      <p class="hint">
+        Exports include dossiers and extractions only. They do not include LLM configuration or API keys. Importing
+        replaces existing KB data.
+      </p>
       <div class="actions">
         <button class="ghost" type="button" :disabled="kbBusy" @click="exportKnowledgeBase">Export Knowledge Base</button>
         <label class="ghost file" :aria-disabled="!kbConfirmed">
@@ -210,7 +220,7 @@ async function exportBackup() {
     link.download = 'database-backup.zip'
     link.click()
     window.URL.revokeObjectURL(url)
-    message.value = 'Backup exported (format v1).'
+    message.value = 'Backup exported (format v2).'
   } catch (err) {
     error.value = err.message || 'Backup export failed'
   } finally {
@@ -224,7 +234,7 @@ async function importBackup(event) {
     return
   }
   if (!backupConfirmed.value) {
-    error.value = 'Please confirm that importing a backup replaces all data.'
+    error.value = 'Please confirm that importing a backup replaces application data, including LLM configuration and API keys.'
     event.target.value = ''
     return
   }

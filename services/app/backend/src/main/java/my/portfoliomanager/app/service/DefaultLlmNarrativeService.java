@@ -13,26 +13,26 @@ import org.springframework.stereotype.Service;
 public class DefaultLlmNarrativeService implements LlmNarrativeService {
 	private static final Logger logger = LoggerFactory.getLogger(DefaultLlmNarrativeService.class);
 	private final LlmClient llmClient;
-	private final boolean enabled;
+	private final LlmActionSupport llmActionSupport;
+	private final boolean fallbackEnabled;
 
 	public DefaultLlmNarrativeService(LlmClient llmClient, ObjectProvider<LlmActionSupport> llmActionSupportProvider) {
 		this.llmClient = llmClient;
-		LlmActionSupport llmActionSupport = llmActionSupportProvider == null ? null : llmActionSupportProvider.getIfAvailable();
-		if (llmActionSupport != null) {
-			this.enabled = llmActionSupport.isConfiguredFor(LlmActionType.NARRATIVE);
-		} else {
-			this.enabled = !(llmClient instanceof NoopLlmClient);
-		}
+		this.llmActionSupport = llmActionSupportProvider == null ? null : llmActionSupportProvider.getIfAvailable();
+		this.fallbackEnabled = !(llmClient instanceof NoopLlmClient);
 	}
 
 	@Override
 	public boolean isEnabled() {
-		return enabled;
+		if (llmActionSupport != null) {
+			return llmActionSupport.isConfiguredFor(LlmActionType.NARRATIVE);
+		}
+		return fallbackEnabled;
 	}
 
 	@Override
 	public String suggestSavingPlanNarrative(String prompt) {
-		if (!enabled) {
+		if (!isEnabled()) {
 			return null;
 		}
 		try {

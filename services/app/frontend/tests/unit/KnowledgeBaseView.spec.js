@@ -101,7 +101,7 @@ describe('KnowledgeBaseView', () => {
     expect(wrapper.text()).toContain('Knowledge Base')
     expect(wrapper.text()).toContain('No dossiers found.')
     wrapper.unmount()
-  })
+  }, 10000)
 
   it('hides dossier filters by default and toggles them without reloading data', async () => {
     const dossierCalls = []

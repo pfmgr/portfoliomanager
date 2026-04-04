@@ -111,6 +111,44 @@ const stubApi = async (page) => {
         body: JSON.stringify({ enabled: true })
       })
     }
+    if (path === '/api/llm/config') {
+      if (route.request().method() === 'PUT') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            editable: true,
+            password_set: true,
+            standard: {
+              provider: 'openai',
+              base_url: 'https://api.openai.com/v1',
+              model: 'gpt-5-mini',
+              api_key_set: true
+            },
+            websearch: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: true, enabled: true },
+            extraction: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: true, enabled: true },
+            narrative: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: true, enabled: true }
+          })
+        })
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          editable: true,
+          password_set: true,
+          standard: {
+            provider: 'openai',
+            base_url: 'https://api.openai.com/v1',
+            model: 'gpt-5-mini',
+            api_key_set: false
+          },
+          websearch: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: false, enabled: false },
+          extraction: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: false, enabled: false },
+          narrative: { mode: 'STANDARD', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', api_key_set: false, enabled: false }
+        })
+      })
+    }
     if (path === '/api/kb/dossiers') {
       const query = (url.searchParams.get('q') || '').toLowerCase()
       const stale = url.searchParams.get('stale')
@@ -533,4 +571,31 @@ test('layer targets save custom overrides', async ({ page }) => {
 
   await expect(page.getByText('Layer targets saved.')).toBeVisible()
   await expect(page.getByText('Custom overrides are active.')).toBeVisible()
+})
+
+test('llm configuration view shows standard-based default status', async ({ page }) => {
+  await page.goto('/llm-configuration')
+  await expect(page.getByRole('heading', { name: 'LLM Configuration' })).toBeVisible()
+  await expect(page.getByText('API key configured: No')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Set API key' })).toBeVisible()
+  await expect(page.locator('#standard-api-key-editor')).toHaveCount(0)
+  await expect(page.getByText('Standard API key is not configured.').first()).toBeVisible()
+})
+
+test('llm configuration opens and closes the key editor explicitly', async ({ page }) => {
+  await page.goto('/llm-configuration')
+
+  await page.getByRole('button', { name: 'Set API key' }).click()
+  await expect(page.locator('#standard-api-key-editor')).toBeVisible()
+
+  await page.locator('#standard-api-key-editor').getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.locator('#standard-api-key-editor')).toHaveCount(0)
+})
+
+test('llm configuration shows a pending status after switching websearch to custom', async ({ page }) => {
+  await page.goto('/llm-configuration')
+  const websearchCard = page.locator('.llm-function-card').filter({ has: page.getByRole('heading', { name: 'Websearch' }) })
+
+  await websearchCard.getByRole('combobox').selectOption('CUSTOM')
+  await expect(websearchCard.getByText('Pending: custom configuration')).toBeVisible()
 })

@@ -42,7 +42,7 @@ COMPOSE_PROJECT_NAME=""
 if [[ -f "${RUNTIME_ENV}" ]]; then
   set -a
   # shellcheck disable=SC1090
-  source "${RUNTIME_ENV}"
+  source "${RUNTIME_ENV}" 2>/dev/null || true
   set +a
 fi
 

@@ -7,6 +7,7 @@ COMPOSE_FILE="${ROOT_DIR}/docker-compose.yml"
 E2E_BASE_URL="${E2E_BASE_URL:-http://127.0.0.1:18090}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/test-results-tmp}"
 AUTH_HEALTH_URL="${AUTH_HEALTH_URL:-http://127.0.0.1:18089/auth/health}"
+E2E_READY_TIMEOUT_SECONDS="${E2E_READY_TIMEOUT_SECONDS:-180}"
 
 generate_secret() {
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
@@ -38,7 +39,7 @@ docker compose -f "${COMPOSE_FILE}" -p "${STACK_NAME}" up -d --build
 
 frontend_ready=false
 backend_ready=false
-for _ in {1..60}; do
+for ((i=1; i<=E2E_READY_TIMEOUT_SECONDS; i++)); do
   if curl -sf "${E2E_BASE_URL}" > /dev/null; then
     frontend_ready=true
   fi

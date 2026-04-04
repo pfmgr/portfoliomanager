@@ -396,4 +396,15 @@ If you change UI files or observe UI issues, run this review and add the output 
 - Do NOT use Lombok on JPA entities (risk of Equals/HashCode pitfalls).
 
 ## 16) Development workflow
-Distribute implementation and planning tasks between dev subagents (dev1, dev2 and dev3) whenever possible and useful. When implementation is done, implementations must be reviewed at by review subagent, ui changes must also be reviewed by uxreview subagent. If a security relevant change is implemented, also security-auditor must perform a review. After implementation changes must be tested by subagent tester (if applicable). Any problems encountered during testing and/or verification should be resolved without further consultation.
+Before starting implementation, actively choose the minimal effective split across `dev1`, `dev2`, and `dev3`. Using only one or two dev subagents is explicitly valid and often preferred when it keeps coordination lean.
+
+Re-evaluate that split whenever issues are found during implementation, review, security review, UX review, or testing. It is valid to continue without dev subagents, keep the current set, reduce to fewer dev subagents, or bring in additional dev subagents if that is the most efficient way to resolve the newly discovered work.
+
+Use `@review` after implementation for every non-trivial change.
+Use `@uxreview` proactively for UI, navigation, routing, layout, hierarchy, or discoverability changes; skip it for purely internal or invisible refactors.
+Use `@security-auditor` proactively for auth, roles, secrets, LLM, backup/export/import, routing of sensitive flows, caching, storage, or logging changes; skip it for changes without a security-relevant surface.
+Use `@tester` proactively whenever behavior, navigation, forms, or rendered output should be verified; skip it for trivial changes with no meaningful runtime effect.
+
+Issues found during the dev-review-test workflow should be fixed without further user consultation whenever the fix is clear, local, and aligned with the current task. After each finding, briefly reassess whether dev subagents are needed and which specific dev subagents are the most efficient choice for the follow-up fix.
+
+After implementation changes must be tested by `@tester` when applicable, and any problems encountered during testing and/or verification should be resolved without further consultation.

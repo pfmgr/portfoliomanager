@@ -396,6 +396,7 @@
       </div>
       <p class="note small">Saving aligns quality gates to the selected profile.</p>
     </div>
+
   </div>
 </template>
 
@@ -477,7 +478,6 @@ const qualityGateMessage = ref('')
 const qualityGateMessageType = ref('success')
 const qualityGateLoading = ref(false)
 const qualityGateSaving = ref(false)
-
 const selectedProfileName = computed(() => profiles.value[selectedProfileKey.value]?.displayName || 'Custom')
 const selectedProfileDescription = computed(() => profiles.value[selectedProfileKey.value]?.description || '')
 const seedProfile = computed(() => resolveSeedProfile(selectedProfileKey.value))

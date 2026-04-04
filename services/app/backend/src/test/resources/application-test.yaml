@@ -12,6 +12,7 @@ spring:
       max-file-size: 25MB
       max-request-size: 25MB
 app:
+  llm-config-encryption-password: backup-test-password
   kb:
     refresh-scheduler-enabled: false
   jwt:

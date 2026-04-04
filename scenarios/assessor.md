@@ -44,15 +44,15 @@
 
 ## LLM narrative config
 
-- Narrative generation uses action-specific env vars when provided:
-  - `LLM_NARRATIVE_PROVIDER`
-  - `LLM_NARRATIVE_PROVIDER_API_KEY`
-  - `LLM_NARRATIVE_PROVIDER_BASE_URL`
-  - `LLM_NARRATIVE_PROVIDER_MODEL`
-- Fallback chain:
-  - `provider`/`base-url`/`model`: narrative-specific -> global (`LLM_PROVIDER_*`) -> app defaults.
-  - `api-key`: narrative-specific -> global key (`LLM_PROVIDER_API_KEY`, `OPENAI_API_KEY`).
+- Narrative configuration is managed in UI (`LLM Configuration`) and stored in `llm_config`.
+- UI editing is only available if `LLM_CONFIG_ENCRYPTION_PASSWORD` is configured.
+- Narrative defaults to `STANDARD` mode and uses standard provider/base-url/model/API key.
+- If narrative is in `STANDARD` mode and no standard API key is set, narrative output is disabled.
+- Switching from function-specific (`CUSTOM`) back to `STANDARD` clears the custom narrative API key.
+- API keys are write-only in the UI: the editor stays collapsed until the user explicitly chooses add/replace, unchanged editors preserve the saved key, and removal is explicit.
 - Provider support is currently OpenAI only (`openai`; `none` disables).
+- Full database backups include `llm_config`; exported backup payloads currently carry plaintext API keys for backup/import round-trips.
+- Importing a full backup that does not contain `llm_config` must leave the existing LLM configuration unchanged.
 - Verification skill: `running-instance-smoke-tests` - confirm narrative-enabled runtime behavior does not break protected API access or changed assessor flows.
 
 ## UI

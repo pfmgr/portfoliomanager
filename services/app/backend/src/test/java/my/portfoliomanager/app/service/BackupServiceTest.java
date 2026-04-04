@@ -28,12 +28,16 @@ class BackupServiceTest {
 	@Autowired
 	private TestDatabaseCleaner databaseCleaner;
 
+	@Autowired
+	private LlmRuntimeConfigService llmRuntimeConfigService;
+
 	@DynamicPropertySource
 	static void registerProperties(DynamicPropertyRegistry registry) {
 		registry.add("app.security.admin-user", () -> "admin");
 		registry.add("app.security.admin-pass", () -> "admin");
 		registry.add("app.jwt.secret", () -> JWT_SECRET);
 		registry.add("app.jwt.issuer", () -> "test-issuer");
+		registry.add("app.llm-config-encryption-password", () -> "backup-test-password");
 	}
 
 	@Test
@@ -45,6 +49,9 @@ class BackupServiceTest {
 			var result = backupService.importBackup(file);
 			assertThat(result).isNotNull();
 			assertThat(result.tablesImported()).isGreaterThan(0);
+			var llmConfig = llmRuntimeConfigService.getConfig();
+			assertThat(llmConfig.standard().apiKeySet()).isTrue();
+			assertThat(llmConfig.websearch().mode()).isEqualTo("CUSTOM");
 		}
 	}
 
