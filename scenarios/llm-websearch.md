@@ -25,11 +25,12 @@
 - Allowed domains seed file:
   - `services/app/backend/src/main/resources/kb_websearch_allowed_domains.json`
 - Provider support: currently only OpenAI is supported (`openai`; `none` disables).
-- LLM settings are managed in UI (`Profile Configuration -> LLM-Konfiguration`) and stored in DB (`llm_config`).
+- LLM settings are managed in UI (`LLM Configuration`) and stored in DB (`llm_config`).
 - UI editing is enabled only when `LLM_CONFIG_ENCRYPTION_PASSWORD` is set.
 - Default mode for websearch is `STANDARD` (inherits provider/base-url/model/API key from standard config).
 - If standard API key is missing, websearch in `STANDARD` mode is disabled.
 - Optional per-function override is `CUSTOM` mode with its own provider/base-url/model/API key.
+- API keys are write-only in the UI: the editor stays collapsed until the user explicitly chooses add/replace, unchanged editors preserve the saved key, and removal is explicit.
 - Bulk research parallelism:
   - `max_parallel_bulk_batches` in KB settings (default `2`)
 - Verification skill: `backend-junit-tests` - cover config fallback and provider gating in fast backend checks.

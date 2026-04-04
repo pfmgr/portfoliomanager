@@ -96,11 +96,12 @@
 
 ## LLM narrative config
 
-- Rebalancer narrative configuration is managed in UI (`Profile Configuration -> LLM-Konfiguration`) and stored in `llm_config`.
+- Rebalancer narrative configuration is managed in UI (`LLM Configuration`) and stored in `llm_config`.
 - UI editing requires `LLM_CONFIG_ENCRYPTION_PASSWORD`.
 - Narrative action defaults to `STANDARD` mode (uses standard provider/base-url/model/API key).
 - If narrative is in `STANDARD` mode and no standard API key is configured, narrative generation is disabled.
 - Switching from `CUSTOM` back to `STANDARD` clears function-specific narrative API key.
+- API keys are write-only in the UI: the editor stays collapsed until the user explicitly chooses add/replace, unchanged editors preserve the saved key, and removal is explicit.
 - Provider support is currently OpenAI only (`openai`; `none` disables).
 - Full database backups include `llm_config`; exported backup payloads currently carry plaintext API keys for backup/import round-trips.
 - Importing a full backup without `llm_config` must preserve the current narrative configuration.

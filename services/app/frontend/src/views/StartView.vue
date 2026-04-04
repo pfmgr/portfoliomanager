@@ -42,6 +42,11 @@
         <RouterLink class="ghost" to="/layer-targets">Open profiles</RouterLink>
       </li>
       <li class="start-card">
+        <h3>LLM Configuration</h3>
+        <p>Manage the runtime LLM provider, model, and API keys used across the app.</p>
+        <RouterLink class="ghost" to="/llm-configuration">Open LLM configuration</RouterLink>
+      </li>
+      <li class="start-card">
         <h3>Effective Instruments</h3>
         <p>Inspect instrument data with overrides and effective classifications.</p>
         <RouterLink class="ghost" to="/instruments">Open instruments</RouterLink>

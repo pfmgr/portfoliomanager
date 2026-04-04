@@ -44,11 +44,12 @@
 
 ## LLM narrative config
 
-- Narrative configuration is managed in UI (`Profile Configuration -> LLM-Konfiguration`) and stored in `llm_config`.
+- Narrative configuration is managed in UI (`LLM Configuration`) and stored in `llm_config`.
 - UI editing is only available if `LLM_CONFIG_ENCRYPTION_PASSWORD` is configured.
 - Narrative defaults to `STANDARD` mode and uses standard provider/base-url/model/API key.
 - If narrative is in `STANDARD` mode and no standard API key is set, narrative output is disabled.
 - Switching from function-specific (`CUSTOM`) back to `STANDARD` clears the custom narrative API key.
+- API keys are write-only in the UI: the editor stays collapsed until the user explicitly chooses add/replace, unchanged editors preserve the saved key, and removal is explicit.
 - Provider support is currently OpenAI only (`openai`; `none` disables).
 - Full database backups include `llm_config`; exported backup payloads currently carry plaintext API keys for backup/import round-trips.
 - Importing a full backup that does not contain `llm_config` must leave the existing LLM configuration unchanged.

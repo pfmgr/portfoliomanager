@@ -11,7 +11,7 @@ Relevant environment variables:
 - `KB_LLM_ENABLED` -> enables `LlmExtractorService` for extraction runs (default: `false`)
 - `LLM_CONFIG_ENCRYPTION_PASSWORD` -> required to edit LLM API settings in UI; default is empty (read-only)
 
-LLM provider/model/base URL/API key are configured in the UI (`Profile Configuration -> LLM-Konfiguration`) and persisted in DB (`llm_config`). Full database backups include `llm_config`; Knowledge Base backups do not. Exported full backups currently contain LLM API keys in plaintext.
+LLM provider/model/base URL/API key are configured in the UI (`LLM Configuration`) and persisted in DB (`llm_config`). API keys are write-only in the UI: editors stay collapsed until users explicitly choose add or replace, unchanged editors preserve the saved key, and removal is explicit. Full database backups include `llm_config`; Knowledge Base backups do not. Exported full backups currently contain LLM API keys in plaintext.
 
 ## KB settings (database)
 

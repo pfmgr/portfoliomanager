@@ -37,10 +37,11 @@
 ## Config and gating
 
 - KB endpoints require `KB_ENABLED=true` and a configured and enabled LLM provider.
-- LLM settings are configured in UI (`Profile Configuration -> LLM-Konfiguration`) and persisted in `llm_config`.
+- LLM settings are configured in UI (`LLM Configuration`) and persisted in `llm_config`.
 - UI editing requires `LLM_CONFIG_ENCRYPTION_PASSWORD` to be set.
 - Extraction mode defaults to `STANDARD` and uses the standard API key unless switched to `CUSTOM`.
 - If extraction stays in `STANDARD` mode and no standard API key is set, extraction is disabled.
+- API keys are write-only in the UI: the editor stays collapsed until the user explicitly chooses add/replace, unchanged editors preserve the saved key, and removal is explicit.
 - Provider support is currently OpenAI only (`openai`; `none` disables).
 - LLM-enabled KB endpoints return `503` when the required action config is unavailable:
   - websearch endpoints require websearch action config
