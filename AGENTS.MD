@@ -48,13 +48,13 @@ Services in `docker-compose.yml`:
 - `db_portfolio` (Postgres 16.x; uses `portfoliomanager-postgres:16` image that must be available locally or pulled from a registry)
 - `admin_spring` (Spring Boot; reclassification rulesets + rebalancer API; JWT issuance)
 - `admin_frontend` (Vue 3 + Vite build served by Nginx; proxies /api to admin_spring)
-- `metabase` + `db_metabase` (BI dashboard; included in `docker-compose.yml`). If you don't need it, start only the core services or remove these services.
+- Local TLS and optional backend exposure are configured through `configure-docker-compose.sh` and `.local/docker-compose.override.yml`.
 Root `docker-compose.yml` only references images; build the app images with `build_docker_containers.sh` or pull them from docker.io before starting the stack.
 
 Ports / binds:
 - Services should bind only to LAN interfaces (e.g. `192.168.x.x`) or be fronted by a LAN-only reverse proxy.
 - JWT auth is used for the Admin UI; the frontend does not use Basic Auth.
-- Note: `metabase` is currently exposed via `3000:3000` (all interfaces). Restrict it if needed (e.g. `127.0.0.1:3000:3000`).
+- `admin_spring` is not host-exposed by default; use the compose wizard's optional debug exposure if you need a host port.
 
 ---
 

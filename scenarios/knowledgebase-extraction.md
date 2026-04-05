@@ -8,7 +8,7 @@
 ## Preconditions
 
 - KB runtime checks require `KB_ENABLED=true`, an enabled provider configuration, and valid admin credentials on the standard stack.
-- Standard stack tests must derive backend and frontend URLs from `.env` plus `docker-compose.yml` instead of assuming isolated E2E ports.
+- Standard stack tests must derive auth/API/frontend URLs from `.env` plus `docker-compose.yml` instead of assuming direct backend host exposure.
 - Dossier approval and blacklist checks require seeded dossiers and extraction rows.
 - Verification skills: `running-instance-smoke-tests` for standard-stack API checks, `frontend-running-stack-e2e-tests` for standard-stack browser checks, `frontend-e2e-tests` for isolated E2E coverage, and `knowledge-base-dossier-checks` for KB-specific runtime verification.
 

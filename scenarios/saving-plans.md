@@ -7,7 +7,7 @@
 
 ## Preconditions
 
-- Standard stack runtime checks use `.env` plus `docker-compose.yml` and require a reachable backend plus a valid admin login.
+- Standard stack runtime checks use `.env` plus `docker-compose.yml` and require a reachable frontend plus a valid admin login; backend access is internal by default.
 - Direct create flows need at least one depot and, for synthetic-instrument creation, KB metadata for the requested ISIN.
 - Apply-approval checks depend on seeded assessor or rebalancer proposals and at least one available depot.
 - Verification skills: `running-instance-smoke-tests` for standard-stack API checks, `frontend-running-stack-e2e-tests` for standard-stack browser checks, and `frontend-e2e-tests` for the isolated E2E stack.

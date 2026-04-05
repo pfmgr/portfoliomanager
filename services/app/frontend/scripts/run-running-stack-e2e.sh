@@ -32,6 +32,7 @@ fi
 
 E2E_BASE_URL="${FRONTEND_BASE_URL}" \
 AUTH_HEALTH_URL="${AUTH_HEALTH_URL}" \
+E2E_IGNORE_HTTP_ERRORS="${STACK_ALLOW_INSECURE_TLS:-false}" \
 ADMIN_USER="${ADMIN_USER:-}" \
 ADMIN_PASS="${ADMIN_PASS:-}" \
 npx --no-install playwright test "$@"
