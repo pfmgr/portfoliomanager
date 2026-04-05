@@ -7,6 +7,8 @@ e2e/test-results*/
 test-results/
 .jdk-temurin-25/
 .env
+docker-compose.override.yml
+.local/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

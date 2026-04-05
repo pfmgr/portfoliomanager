@@ -81,32 +81,34 @@ batch runs are available via:
 ## Sample curl
 
 ```bash
-# Obtain JWT token
-TOKEN=$(curl -s -X POST "http://localhost:8089/api/auth/token" \
+# Obtain JWT token through the frontend proxy
+# Use https://localhost:8443 when the compose wizard enables frontend TLS.
+FRONTEND_BASE_URL="http://localhost:8080"
+TOKEN=$(curl -s -X POST "${FRONTEND_BASE_URL}/auth/token" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin"}' | \
   python3 -c "import sys, json; print(json.load(sys.stdin).get('token',''))")
 
 # Read KB config
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:8089/api/kb/config"
+curl -H "Authorization: Bearer $TOKEN" "${FRONTEND_BASE_URL}/api/kb/config"
 
 # Update KB config (partial update is allowed)
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "enabled": true,
   "auto_approve": false
-}' "http://localhost:8089/api/kb/config"
+}' "${FRONTEND_BASE_URL}/api/kb/config"
 
 # Bulk research
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "isins": ["DE0000000001"],
   "autoApprove": false,
   "applyToOverrides": false
-}' "http://localhost:8089/api/kb/dossiers/bulk-research"
+}' "${FRONTEND_BASE_URL}/api/kb/dossiers/bulk-research"
 
 # Find alternatives
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "autoApprove": false
-}' "http://localhost:8089/api/kb/alternatives/DE0000000001"
+}' "${FRONTEND_BASE_URL}/api/kb/alternatives/DE0000000001"
 
 # Dry-run refresh batch
 curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
@@ -114,5 +116,5 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "batchSize": 1,
   "dryRun": true,
   "scope": { "isins": ["DE0000000001", "DE0000000002"] }
-}' "http://localhost:8089/api/kb/refresh/batch"
+}' "${FRONTEND_BASE_URL}/api/kb/refresh/batch"
 ```

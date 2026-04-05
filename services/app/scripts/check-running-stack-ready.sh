@@ -10,15 +10,23 @@ SLEEP_SECONDS="${RUNNING_STACK_READY_SLEEP_SECONDS:-1}"
 CHECK_FRONTEND="${CHECK_FRONTEND:-true}"
 CHECK_AUTH="${CHECK_AUTH:-true}"
 
+curl_request() {
+  if [ "${STACK_ALLOW_INSECURE_TLS:-false}" = "true" ]; then
+    curl -k "$@"
+  else
+    curl "$@"
+  fi
+}
+
 check_frontend() {
   local status
-  status="$(curl -sS -o /dev/null -w "%{http_code}" "${FRONTEND_BASE_URL}" || true)"
+  status="$(curl_request -sS -o /dev/null -w "%{http_code}" "${FRONTEND_BASE_URL}" || true)"
   [ "${status}" = "200" ] || [ "${status}" = "304" ]
 }
 
 check_auth() {
   local status
-  status="$(curl -sS -o /dev/null -w "%{http_code}" "${AUTH_HEALTH_URL}" || true)"
+  status="$(curl_request -sS -o /dev/null -w "%{http_code}" "${AUTH_HEALTH_URL}" || true)"
   [ "${status}" = "200" ] || [ "${status}" = "204" ]
 }
 

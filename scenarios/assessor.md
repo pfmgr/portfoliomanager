@@ -7,7 +7,7 @@
 
 ## Preconditions
 
-- Standard stack runtime checks use `.env` plus `docker-compose.yml` with reachable `admin_spring` and `admin_frontend` services.
+- Standard stack runtime checks use `.env` plus `docker-compose.yml` with reachable `admin_frontend`; `admin_spring` stays internal unless a debug override exposes it.
 - Runtime auth checks require valid `ADMIN_USER` and `ADMIN_PASS` credentials from `.env`.
 - Assessor proposal generation assumes KB is enabled and relevant instrument metadata is already available when gap detection or blacklist handling is under test.
 - Verification skills: `running-instance-smoke-tests` for standard-stack API checks, `frontend-running-stack-e2e-tests` for standard-stack browser checks, and `frontend-e2e-tests` for the isolated E2E stack.

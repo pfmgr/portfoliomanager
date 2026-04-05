@@ -7,7 +7,7 @@
 
 ## Preconditions
 
-- Standard stack runtime checks use `.env` plus `docker-compose.yml` and must derive frontend/backend URLs from the running `admin_frontend` and `admin_spring` bindings.
+- Standard stack runtime checks use `.env` plus `docker-compose.yml` and must derive auth/API/frontend URLs from the running `admin_frontend` binding; `admin_spring` is internal by default.
 - Runtime checks require valid admin credentials for `/auth/token` and a seeded portfolio state with at least one active saving plan.
 - Instrument-level proposal tests require KB extraction state to be present for eligible ISINs.
 - Verification skills: `running-instance-smoke-tests` for standard-stack API checks, `frontend-running-stack-e2e-tests` for standard-stack browser checks, and `frontend-e2e-tests` for the isolated E2E stack.
