@@ -16,7 +16,7 @@
     "test:e2e:running-stack": "./scripts/run-running-stack-e2e.sh"
   },
   "dependencies": {
-    "vue": "^3.5.31",
+    "vue": "^3.5.32",
     "vue-router": "^5.0.4"
   },
   "devDependencies": {
