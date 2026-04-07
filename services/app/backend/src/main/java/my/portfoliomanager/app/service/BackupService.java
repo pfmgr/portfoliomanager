@@ -150,7 +150,7 @@ public class BackupService {
 		return BackupContainerCrypto.encrypt(zip, backupPassword);
 	}
 
-	byte[] exportBackup() {
+	public byte[] exportBackup() {
 		List<String> tables = fetchTableNames();
 		List<TableExport> exports = tables.stream()
 				.map(this::exportTable)
@@ -211,17 +211,17 @@ public class BackupService {
 
 	private Map<String, byte[]> readEntries(MultipartFile file, String password) throws IOException {
 		try (InputStream inputStream = file.getInputStream();
-			 PushbackInputStream pushbackInputStream = new PushbackInputStream(inputStream, 8)) {
+			 PushbackInputStream pushbackInputStream = new PushbackInputStream(inputStream, BackupContainerCrypto.headerLength())) {
 			byte[] header = pushbackInputStream.readNBytes(BackupContainerCrypto.headerLength());
 			if (BackupContainerCrypto.isEncrypted(header)) {
 				String backupPassword = requirePassword(password);
-				byte[] remainder = pushbackInputStream.readAllBytes();
-				byte[] payload = new byte[header.length + remainder.length];
-				System.arraycopy(header, 0, payload, 0, header.length);
-				System.arraycopy(remainder, 0, payload, header.length, remainder.length);
-				return ZipEntryReader.readZipEntries(new java.util.zip.ZipInputStream(
-					new java.io.ByteArrayInputStream(BackupContainerCrypto.decrypt(payload, backupPassword)),
+				try {
+					return ZipEntryReader.readZipEntries(new java.util.zip.ZipInputStream(
+						BackupContainerCrypto.decrypt(pushbackInputStream, backupPassword),
 						StandardCharsets.UTF_8));
+				} catch (IOException e) {
+					throw new IllegalArgumentException("Unable to decrypt backup container.", e);
+				}
 			}
 			pushbackInputStream.unread(header);
 			return ZipEntryReader.readZipEntries(new java.util.zip.ZipInputStream(pushbackInputStream, StandardCharsets.UTF_8));

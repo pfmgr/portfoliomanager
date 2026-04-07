@@ -1,11 +1,15 @@
 package my.portfoliomanager.app.service.util;
 
 import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
@@ -42,7 +46,7 @@ public final class BackupContainerCrypto {
 	public static byte[] encrypt(byte[] plaintext, String password) {
 		requirePassword(password);
 		if (plaintext == null) {
-			return null;
+			throw new IllegalArgumentException("Plaintext is required.");
 		}
 		try {
 			byte[] salt = new byte[SALT_LENGTH];
@@ -64,7 +68,7 @@ public final class BackupContainerCrypto {
 			offset += iv.length;
 			System.arraycopy(ciphertext, 0, payload, offset, ciphertext.length);
 			return payload;
-		} catch (Exception ex) {
+		} catch (GeneralSecurityException ex) {
 			throw new IllegalStateException("Failed to encrypt backup container.", ex);
 		}
 	}
@@ -85,7 +89,25 @@ public final class BackupContainerCrypto {
 			Cipher cipher = Cipher.getInstance(CIPHER_ALGO);
 			cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt), new GCMParameterSpec(128, iv));
 			return cipher.doFinal(ciphertext);
-		} catch (Exception ex) {
+		} catch (GeneralSecurityException ex) {
+			throw new IllegalArgumentException("Unable to decrypt backup container.", ex);
+		}
+	}
+
+	public static InputStream decrypt(InputStream payload, String password) throws IOException {
+		requirePassword(password);
+		try {
+			byte[] salt = payload.readNBytes(SALT_LENGTH);
+			byte[] iv = payload.readNBytes(IV_LENGTH);
+			if (salt.length != SALT_LENGTH || iv.length != IV_LENGTH) {
+				throw new IllegalArgumentException("Unable to decrypt backup container.");
+			}
+			Cipher cipher = Cipher.getInstance(CIPHER_ALGO);
+			cipher.init(Cipher.DECRYPT_MODE, deriveKey(password, salt), new GCMParameterSpec(128, iv));
+			return new CipherInputStream(payload, cipher);
+		} catch (IllegalArgumentException ex) {
+			throw ex;
+		} catch (IOException | GeneralSecurityException ex) {
 			throw new IllegalArgumentException("Unable to decrypt backup container.", ex);
 		}
 	}
@@ -96,7 +118,7 @@ public final class BackupContainerCrypto {
 		}
 	}
 
-	private static SecretKey deriveKey(String password, byte[] salt) throws Exception {
+	private static SecretKey deriveKey(String password, byte[] salt) throws GeneralSecurityException {
 		PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, KDF_ITERATIONS, KEY_LENGTH_BITS);
 		SecretKeyFactory factory = SecretKeyFactory.getInstance(KDF_ALGO);
 		byte[] encoded = factory.generateSecret(spec).getEncoded();

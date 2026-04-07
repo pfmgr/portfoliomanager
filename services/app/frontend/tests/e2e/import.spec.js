@@ -131,10 +131,10 @@ test('imports database backup via UI', async ({ page }) => {
   await stubBackupImport(page, { tablesImported: 5, rowsImported: 123, formatVersion: 2 })
   await page.goto('/imports-exports')
   const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
-  await databaseBackupSection.getByLabel('Backup Password').fill('backup-secret-123')
-  await databaseBackupSection.getByLabel('I understand that importing a full backup may replace application data. Password-protected backups require the matching password, while legacy plaintext backups still import without one.').check()
-  await databaseBackupSection.locator('input[accept=".zip"]').setInputFiles(path.join(fixturesDir, 'database-backup.zip'))
-  await expect(page.getByText('Backup imported: tables=5, rows=123, format=v2.')).toBeVisible()
+	await databaseBackupSection.getByLabel('Backup Password').fill('backup-secret-123')
+	await databaseBackupSection.getByLabel('I understand that importing a full backup may replace application data. Password-protected backups require the matching password, while legacy plaintext backups still import without one.').check()
+	await databaseBackupSection.locator('input[accept*=".pmbk"]').setInputFiles(path.join(fixturesDir, 'database-backup.zip'))
+	await expect(page.getByText('Backup imported: tables=5, rows=123, format=v2.')).toBeVisible()
 })
 
 test('imports plaintext database backups without a password', async ({ page }) => {
@@ -143,8 +143,8 @@ test('imports plaintext database backups without a password', async ({ page }) =
   const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
   await databaseBackupSection.getByLabel('I understand that importing a full backup may replace application data. Password-protected backups require the matching password, while legacy plaintext backups still import without one.').check()
 
-  const requestPromise = page.waitForRequest('**/api/backups/import')
-  await databaseBackupSection.locator('input[accept=".zip"]').setInputFiles(path.join(fixturesDir, 'database-backup.zip'))
+	const requestPromise = page.waitForRequest('**/api/backups/import')
+	await databaseBackupSection.locator('input[accept*=".pmbk"]').setInputFiles(path.join(fixturesDir, 'database-backup.zip'))
 
   const request = await requestPromise
   expect(request.postData() || '').not.toContain('name="password"')

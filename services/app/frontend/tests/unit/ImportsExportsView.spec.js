@@ -33,6 +33,7 @@ describe('ImportsExportsView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('at least 12 characters to create a protected backup')
+    expect(wrapper.text()).toContain('enter the matching password before importing')
     expect(wrapper.text()).toContain('Password-protected backups require the matching password')
     expect(wrapper.text()).toContain('do not include LLM configuration or API keys')
   })

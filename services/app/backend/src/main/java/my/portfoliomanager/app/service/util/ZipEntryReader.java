@@ -5,6 +5,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -20,7 +21,9 @@ public final class ZipEntryReader {
 	}
 
 	public static Map<String, byte[]> readZipEntries(MultipartFile file) throws IOException {
-		return readZipEntries(file.getBytes());
+		try (InputStream inputStream = file.getInputStream()) {
+			return readZipEntries(new ZipInputStream(inputStream, StandardCharsets.UTF_8));
+		}
 	}
 
 	public static Map<String, byte[]> readZipEntries(byte[] payload) throws IOException {

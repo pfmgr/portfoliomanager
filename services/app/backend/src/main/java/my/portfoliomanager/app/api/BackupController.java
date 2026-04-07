@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,11 +24,19 @@ public class BackupController {
 		this.backupService = backupService;
 	}
 
+	@GetMapping(path = "/export")
+	public ResponseEntity<byte[]> exportLegacyBackup() {
+		return backupResponse(backupService.exportBackup(), "backup.zip");
+	}
+
 	@PostMapping(path = "/export", consumes = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<byte[]> exportBackup(@Valid @RequestBody BackupExportRequestDto request) {
-		byte[] payload = backupService.exportBackup(request.password());
+		return backupResponse(backupService.exportBackup(request.password()), "backup.pmbk");
+	}
+
+	private ResponseEntity<byte[]> backupResponse(byte[] payload, String filename) {
 		return ResponseEntity.ok()
-				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=backup.pmbk")
+				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + filename)
 				.header(HttpHeaders.CACHE_CONTROL, "no-store, no-cache, must-revalidate, private")
 				.header(HttpHeaders.PRAGMA, "no-cache")
 				.header(HttpHeaders.EXPIRES, "0")

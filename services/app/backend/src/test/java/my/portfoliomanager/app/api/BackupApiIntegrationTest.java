@@ -63,6 +63,20 @@ class BackupApiIntegrationTest {
 
 	@Test
 	void backupEndpointsAreAdminOnly() throws Exception {
+		mockMvc.perform(get("/api/backups/export"))
+				.andExpect(status().isUnauthorized());
+
+		mockMvc.perform(get("/api/backups/export").with(userJwt()))
+				.andExpect(status().isForbidden());
+
+		mockMvc.perform(get("/api/backups/export").with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(header().string("Cache-Control", "no-store, no-cache, must-revalidate, private"))
+				.andExpect(header().string("Pragma", "no-cache"))
+				.andExpect(header().string("Expires", "0"))
+				.andExpect(header().string("X-Content-Type-Options", "nosniff"))
+				.andExpect(header().string("Content-Disposition", "attachment; filename=backup.zip"));
+
 		mockMvc.perform(post("/api/backups/export"))
 				.andExpect(status().isUnauthorized());
 

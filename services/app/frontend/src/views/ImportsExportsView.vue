@@ -52,7 +52,7 @@
 
     <div class="section">
       <h3>Full Database Backup</h3>
-      <p class="toast error">
+      <p class="hint" role="note">
         Warning: full backups can include sensitive LLM API keys. Use a strong password for encrypted exports and store
         the archive securely.
       </p>
@@ -64,17 +64,21 @@
         <span>Backup Password</span>
         <input v-model="backupPassword" type="password" autocomplete="new-password" minlength="12" required />
       </label>
+      <p class="hint" id="backup-import-help">
+        For encrypted `.pmbk` backups, enter the matching password before importing. Legacy plaintext `.zip` backups
+        still import without one.
+      </p>
       <div class="actions">
-        <button class="ghost" type="button" :disabled="backupBusy" @click="exportBackup">Export Backup</button>
+        <button class="ghost" type="button" :disabled="backupBusy || backupPassword.trim().length < 12" @click="exportBackup">Export Backup</button>
         <label class="ghost file" :aria-disabled="!backupConfirmed">
           Import Backup
-            <input
-              type="file"
+          <input
+            type="file"
             accept=".zip,.pmbk"
-              :disabled="backupBusy || !backupConfirmed"
-              aria-describedby="backup-import-warning"
-              @change="importBackup"
-            />
+            :disabled="backupBusy || !backupConfirmed"
+            aria-describedby="backup-import-help"
+            @change="importBackup"
+          />
         </label>
       </div>
       <label class="checkbox" id="backup-import-warning">
