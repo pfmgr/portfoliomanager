@@ -43,4 +43,24 @@ describe('api helpers', () => {
 
     await expect(apiDownload('/rulesets')).rejects.toThrow('bad')
   })
+
+  it('apiDownload forwards POST options and auth header', async () => {
+    sessionStorage.setItem('jwt', 'token')
+    global.fetch.mockResolvedValue(makeResponse(200, { ok: true }))
+
+    await apiDownload('/backups/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'secret' })
+    })
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/backups/export', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ password: 'secret' }),
+      headers: expect.objectContaining({
+        Authorization: 'Bearer token',
+        'Content-Type': 'application/json'
+      })
+    }))
+  })
 })

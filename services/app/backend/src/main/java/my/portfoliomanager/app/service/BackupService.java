@@ -18,10 +18,12 @@ import org.springframework.web.multipart.MultipartFile;
 
 import my.portfoliomanager.app.dto.BackupImportResultDto;
 import my.portfoliomanager.app.dto.LlmConfigBackupDto;
+import my.portfoliomanager.app.service.util.BackupContainerCrypto;
 import my.portfoliomanager.app.service.util.ZipEntryReader;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -41,6 +43,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.io.PushbackInputStream;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
@@ -52,6 +55,7 @@ public class BackupService {
 	private static final String METADATA_ENTRY = "metadata.json";
 	private static final String DATA_PREFIX = "data/";
 	private static final String LLM_CONFIG_ENTRY = "llm-config.json";
+	private static final String TABLE_AUTH_TOKENS = "auth_tokens";
 	private static final String TABLE_DEPOTS = "depots";
 	private static final String TABLE_INSTRUMENT_DOSSIERS = "instrument_dossiers";
 	private static final String TABLE_LLM_CONFIG = "llm_config";
@@ -61,7 +65,7 @@ public class BackupService {
 	private static final String COLUMN_SUPERSEDES_ID = "supersedes_id";
 	private static final String TYPE_JSON = "json";
 	private static final String TYPE_JSONB = "jsonb";
-	private static final Set<String> EXCLUDED_TABLES = Set.of("databasechangelog", "databasechangeloglock");
+	private static final Set<String> EXCLUDED_TABLES = Set.of("databasechangelog", "databasechangeloglock", TABLE_AUTH_TOKENS);
 	private static final List<String> KNOWN_IMPORT_ORDER = List.of(
 			TABLE_DEPOTS,
 			"instruments",
@@ -87,6 +91,7 @@ public class BackupService {
 	);
 	private static final List<SequenceInfo> SEQUENCE_COLUMNS = List.of(
 			new SequenceInfo(TABLE_DEPOTS, COLUMN_DEPOT_ID),
+			new SequenceInfo(TABLE_AUTH_TOKENS, "id"),
 			new SequenceInfo("sparplans", "sparplan_id"),
 			new SequenceInfo("sparplans_history", "hist_id"),
 			new SequenceInfo("rulesets", "id"),
@@ -123,7 +128,29 @@ public class BackupService {
 		this.databaseProductName = resolveDatabaseProductName();
 	}
 
-	public byte[] exportBackup() {
+	public byte[] exportBackup(String password) {
+		String backupPassword = requirePassword(password);
+		List<String> tables = fetchTableNames();
+		List<TableExport> exports = tables.stream()
+				.map(this::exportTable)
+				.collect(Collectors.toList());
+		LlmConfigBackupDto llmConfig = llmRuntimeConfigService.exportBackupConfig();
+		List<String> importOrder = buildImportOrder(tables);
+		List<TableMetadata> metadataTables = exports.stream()
+				.map(export -> new TableMetadata(export.tableName(), export.rowCount(), export.sha256()))
+				.toList();
+		BackupMetadata metadata = new BackupMetadata(
+				FORMAT_VERSION,
+				Instant.now().toString(),
+				metadataTables,
+				importOrder,
+				llmConfig == null ? null : new LlmConfigMetadata(LLM_CONFIG_ENTRY, sha256(writeJson(llmConfig)))
+		);
+		byte[] zip = writeZip(metadata, exports, llmConfig);
+		return BackupContainerCrypto.encrypt(zip, backupPassword);
+	}
+
+	byte[] exportBackup() {
 		List<String> tables = fetchTableNames();
 		List<TableExport> exports = tables.stream()
 				.map(this::exportTable)
@@ -145,8 +172,13 @@ public class BackupService {
 
 	@Transactional
 	public BackupImportResultDto importBackup(MultipartFile file) {
+		return importBackup(file, null);
+	}
+
+	@Transactional
+	public BackupImportResultDto importBackup(MultipartFile file, String password) {
 		try {
-			Map<String, byte[]> entries = readZipEntries(file);
+			Map<String, byte[]> entries = readEntries(file, password);
 			byte[] metadataBytes = entries.remove(METADATA_ENTRY);
 			if (metadataBytes == null) {
 				throw new IllegalArgumentException("Backup is missing metadata.");
@@ -162,16 +194,37 @@ public class BackupService {
 			List<String> tables = importedTables.stream()
 					.map(TableMetadata::name)
 					.toList();
-			truncateTables(tables);
+			List<String> tablesToReset = new ArrayList<>(tables);
+			tablesToReset.add(TABLE_AUTH_TOKENS);
+			truncateTables(tablesToReset);
 			List<String> importOrder = determineImportOrder(metadata);
 			List<DepotActiveSnapshot> depotActiveSnapshots = new ArrayList<>();
 			long rowsImported = insertTables(importOrder, importedTables, tableData, depotActiveSnapshots);
 			applyDepotActiveSnapshotUpdates(depotActiveSnapshots);
-			resetSequences(tables);
+			resetSequences(tablesToReset);
 			llmRuntimeConfigService.importBackupConfig(llmConfig);
 			return new BackupImportResultDto(tables.size(), rowsImported, metadata.formatVersion(), metadata.exportedAt());
 		} catch (IOException e) {
 			throw new IllegalArgumentException("Unable to read backup archive.", e);
+		}
+	}
+
+	private Map<String, byte[]> readEntries(MultipartFile file, String password) throws IOException {
+		try (InputStream inputStream = file.getInputStream();
+			 PushbackInputStream pushbackInputStream = new PushbackInputStream(inputStream, 8)) {
+			byte[] header = pushbackInputStream.readNBytes(BackupContainerCrypto.headerLength());
+			if (BackupContainerCrypto.isEncrypted(header)) {
+				String backupPassword = requirePassword(password);
+				byte[] remainder = pushbackInputStream.readAllBytes();
+				byte[] payload = new byte[header.length + remainder.length];
+				System.arraycopy(header, 0, payload, 0, header.length);
+				System.arraycopy(remainder, 0, payload, header.length, remainder.length);
+				return ZipEntryReader.readZipEntries(new java.util.zip.ZipInputStream(
+					new java.io.ByteArrayInputStream(BackupContainerCrypto.decrypt(payload, backupPassword)),
+						StandardCharsets.UTF_8));
+			}
+			pushbackInputStream.unread(header);
+			return ZipEntryReader.readZipEntries(new java.util.zip.ZipInputStream(pushbackInputStream, StandardCharsets.UTF_8));
 		}
 	}
 
@@ -272,7 +325,9 @@ public class BackupService {
 			return List.of();
 		}
 		return tables.stream()
-				.filter(table -> table != null && !TABLE_LLM_CONFIG.equalsIgnoreCase(table.name()))
+				.filter(table -> table != null
+						&& !TABLE_LLM_CONFIG.equalsIgnoreCase(table.name())
+						&& !TABLE_AUTH_TOKENS.equalsIgnoreCase(table.name()))
 				.toList();
 	}
 
@@ -281,6 +336,7 @@ public class BackupService {
 		if (importOrder != null && !importOrder.isEmpty()) {
 			return importOrder.stream()
 					.filter(table -> !TABLE_LLM_CONFIG.equalsIgnoreCase(table))
+					.filter(table -> !TABLE_AUTH_TOKENS.equalsIgnoreCase(table))
 					.toList();
 		}
 		return buildImportOrder(filterImportedTables(metadata.tables()).stream()
@@ -305,10 +361,10 @@ public class BackupService {
 			return objectMapper.readValue(data, LlmConfigBackupDto.class);
 		}
 
-		TableMetadata legacyTable = metadata.tables() == null ? null : metadata.tables().stream()
-				.filter(table -> table != null && TABLE_LLM_CONFIG.equalsIgnoreCase(table.name()))
-				.findFirst()
-				.orElse(null);
+			TableMetadata legacyTable = metadata.tables() == null ? null : metadata.tables().stream()
+					.filter(table -> table != null && TABLE_LLM_CONFIG.equalsIgnoreCase(table.name()))
+					.findFirst()
+					.orElse(null);
 		if (legacyTable == null) {
 			return null;
 		}
@@ -939,8 +995,15 @@ public class BackupService {
 		return builder.toString();
 	}
 
-	private Map<String, byte[]> readZipEntries(MultipartFile file) throws IOException {
-		return ZipEntryReader.readZipEntries(file);
+	private Map<String, byte[]> readZipEntries(byte[] payload) throws IOException {
+		return ZipEntryReader.readZipEntries(payload);
+	}
+
+	private String requirePassword(String password) {
+		if (password == null || password.isBlank()) {
+			throw new IllegalStateException("Backup password is required for encrypted backup containers.");
+		}
+		return password;
 	}
 
 	private boolean isPostgres() {

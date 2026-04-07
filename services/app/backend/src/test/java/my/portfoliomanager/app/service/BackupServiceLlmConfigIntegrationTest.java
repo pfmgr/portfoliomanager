@@ -2,6 +2,7 @@ package my.portfoliomanager.app.service;
 
 import my.portfoliomanager.app.dto.LlmRuntimeConfigUpdateDto;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
+import my.portfoliomanager.app.service.util.BackupContainerCrypto;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -67,8 +68,10 @@ class BackupServiceLlmConfigIntegrationTest {
 	@Test
 	void exportContainsDedicatedPlaintextLlmConfigShape() throws Exception {
 		storeConfig("standard-plain-key", "websearch-plain-key");
+		byte[] exported = backupService.exportBackup("test-backup-password");
+		assertThat(BackupContainerCrypto.isEncrypted(exported)).isTrue();
 
-		Map<String, byte[]> entries = readZipEntries(backupService.exportBackup());
+		Map<String, byte[]> entries = readZipEntries(BackupContainerCrypto.decrypt(exported, "test-backup-password"));
 
 		assertThat(entries).containsKey("llm-config.json");
 		assertThat(entries).doesNotContainKey("data/llm_config.json");
@@ -86,11 +89,11 @@ class BackupServiceLlmConfigIntegrationTest {
 	@Test
 	void importReencryptsPlaintextLlmConfigKeys() throws Exception {
 		storeConfig("standard-plain-key", "websearch-plain-key");
-		byte[] backup = backupService.exportBackup();
+		byte[] backup = backupService.exportBackup("test-backup-password");
 
 		jdbcTemplate.update("delete from llm_config");
 
-		backupService.importBackup(new MockMultipartFile("file", "backup.zip", "application/zip", backup));
+		backupService.importBackup(new MockMultipartFile("file", "backup.pmbk", "application/octet-stream", backup), "test-backup-password");
 
 		String configJson = jdbcTemplate.queryForObject("select config_json::text from llm_config where id = 1", String.class);
 		assertThat(configJson).doesNotContain("standard-plain-key");
@@ -104,11 +107,16 @@ class BackupServiceLlmConfigIntegrationTest {
 	@Test
 	void importWithoutLlmConfigLeavesExistingLlmConfigUnchanged() throws Exception {
 		storeConfig("source-plain-key", "source-websearch-key");
-		byte[] backupWithoutLlmConfig = removeLlmConfig(backupService.exportBackup());
+		byte[] exported = backupService.exportBackup("test-backup-password");
+		assertThat(BackupContainerCrypto.isEncrypted(exported)).isTrue();
+		byte[] backupWithoutLlmConfig = BackupContainerCrypto.encrypt(
+				removeLlmConfig(BackupContainerCrypto.decrypt(exported, "test-backup-password")),
+				"test-backup-password"
+		);
 
 		storeConfig("target-plain-key", "target-websearch-key");
 
-		backupService.importBackup(new MockMultipartFile("file", "backup.zip", "application/zip", backupWithoutLlmConfig));
+		backupService.importBackup(new MockMultipartFile("file", "backup.pmbk", "application/octet-stream", backupWithoutLlmConfig), "test-backup-password");
 
 		String configJson = jdbcTemplate.queryForObject("select config_json::text from llm_config where id = 1", String.class);
 		JsonNode stored = objectMapper.readTree(configJson);

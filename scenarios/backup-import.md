@@ -7,9 +7,11 @@
 
 ## Full database backup
 
-- Full database backups are versioned zip exports.
+- Full database backups are versioned ZIP payloads wrapped in an encrypted backup container for normal export/import.
+- Legacy plain ZIP backups remain importable without a password.
+- Full backup export requires a request password.
 - Full database backups include `llm_config`.
-- Exported full backups currently contain unencrypted LLM API keys to support import round-trips and must be handled as secret material.
+- Exported full backups still include `llm_config` data and must be treated as secret material.
 - Importing a full backup replaces application data atomically.
 - Older full backups without saved LLM settings leave the existing LLM configuration unchanged.
 

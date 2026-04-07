@@ -53,29 +53,34 @@
     <div class="section">
       <h3>Full Database Backup</h3>
       <p class="toast error">
-        Warning: full backup ZIPs include unencrypted LLM API keys. Store them securely and do not share them.
+        Warning: full backups can include sensitive LLM API keys. Use a strong password for encrypted exports and store
+        the archive securely.
       </p>
       <p class="hint">
-        Full database backups are versioned (v2). Importing a full backup replaces application data atomically. Older
-        backups without saved LLM settings leave the current LLM configuration unchanged.
+        Full database backups are versioned (v2). Enter a password with at least 12 characters to create a protected
+        backup. Older backups without saved LLM settings leave the current LLM configuration unchanged.
       </p>
+      <label class="field">
+        <span>Backup Password</span>
+        <input v-model="backupPassword" type="password" autocomplete="new-password" minlength="12" required />
+      </label>
       <div class="actions">
         <button class="ghost" type="button" :disabled="backupBusy" @click="exportBackup">Export Backup</button>
         <label class="ghost file" :aria-disabled="!backupConfirmed">
           Import Backup
-          <input
-            type="file"
-            accept=".zip"
-            :disabled="backupBusy || !backupConfirmed"
-            aria-describedby="backup-import-warning"
-            @change="importBackup"
-          />
+            <input
+              type="file"
+            accept=".zip,.pmbk"
+              :disabled="backupBusy || !backupConfirmed"
+              aria-describedby="backup-import-warning"
+              @change="importBackup"
+            />
         </label>
       </div>
       <label class="checkbox" id="backup-import-warning">
         <input type="checkbox" v-model="backupConfirmed" />
-        I understand that importing a full backup may replace LLM configuration and API keys when they are present in
-        the backup.
+        I understand that importing a full backup may replace application data. Password-protected backups require the
+        matching password, while legacy plaintext backups still import without one.
       </label>
     </div>
 
@@ -122,6 +127,7 @@ const backupBusy = ref(false)
 const kbBusy = ref(false)
 const message = ref('')
 const error = ref('')
+const backupPassword = ref('')
 
 const form = ref({
   depotCode: '',
@@ -208,19 +214,29 @@ async function importOverrides(event) {
 }
 
 async function exportBackup() {
+  if (backupPassword.value.trim().length < 12) {
+    error.value = 'Please enter a backup password with at least 12 characters.'
+    return
+  }
   backupBusy.value = true
   message.value = ''
   error.value = ''
   try {
-    const response = await apiDownload('/backups/export')
+    const response = await apiDownload('/backups/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: backupPassword.value })
+    })
     const blob = await response.blob()
     const url = window.URL.createObjectURL(blob)
+    const disposition = response.headers.get('content-disposition') || ''
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i)
     const link = document.createElement('a')
     link.href = url
-    link.download = 'database-backup.zip'
+    link.download = filenameMatch?.[1] || 'backup.pmbk'
     link.click()
     window.URL.revokeObjectURL(url)
-    message.value = 'Backup exported (format v2).'
+    message.value = 'Backup exported with password protection (format v2).'
   } catch (err) {
     error.value = err.message || 'Backup export failed'
   } finally {
@@ -244,6 +260,9 @@ async function importBackup(event) {
   try {
     const data = new FormData()
     data.append('file', file)
+    if (backupPassword.value.trim()) {
+      data.append('password', backupPassword.value)
+    }
     const result = await apiUpload('/backups/import', data)
     message.value = `Backup imported: tables=${result.tablesImported}, rows=${result.rowsImported}, format=v${result.formatVersion}.`
   } catch (err) {

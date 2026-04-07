@@ -11,11 +11,13 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 import my.portfoliomanager.app.support.TestDatabaseCleaner;
+import my.portfoliomanager.app.service.util.BackupContainerCrypto;
 
 import java.io.InputStream;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -77,6 +79,35 @@ class BackupServiceTest {
 			assertThat(result).isNotNull();
 			assertThat(result.tablesImported()).isGreaterThan(0);
 		}
+	}
+
+	@Test
+	void canImportEncryptedBackupWithPassword() throws Exception {
+		byte[] exported = backupService.exportBackup("backup-test-password");
+		assertThat(BackupContainerCrypto.isEncrypted(exported)).isTrue();
+		byte[] zipBytes = BackupContainerCrypto.decrypt(exported, "backup-test-password");
+		var file = new MockMultipartFile("file", "backup.pmbk", "application/octet-stream", exported);
+
+		databaseCleaner.clean();
+		var result = backupService.importBackup(file, "backup-test-password");
+
+		assertThat(result).isNotNull();
+		assertThat(zipBytes).isNotEmpty();
+	}
+
+	@Test
+	void encryptedBackupFailsWithoutOrWithWrongPassword() throws Exception {
+		byte[] exported = backupService.exportBackup("backup-test-password");
+		assertThat(BackupContainerCrypto.isEncrypted(exported)).isTrue();
+		var file = new MockMultipartFile("file", "backup.pmbk", "application/octet-stream", exported);
+
+		assertThatThrownBy(() -> backupService.importBackup(file))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("Backup password is required");
+
+		assertThatThrownBy(() -> backupService.importBackup(file, "wrong-password"))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("Unable to decrypt backup container");
 	}
 
 	@AfterEach

@@ -8,6 +8,9 @@ OVERRIDE_FILE="${REPO_ROOT}/.local/docker-compose.override.yml"
 DEFAULT_OVERRIDE_FILE="${REPO_ROOT}/.local/docker-compose.override.yml"
 ROOT_OVERRIDE_FILE="${REPO_ROOT}/docker-compose.override.yml"
 SSL_DIR="${REPO_ROOT}/.local/ssl"
+# Reuse existing local values when upgrading an already configured stack.
+# shellcheck disable=SC1091
+[ -f "${REPO_ROOT}/services/app/scripts/stack-env.sh" ] && . "${REPO_ROOT}/services/app/scripts/stack-env.sh"
 TLS_MODE=""
 BACKEND_EXPOSED=""
 FRONTEND_BIND="${ADMIN_FRONTEND_BIND:-127.0.0.1}"
@@ -130,6 +133,17 @@ resolve_abs_path() {
 ensure_parent_dir() {
   local target="$1"
   mkdir -p "$(dirname -- "${target}")"
+}
+
+has_legacy_llm_values() {
+  [ -n "${LLM_PROVIDER:-}" ] || [ -n "${LLM_PROVIDER_BASE_URL:-}" ] || [ -n "${LLM_PROVIDER_MODEL:-}" ] || \
+    [ -n "${LLM_PROVIDER_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ] || \
+    [ -n "${LLM_WEBSEARCH_PROVIDER:-}" ] || [ -n "${LLM_WEBSEARCH_PROVIDER_MODEL:-}" ] || \
+    [ -n "${LLM_WEBSEARCH_PROVIDER_BASE_URL:-}" ] || [ -n "${LLM_WEBSEARCH_PROVIDER_API_KEY:-}" ] || \
+    [ -n "${LLM_EXTRACTION_PROVIDER:-}" ] || [ -n "${LLM_EXTRACTION_PROVIDER_MODEL:-}" ] || \
+    [ -n "${LLM_EXTRACTION_PROVIDER_BASE_URL:-}" ] || [ -n "${LLM_EXTRACTION_PROVIDER_API_KEY:-}" ] || \
+    [ -n "${LLM_NARRATIVE_PROVIDER:-}" ] || [ -n "${LLM_NARRATIVE_PROVIDER_MODEL:-}" ] || \
+    [ -n "${LLM_NARRATIVE_PROVIDER_BASE_URL:-}" ] || [ -n "${LLM_NARRATIVE_PROVIDER_API_KEY:-}" ]
 }
 
 generate_secret() {
@@ -400,6 +414,31 @@ KB_ENABLED=$(quote_env_value "${KB_ENABLED:-true}")
 KB_LLM_ENABLED=$(quote_env_value "${KB_LLM_ENABLED:-false}")
 LLM_CONFIG_ENCRYPTION_PASSWORD=$(quote_env_value "${LLM_CONFIG_ENCRYPTION_PASSWORD:-$(generate_secret)}")
 EOF
+
+  if has_legacy_llm_values; then
+    cat <<EOF
+
+# Legacy LLM provider settings (kept for upgrade compatibility)
+METABASE_DB_PASSWORD=$(quote_env_value "${METABASE_DB_PASSWORD:-}")
+LLM_PROVIDER=$(quote_env_value "${LLM_PROVIDER:-}")
+LLM_PROVIDER_MODEL=$(quote_env_value "${LLM_PROVIDER_MODEL:-}")
+LLM_PROVIDER_BASE_URL=$(quote_env_value "${LLM_PROVIDER_BASE_URL:-}")
+LLM_PROVIDER_API_KEY=$(quote_env_value "${LLM_PROVIDER_API_KEY:-}")
+OPENAI_API_KEY=$(quote_env_value "${OPENAI_API_KEY:-}")
+LLM_WEBSEARCH_PROVIDER=$(quote_env_value "${LLM_WEBSEARCH_PROVIDER:-}")
+LLM_WEBSEARCH_PROVIDER_MODEL=$(quote_env_value "${LLM_WEBSEARCH_PROVIDER_MODEL:-}")
+LLM_WEBSEARCH_PROVIDER_BASE_URL=$(quote_env_value "${LLM_WEBSEARCH_PROVIDER_BASE_URL:-}")
+LLM_WEBSEARCH_PROVIDER_API_KEY=$(quote_env_value "${LLM_WEBSEARCH_PROVIDER_API_KEY:-}")
+LLM_EXTRACTION_PROVIDER=$(quote_env_value "${LLM_EXTRACTION_PROVIDER:-}")
+LLM_EXTRACTION_PROVIDER_MODEL=$(quote_env_value "${LLM_EXTRACTION_PROVIDER_MODEL:-}")
+LLM_EXTRACTION_PROVIDER_BASE_URL=$(quote_env_value "${LLM_EXTRACTION_PROVIDER_BASE_URL:-}")
+LLM_EXTRACTION_PROVIDER_API_KEY=$(quote_env_value "${LLM_EXTRACTION_PROVIDER_API_KEY:-}")
+LLM_NARRATIVE_PROVIDER=$(quote_env_value "${LLM_NARRATIVE_PROVIDER:-}")
+LLM_NARRATIVE_PROVIDER_MODEL=$(quote_env_value "${LLM_NARRATIVE_PROVIDER_MODEL:-}")
+LLM_NARRATIVE_PROVIDER_BASE_URL=$(quote_env_value "${LLM_NARRATIVE_PROVIDER_BASE_URL:-}")
+LLM_NARRATIVE_PROVIDER_API_KEY=$(quote_env_value "${LLM_NARRATIVE_PROVIDER_API_KEY:-}")
+EOF
+  fi
 }
 
 if [ "$#" -gt 0 ]; then

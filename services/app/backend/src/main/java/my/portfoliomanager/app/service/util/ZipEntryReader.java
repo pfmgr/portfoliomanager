@@ -2,6 +2,7 @@ package my.portfoliomanager.app.service.util;
 
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -19,7 +20,11 @@ public final class ZipEntryReader {
 	}
 
 	public static Map<String, byte[]> readZipEntries(MultipartFile file) throws IOException {
-		try (ZipInputStream zip = new ZipInputStream(file.getInputStream(), StandardCharsets.UTF_8)) {
+		return readZipEntries(file.getBytes());
+	}
+
+	public static Map<String, byte[]> readZipEntries(byte[] payload) throws IOException {
+		try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(payload), StandardCharsets.UTF_8)) {
 			return readZipEntries(zip);
 		}
 	}

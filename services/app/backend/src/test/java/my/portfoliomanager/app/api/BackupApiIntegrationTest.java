@@ -18,9 +18,11 @@ import org.springframework.web.context.WebApplicationContext;
 
 import java.util.UUID;
 
+import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -61,13 +63,16 @@ class BackupApiIntegrationTest {
 
 	@Test
 	void backupEndpointsAreAdminOnly() throws Exception {
-		mockMvc.perform(get("/api/backups/export"))
+		mockMvc.perform(post("/api/backups/export"))
 				.andExpect(status().isUnauthorized());
 
-		mockMvc.perform(get("/api/backups/export").with(userJwt()))
+		mockMvc.perform(post("/api/backups/export").with(userJwt()))
 				.andExpect(status().isForbidden());
 
-		mockMvc.perform(get("/api/backups/export").with(adminJwt()))
+		mockMvc.perform(post("/api/backups/export")
+					.contentType(APPLICATION_JSON)
+					.content("{\"password\":\"backup-test-password\"}")
+					.with(adminJwt()))
 				.andExpect(status().isOk())
 				.andExpect(header().string("Cache-Control", "no-store, no-cache, must-revalidate, private"))
 				.andExpect(header().string("Pragma", "no-cache"))

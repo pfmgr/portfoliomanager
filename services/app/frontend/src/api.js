@@ -165,9 +165,15 @@ export async function apiUpload(path, formData, options = {}) {
   return handleResponse(response)
 }
 
-export async function apiDownload(path) {
+export async function apiDownload(path, options = {}) {
+  const headers = {
+    ...authHeaders(),
+    ...(options.headers || {})
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: authHeaders()
+    ...options,
+    headers
   })
   if (response.status === 401) {
     handleUnauthorized()

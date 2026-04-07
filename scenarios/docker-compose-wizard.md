@@ -22,6 +22,8 @@
 ## Core behavior
 
 - The wizard writes a local `.env` file.
+- Existing `.env` values from a prior local setup are read back in and upgraded instead of being discarded.
+- Legacy LLM-related env values from pre-UI setups are preserved in the generated `.env` when present.
 - The wizard can generate a self-signed certificate with multiple SAN entries.
 - The wizard can reference third-party certificate and key paths without copying them into tracked files.
 - The wizard writes a local compose override file for optional frontend TLS and optional backend host exposure.
@@ -73,6 +75,7 @@
 ## Edge cases
 
 - Existing `.env` must not be clobbered silently.
+- Existing `.env` should be upgraded in place when rerunning the wizard against a prior local setup.
 - Existing `.local/ssl/` content must be preserved or intentionally replaced only after confirmation.
 - SAN lists may contain multiple DNS names and IP addresses.
 - Missing `openssl` must fail cleanly in self-signed mode.

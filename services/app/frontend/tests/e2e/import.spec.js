@@ -44,6 +44,16 @@ const stubBackupImport = async (page, result) => {
   })
 }
 
+const stubBackupExport = async (page) => {
+  await page.route('**/api/backups/export', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/zip',
+      body: 'zip'
+    })
+  })
+}
+
 test.beforeEach(async ({ page }) => {
   await seedToken(page)
   await stubDepots(page)
@@ -53,14 +63,28 @@ test('shows backup copy for full and KB backups', async ({ page }) => {
   await page.goto('/imports-exports')
 
   const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
-  await expect(databaseBackupSection).toContainText('include unencrypted LLM API keys')
-  await expect(databaseBackupSection).toContainText('Store them securely and do not share them')
-  await expect(databaseBackupSection).toContainText('Older backups without saved LLM settings leave the current LLM configuration unchanged')
-  await expect(databaseBackupSection.getByLabel('I understand that importing a full backup may replace LLM configuration and API keys when they are present in the backup.')).toBeVisible()
+  await expect(databaseBackupSection).toContainText('at least 12 characters to create a protected backup')
+  await expect(databaseBackupSection.getByLabel('Backup Password')).toBeVisible()
+  await expect(databaseBackupSection.getByLabel('I understand that importing a full backup may replace application data. Password-protected backups require the matching password, while legacy plaintext backups still import without one.')).toBeVisible()
 
   const knowledgeBaseSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Knowledge Base (KB) Backup' }) })
   await expect(knowledgeBaseSection).toContainText('They do not include LLM configuration or API keys')
   await expect(knowledgeBaseSection).toContainText('Importing replaces existing KB data')
+})
+
+test('exports a password-protected database backup via POST', async ({ page }) => {
+  await stubBackupExport(page)
+  await page.goto('/imports-exports')
+
+  const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
+  await databaseBackupSection.getByLabel('Backup Password').fill('backup-secret-123')
+
+  const requestPromise = page.waitForRequest('**/api/backups/export')
+  await databaseBackupSection.getByRole('button', { name: 'Export Backup' }).click()
+
+  const request = await requestPromise
+  expect(request.method()).toBe('POST')
+  expect(request.postData() || '').toContain('"password":"backup-secret-123"')
 })
 
 test('imports Deka CSV sample via UI', async ({ page }) => {
@@ -107,9 +131,22 @@ test('imports database backup via UI', async ({ page }) => {
   await stubBackupImport(page, { tablesImported: 5, rowsImported: 123, formatVersion: 2 })
   await page.goto('/imports-exports')
   const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
-  await expect(databaseBackupSection).toContainText('include unencrypted LLM API keys')
-  await expect(databaseBackupSection).toContainText('Store them securely and do not share them')
-  await databaseBackupSection.getByLabel('I understand that importing a full backup may replace LLM configuration and API keys when they are present in the backup.').check()
+  await databaseBackupSection.getByLabel('Backup Password').fill('backup-secret-123')
+  await databaseBackupSection.getByLabel('I understand that importing a full backup may replace application data. Password-protected backups require the matching password, while legacy plaintext backups still import without one.').check()
   await databaseBackupSection.locator('input[accept=".zip"]').setInputFiles(path.join(fixturesDir, 'database-backup.zip'))
+  await expect(page.getByText('Backup imported: tables=5, rows=123, format=v2.')).toBeVisible()
+})
+
+test('imports plaintext database backups without a password', async ({ page }) => {
+  await stubBackupImport(page, { tablesImported: 5, rowsImported: 123, formatVersion: 2 })
+  await page.goto('/imports-exports')
+  const databaseBackupSection = page.locator('.section').filter({ has: page.getByRole('heading', { name: 'Full Database Backup' }) })
+  await databaseBackupSection.getByLabel('I understand that importing a full backup may replace application data. Password-protected backups require the matching password, while legacy plaintext backups still import without one.').check()
+
+  const requestPromise = page.waitForRequest('**/api/backups/import')
+  await databaseBackupSection.locator('input[accept=".zip"]').setInputFiles(path.join(fixturesDir, 'database-backup.zip'))
+
+  const request = await requestPromise
+  expect(request.postData() || '').not.toContain('name="password"')
   await expect(page.getByText('Backup imported: tables=5, rows=123, format=v2.')).toBeVisible()
 })
