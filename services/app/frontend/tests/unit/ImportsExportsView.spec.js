@@ -64,7 +64,7 @@ describe('ImportsExportsView', () => {
     await wrapper.find('input[type="password"]').setValue('backup-secret-123')
 
     const backupFileInput = backupSection.find('input[accept*=".pmbk"]')
-    const file = new File(['backup'], 'database-backup.zip', { type: 'application/zip' })
+    const file = new File(['backup'], 'database-backup.pmbk', { type: 'application/zip' })
     Object.defineProperty(backupFileInput.element, 'files', { value: [file], configurable: true })
     await backupFileInput.trigger('change')
     await flushPromises()
@@ -83,7 +83,7 @@ describe('ImportsExportsView', () => {
     await backupSection.find('input[type="checkbox"]').setValue(true)
 
     const backupFileInput = backupSection.find('input[accept*=".pmbk"]')
-    const file = new File(['backup'], 'database-backup.zip', { type: 'application/zip' })
+    const file = new File(['backup'], 'database-backup.pmbk', { type: 'application/octet-stream' })
     Object.defineProperty(backupFileInput.element, 'files', { value: [file], configurable: true })
     await backupFileInput.trigger('change')
     await flushPromises()
