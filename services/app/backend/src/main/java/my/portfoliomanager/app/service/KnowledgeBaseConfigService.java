@@ -16,10 +16,12 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class KnowledgeBaseConfigService {
@@ -188,17 +190,71 @@ public class KnowledgeBaseConfigService {
 			return new ArrayList<>();
 		}
 		List<String> cleaned = new ArrayList<>();
+		Set<String> seen = new LinkedHashSet<>();
 		for (String domain : domains) {
 			if (domain == null) {
 				continue;
 			}
-			String trimmed = domain.trim().toLowerCase(Locale.ROOT);
-			if (trimmed.isBlank()) {
+			String normalized = normalizeDomain(domain);
+			if (normalized == null || normalized.isBlank()) {
 				continue;
 			}
-			cleaned.add(trimmed);
+			if (seen.add(normalized)) {
+				cleaned.add(normalized);
+			}
 		}
 		return cleaned;
+	}
+
+	private String normalizeDomain(String rawDomain) {
+		if (rawDomain == null || rawDomain.isBlank()) {
+			return null;
+		}
+		String trimmed = rawDomain.trim().toLowerCase(Locale.ROOT);
+		String host = trimmed;
+		try {
+			if (trimmed.contains("://")) {
+				host = java.net.URI.create(trimmed).getHost();
+			}
+		} catch (Exception ignored) {
+			host = trimmed;
+		}
+		if (host == null || host.isBlank()) {
+			return null;
+		}
+		if (host.startsWith("www.")) {
+			host = host.substring(4);
+		}
+		if (host.endsWith(".")) {
+			host = host.substring(0, host.length() - 1);
+		}
+		if (host.isBlank()
+				|| host.contains("@")
+				|| host.contains("/")
+				|| host.contains("?")
+				|| host.contains("#")
+				|| host.contains(" ")
+				|| host.startsWith(".")
+				|| host.endsWith(".")
+				|| host.contains("..")
+				|| host.contains("*")
+				|| host.contains(":")
+				|| host.equals("localhost")
+				|| host.endsWith(".localhost")
+				|| host.endsWith(".local")
+				|| host.endsWith(".internal")
+				|| host.endsWith(".nip.io")
+				|| host.endsWith(".sslip.io")
+				|| host.endsWith(".xip.io")
+				|| host.endsWith(".test")
+				|| host.endsWith(".invalid")
+				|| host.matches("^[0-9.]+$")) {
+			return null;
+		}
+		if (!host.matches("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")) {
+			return null;
+		}
+		return host;
 	}
 
 	private String normalizeReasoningEffort(String raw) {

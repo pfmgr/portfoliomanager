@@ -535,8 +535,14 @@ if [ -t 0 ] && [ "${NON_INTERACTIVE}" = "false" ]; then
   fi
 
   FRONTEND_BIND="$(prompt 'Frontend bind host' "${FRONTEND_BIND}")"
-  FRONTEND_HTTP_PORT="$(prompt 'Frontend HTTP port' "${FRONTEND_HTTP_PORT}")"
-  FRONTEND_TLS_PORT="$(prompt 'Frontend HTTPS port' "${FRONTEND_TLS_PORT}")"
+  case "${TLS_MODE}" in
+    http)
+      FRONTEND_HTTP_PORT="$(prompt 'Frontend HTTP port' "${FRONTEND_HTTP_PORT}")"
+      ;;
+    self-signed|third-party)
+      FRONTEND_TLS_PORT="$(prompt 'Frontend HTTPS port' "${FRONTEND_TLS_PORT}")"
+      ;;
+  esac
   BACKEND_BIND="$(prompt 'Backend bind host' "${BACKEND_BIND}")"
   BACKEND_PORT="$(prompt 'Backend port' "${BACKEND_PORT}")"
 fi
@@ -556,8 +562,8 @@ case "${TLS_MODE}" in
   self-signed)
     TLS_ENABLED=true
     SELF_SIGNED=true
-    if [ -z "${SAN_NAMES}" ] && [ -t 0 ] && [ "${NON_INTERACTIVE}" = "false" ]; then
-      SAN_NAMES="$(prompt 'Frontend SANs (comma-separated DNS/IP entries)' "${FRONTEND_BIND},localhost,127.0.0.1,::1")"
+    if [ -t 0 ] && [ "${NON_INTERACTIVE}" = "false" ]; then
+      SAN_NAMES="$(prompt 'Frontend SANs (comma-separated DNS/IP entries)' "${SAN_NAMES:-${FRONTEND_BIND},localhost,127.0.0.1,::1}")"
     fi
     SAN_NAMES="$(normalize_san_list "${SAN_NAMES}" "${FRONTEND_BIND}")"
     CERT_PATH="${CERT_PATH:-${SSL_DIR}/frontend.crt}"

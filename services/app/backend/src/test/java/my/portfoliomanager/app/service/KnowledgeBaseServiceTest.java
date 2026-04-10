@@ -2,6 +2,7 @@ package my.portfoliomanager.app.service;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import my.portfoliomanager.app.domain.DossierExtractionStatus;
 import my.portfoliomanager.app.domain.DossierOrigin;
 import my.portfoliomanager.app.domain.DossierStatus;
@@ -13,6 +14,8 @@ import my.portfoliomanager.app.domain.InstrumentEdit;
 import my.portfoliomanager.app.domain.InstrumentOverride;
 import my.portfoliomanager.app.dto.InstrumentDossierCreateRequest;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;
+import my.portfoliomanager.app.llm.KnowledgeBaseLlmDossierDraft;
 import my.portfoliomanager.app.llm.LlmClient;
 import my.portfoliomanager.app.llm.LlmSuggestion;
 import my.portfoliomanager.app.repository.InstrumentDossierExtractionRepository;
@@ -36,8 +39,11 @@ import my.portfoliomanager.app.support.TestDatabaseCleaner;
 
 import java.time.LocalDateTime;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -91,6 +97,7 @@ class KnowledgeBaseServiceTest {
 
 	@BeforeEach
 	void setup() {
+		TestConfig.reset();
 		jdbcTemplate.update("update depots set active_snapshot_id = null");
 		jdbcTemplate.update("delete from snapshot_positions");
 		jdbcTemplate.update("delete from snapshots");
@@ -137,6 +144,54 @@ class KnowledgeBaseServiceTest {
 		InstrumentOverride updated = overrideRepository.findById("DE0000000001").orElseThrow();
 		assertThat(updated.getName()).isEqualTo("New Name");
 		assertThat(updated.getAssetClass()).isEqualTo("Equity");
+	}
+
+	@Test
+	void generateDossierDraftWithQualityRetries_retriesWithPrimaryDomainsOnly() {
+		String isin = "IE00B4L5Y983";
+		configService.updateConfig(new KnowledgeBaseConfigDto(
+				baselineConfig.enabled(),
+				baselineConfig.refreshIntervalDays(),
+				baselineConfig.autoApprove(),
+				baselineConfig.applyExtractionsToOverrides(),
+				baselineConfig.overwriteExistingOverrides(),
+				baselineConfig.batchSizeInstruments(),
+				baselineConfig.batchMaxInputChars(),
+				baselineConfig.maxParallelBulkBatches(),
+				baselineConfig.maxBatchesPerRun(),
+				baselineConfig.pollIntervalSeconds(),
+				baselineConfig.maxInstrumentsPerRun(),
+				baselineConfig.maxRetriesPerInstrument(),
+				baselineConfig.baseBackoffSeconds(),
+				baselineConfig.maxBackoffSeconds(),
+				baselineConfig.dossierMaxChars(),
+				baselineConfig.kbRefreshMinDaysBetweenRunsPerInstrument(),
+				baselineConfig.runTimeoutMinutes(),
+				baselineConfig.websearchReasoningEffort(),
+				List.of("generic.example", "markets.example"),
+				2,
+				true,
+				baselineConfig.alternativesMinSimilarityScore(),
+				baselineConfig.extractionEvidenceRequired(),
+				1,
+				baselineConfig.qualityGateProfiles()
+		));
+
+		KnowledgeBaseService.DossierDraftResult result = knowledgeBaseService.generateDossierDraftWithQualityRetries(
+				isin,
+				null,
+				configService.getSnapshot(),
+				true
+		);
+
+		assertThat(result.quality()).isNotNull();
+		assertThat(result.quality().passed()).isTrue();
+		assertThat(result.warnings()).anyMatch(message -> message.contains("primary-source domains"));
+		assertThat(TestConfig.generateAllowedDomainsByIsin.get(isin))
+				.containsExactly(
+						List.of("generic.example", "markets.example"),
+						List.of("retry.example")
+				);
 	}
 
 	@Test
@@ -251,7 +306,7 @@ class KnowledgeBaseServiceTest {
 		));
 		var citations = objectMapper.createArrayNode();
 		citations.addObject()
-				.put("url", "https://issuer.example/factsheet")
+				.put("url", "https://issuer.com/factsheet")
 				.put("title", "Issuer factsheet");
 		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
 				"DE0000000001",
@@ -263,7 +318,7 @@ class KnowledgeBaseServiceTest {
 						+ "## Costs & structure\n- TER: 0.20\n\n"
 						+ "## Exposures\n- Benchmark: MSCI World\n\n"
 						+ "## Valuation & profitability\n- pe_current: 15\n\n"
-						+ "## Sources\n1) https://issuer.example/factsheet\n",
+						+ "## Sources\n1) https://issuer.com/factsheet\n",
 				DossierOrigin.USER,
 				DossierStatus.PENDING_REVIEW,
 				citations,
@@ -318,7 +373,7 @@ class KnowledgeBaseServiceTest {
 		var approved = knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
 				"DE0000000001",
 				null,
-				"# DE0000000001\n\n## Quick profile\n- Name: Approved Base\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+				"# DE0000000001\n\n## Quick profile\n- Name: Approved Base\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.com/factsheet",
 				DossierOrigin.USER,
 				DossierStatus.APPROVED,
 				objectMapper.createArrayNode(),
@@ -329,7 +384,7 @@ class KnowledgeBaseServiceTest {
 				approved.dossierId(),
 				new my.portfoliomanager.app.dto.InstrumentDossierUpdateRequest(
 						null,
-						"# DE0000000001\n\n## Quick profile\n- Name: Pending Review\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+						"# DE0000000001\n\n## Quick profile\n- Name: Pending Review\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.com/factsheet",
 						DossierStatus.APPROVED,
 						objectMapper.createArrayNode(),
 						InstrumentBlacklistScope.ALL_PROPOSALS
@@ -345,11 +400,42 @@ class KnowledgeBaseServiceTest {
 	}
 
 	@Test
+	void dossierResponsesSurfaceLatestExtractionWarnings() throws Exception {
+		InstrumentDossier dossier = createDossier("Name: Warning Visibility");
+		InstrumentDossierExtraction extraction = createPendingExtraction(
+				dossier.getDossierId(),
+				objectMapper.readTree("""
+						{
+						  "isin": "DE0000000001",
+						  "warnings": []
+						}
+						""")
+		);
+		extraction.setWarningsJson(objectMapper.readTree("""
+				[
+				  {"message":"LLM output ISIN (US0000000001) does not match dossier ISIN (DE0000000001); dossier ISIN wins."},
+				  {"message":"Retry plan restricted to cited primary-source domains: issuer.example"}
+				]
+				"""));
+		extractionRepository.save(extraction);
+
+		var dossierResponse = knowledgeBaseService.getDossier(dossier.getDossierId());
+		assertThat(dossierResponse.warnings())
+				.containsExactly(
+						"LLM output ISIN (US0000000001) does not match dossier ISIN (DE0000000001); dossier ISIN wins.",
+						"Retry plan restricted to cited primary-source domains: issuer.example"
+				);
+
+		var detail = knowledgeBaseService.getDossierDetail("DE0000000001");
+		assertThat(detail.latestDossier().warnings()).containsExactlyElementsOf(dossierResponse.warnings());
+	}
+
+	@Test
 	void deleteDossiersRemovesBlacklistEntries() {
 		knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
 				"DE0000000001",
 				null,
-				"# DE0000000001\n\n## Quick profile\n- Name: Delete Me\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.example/factsheet",
+				"# DE0000000001\n\n## Quick profile\n- Name: Delete Me\n\n## Classification\n- Layer: 2\n\n## Risk\n- SRI: 3\n\n## Costs & structure\n- TER: 0.20\n\n## Exposures\n- Benchmark: MSCI World\n\n## Valuation & profitability\n- pe_current: 15\n\n## Sources\n1) https://issuer.com/factsheet",
 				DossierOrigin.USER,
 				DossierStatus.APPROVED,
 				objectMapper.createArrayNode(),
@@ -672,6 +758,89 @@ class KnowledgeBaseServiceTest {
 
 	@Configuration
 	static class TestConfig {
+		private static final Map<String, List<List<String>>> generateAllowedDomainsByIsin = new ConcurrentHashMap<>();
+
+		static void reset() {
+			generateAllowedDomainsByIsin.clear();
+		}
+
+		@Bean
+		@org.springframework.context.annotation.Primary
+		KnowledgeBaseLlmClient knowledgeBaseLlmClient(ObjectMapper objectMapper) {
+			return new KnowledgeBaseLlmClient() {
+				@Override
+				public KnowledgeBaseLlmDossierDraft generateDossier(String isin,
+										 String context,
+										 List<String> allowedDomains,
+										 int maxChars) {
+					generateAllowedDomainsByIsin
+							.computeIfAbsent(isin, key -> new ArrayList<>())
+							.add(List.copyOf(allowedDomains));
+					if ("IE00B4L5Y983".equalsIgnoreCase(isin)) {
+						int attempt = generateAllowedDomainsByIsin.get(isin).size();
+						ArrayNode citations = objectMapper.createArrayNode();
+						citations.add(objectMapper.createObjectNode()
+								.put("id", "1")
+								.put("title", "Issuer factsheet")
+								.put("url", "https://retry.example/factsheet")
+								.put("publisher", "Issuer")
+								.put("accessed_at", "2026-04-10"));
+						if (attempt > 1) {
+							citations.add(objectMapper.createObjectNode()
+									.put("id", "2")
+									.put("title", "Issuer KID")
+									.put("url", "https://retry.example/kid")
+									.put("publisher", "Issuer")
+									.put("accessed_at", "2026-04-10"));
+						}
+						String content = "# " + isin + " — Retry ETF\n\n"
+								+ "## Quick profile\n- ISIN: " + isin + "\n\n"
+								+ "## Classification\n- Instrument type: ETF\n- Asset class: Equity\n- Layer: 2\n\n"
+								+ "## Risk\n- SRI: 4\n\n"
+								+ "## Costs & structure\n- TER: 0.20\n\n"
+								+ "## Exposures\n- Benchmark: MSCI World\n\n"
+								+ "## Valuation & profitability\n- price: 100\n\n"
+								+ "## Sources\n1. https://retry.example/factsheet\n";
+						return new KnowledgeBaseLlmDossierDraft(content, "Retry ETF", citations, "test-model");
+					}
+					ArrayNode citations = objectMapper.createArrayNode();
+					citations.add(objectMapper.createObjectNode()
+							.put("id", "1")
+							.put("title", "Test")
+							.put("url", "https://example.com")
+							.put("publisher", "Example")
+							.put("accessed_at", "2024-01-01"));
+					return new KnowledgeBaseLlmDossierDraft("# " + isin + "\n\n## Quick profile\n- ISIN: " + isin,
+							"Test",
+							citations,
+							"test-model");
+				}
+
+				@Override
+				public KnowledgeBaseLlmDossierDraft patchDossierMissingFields(String isin,
+														 String contentMd,
+														 JsonNode existingCitations,
+														 List<String> missingFields,
+														 String context,
+														 List<String> allowedDomains,
+														 int maxChars) {
+					JsonNode citations = existingCitations == null ? objectMapper.createArrayNode() : existingCitations;
+					return new KnowledgeBaseLlmDossierDraft(contentMd, "Test Instrument", citations, "test-model");
+				}
+
+				@Override
+				public my.portfoliomanager.app.llm.KnowledgeBaseLlmExtractionDraft extractMetadata(String dossierText) {
+					throw new UnsupportedOperationException();
+				}
+
+				@Override
+				public my.portfoliomanager.app.llm.KnowledgeBaseLlmAlternativesDraft findAlternatives(String isin,
+																		 List<String> allowedDomains) {
+					return new my.portfoliomanager.app.llm.KnowledgeBaseLlmAlternativesDraft(List.of());
+				}
+			};
+		}
+
 		@Bean
 		LlmClient llmClient() {
 			return new LlmClient() {

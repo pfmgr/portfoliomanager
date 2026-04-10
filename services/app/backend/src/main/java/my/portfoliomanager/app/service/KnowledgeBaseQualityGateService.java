@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -93,6 +94,17 @@ public class KnowledgeBaseQualityGateService {
 			"prospectus",
 			"key information document",
 			"key investor information"
+	);
+	private static final Map<String, Set<String>> ISSUER_HOST_ALIASES = Map.of(
+			"ishares", Set.of("ishares", "blackrock"),
+			"blackrock", Set.of("blackrock", "ishares"),
+			"spdr", Set.of("spdr", "ssga", "statestreet"),
+			"ssga", Set.of("ssga", "statestreet", "spdr"),
+			"statestreet", Set.of("statestreet", "ssga", "spdr"),
+			"xtrackers", Set.of("xtrackers", "dws"),
+			"dws", Set.of("dws", "xtrackers"),
+			"lyxor", Set.of("lyxor", "amundi"),
+			"amundi", Set.of("amundi", "lyxor")
 	);
 	private static final String PROFILE_FUND = "FUND";
 	private static final String PROFILE_EQUITY = "EQUITY";
@@ -1202,7 +1214,7 @@ public class KnowledgeBaseQualityGateService {
 			return false;
 		}
 		String host = extractHost(info.url());
-		if (host == null || isSecondaryDomain(host)) {
+		if (!isPublicHost(host) || isSecondaryDomain(host)) {
 			return false;
 		}
 		String combined = safe(info.publisher()) + " " + safe(info.title()) + " " + safe(info.url());
@@ -1313,16 +1325,276 @@ public class KnowledgeBaseQualityGateService {
 
 	private boolean looksPrimary(CitationInfo info) {
 		String host = extractHost(info.url());
-		if (host != null && isSecondaryDomain(host)) {
+		if (!isPublicHost(host) || isSecondaryDomain(host)) {
 			return false;
 		}
 		String combined = (safe(info.publisher()) + " " + safe(info.title()) + " " + safe(info.url())).toLowerCase(Locale.ROOT);
-		for (String hint : PRIMARY_HINTS) {
-			if (combined.contains(hint)) {
+		return containsAnyPrimaryHint(combined, STRONG_PRIMARY_HINTS)
+				&& publisherMatchesHost(host, info.publisher());
+	}
+
+	public List<String> extractPrimarySourceDomains(InstrumentDossierExtractionPayload payload, JsonNode citations) {
+		return extractPrimarySourceDomains(payload, null, citations);
+	}
+
+	public List<String> extractPrimarySourceDomains(InstrumentDossierExtractionPayload payload,
+										 String displayName,
+										 JsonNode citations) {
+		if (citations == null || !citations.isArray()) {
+			return List.of();
+		}
+		String resolvedName = payload != null && payload.name() != null && !payload.name().isBlank()
+				? payload.name()
+				: displayName;
+		Set<String> issuerTokens = new LinkedHashSet<>(normalizeNameTokens(resolvedName));
+		List<String> domains = new ArrayList<>();
+		Set<String> seen = new LinkedHashSet<>();
+		for (JsonNode item : citations) {
+			if (item == null || !item.isObject()) {
+				continue;
+			}
+			String host = canonicalHost(extractHost(textOrNull(item, "url")));
+			if (!isPublicHost(host) || isSecondaryDomain(host)) {
+				continue;
+			}
+			if (!matchesPrimarySourceDomain(host, issuerTokens, textOrNull(item, "publisher"), textOrNull(item, "title"))) {
+				continue;
+			}
+			if (seen.add(host)) {
+				domains.add(host);
+			}
+		}
+		return List.copyOf(domains);
+	}
+
+	public PrimarySourceRetryPlan planPrimarySourceRetry(InstrumentDossierExtractionPayload payload,
+										   String displayName,
+										   JsonNode citations,
+										   List<String> genericAllowedDomains) {
+		List<String> primaryDomains = extractPrimarySourceDomains(payload, displayName, citations);
+		List<String> genericDomains = normalizeDomains(genericAllowedDomains);
+		if (primaryDomains.isEmpty()) {
+			return new PrimarySourceRetryPlan(genericDomains, false, List.of());
+		}
+		List<String> warnings = new ArrayList<>();
+		if (!genericDomains.isEmpty() && !sameDomains(primaryDomains, genericDomains)) {
+			warnings.add("Retry plan restricted to cited primary-source domains: " + String.join(", ", primaryDomains));
+		}
+		if (hasIgnoredCitationHosts(payload, displayName, citations, primaryDomains)) {
+			warnings.add("Secondary or non-public citation hosts will be ignored for the targeted retry.");
+		}
+		return new PrimarySourceRetryPlan(primaryDomains, true, List.copyOf(warnings));
+	}
+
+	private boolean hasIgnoredCitationHosts(InstrumentDossierExtractionPayload payload,
+									 String displayName,
+									 JsonNode citations,
+									 List<String> primaryDomains) {
+		if (citations == null || !citations.isArray()) {
+			return false;
+		}
+		Set<String> accepted = new LinkedHashSet<>(primaryDomains == null ? List.of() : primaryDomains);
+		String resolvedName = payload != null && payload.name() != null && !payload.name().isBlank()
+				? payload.name()
+				: displayName;
+		Set<String> issuerTokens = new LinkedHashSet<>(normalizeNameTokens(resolvedName));
+		for (JsonNode item : citations) {
+			if (item == null || !item.isObject()) {
+				continue;
+			}
+			String host = canonicalHost(extractHost(textOrNull(item, "url")));
+			if (host == null) {
+				continue;
+			}
+			if (accepted.contains(host)) {
+				continue;
+			}
+			if (!matchesPrimarySourceDomain(host, issuerTokens, textOrNull(item, "publisher"), textOrNull(item, "title"))) {
 				return true;
 			}
 		}
-		return host != null;
+		return false;
+	}
+
+	private boolean matchesPrimarySourceDomain(String host,
+									Set<String> issuerTokens,
+									String publisher,
+									String title) {
+		if (!isPublicHost(host) || isSecondaryDomain(host)) {
+			return false;
+		}
+		String combined = (safe(publisher) + " " + safe(title) + " " + safe(host)).toLowerCase(Locale.ROOT);
+		boolean publisherMatches = publisherMatchesHost(host, publisher);
+		boolean hostMatchesIssuer = hostMatchesIssuer(host, issuerTokens);
+		boolean hasStrongPrimaryHint = containsAnyPrimaryHint(combined, STRONG_PRIMARY_HINTS);
+		if (hasStrongPrimaryHint && (publisherMatches || hostMatchesIssuer)) {
+			return true;
+		}
+		if (publisherMatches && hostMatchesIssuer) {
+			return true;
+		}
+		return false;
+	}
+
+	private boolean containsAnyToken(String value, Set<String> tokens) {
+		if (value == null || value.isBlank() || tokens == null || tokens.isEmpty()) {
+			return false;
+		}
+		String normalized = value.toLowerCase(Locale.ROOT);
+		for (String token : tokens) {
+			if (token != null && !token.isBlank() && normalized.contains(token.toLowerCase(Locale.ROOT))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private Set<String> normalizeTextTokens(String value) {
+		if (value == null) {
+			return Set.of();
+		}
+		String normalized = value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
+		if (normalized.isBlank()) {
+			return Set.of();
+		}
+		Set<String> tokens = new LinkedHashSet<>();
+		for (String token : normalized.split("\\s+")) {
+			if (token.length() >= 3) {
+				tokens.add(token);
+			}
+		}
+		return tokens;
+	}
+
+	private Set<String> normalizeNameTokens(String name) {
+		return normalizeTextTokens(name);
+	}
+
+	private boolean isEtfType(String instrumentType) {
+		if (instrumentType == null || instrumentType.isBlank()) {
+			return false;
+		}
+		String normalized = instrumentType.toLowerCase(Locale.ROOT);
+		return normalized.contains("etf") || normalized.contains("exchange traded fund");
+	}
+
+	private String canonicalHost(String host) {
+		if (host == null || host.isBlank()) {
+			return null;
+		}
+		String normalized = host.toLowerCase(Locale.ROOT);
+		if (normalized.startsWith("www.")) {
+			normalized = normalized.substring(4);
+		}
+		if (normalized.endsWith(".")) {
+			normalized = normalized.substring(0, normalized.length() - 1);
+		}
+		return normalized;
+	}
+
+	private boolean isPublicHost(String host) {
+		if (host == null || host.isBlank()) {
+			return false;
+		}
+		String normalized = host.toLowerCase(Locale.ROOT).trim();
+		if (normalized.startsWith("[") && normalized.endsWith("]")) {
+			normalized = normalized.substring(1, normalized.length() - 1);
+		}
+		if (normalized.startsWith("www.")) {
+			normalized = normalized.substring(4);
+		}
+		if (normalized.endsWith(".")) {
+			normalized = normalized.substring(0, normalized.length() - 1);
+		}
+		if (normalized.equals("localhost")
+				|| normalized.endsWith(".localhost")
+				|| normalized.endsWith(".local")
+				|| normalized.endsWith(".internal")
+				|| normalized.endsWith(".nip.io")
+				|| normalized.endsWith(".sslip.io")
+				|| normalized.endsWith(".xip.io")
+				|| normalized.endsWith(".test")
+				|| normalized.endsWith(".invalid")) {
+			return false;
+		}
+		if (!normalized.contains(".") && !normalized.contains(":")) {
+			return false;
+		}
+		if (normalized.contains("@") || normalized.contains("/") || normalized.contains("?")) {
+			return false;
+		}
+		if (isIpLiteral(normalized)) {
+			return false;
+		}
+		if (isPrivateIpv4(normalized) || isPrivateIpv6(normalized)) {
+			return false;
+		}
+		return true;
+	}
+
+	private boolean isIpLiteral(String host) {
+		if (host == null || host.isBlank()) {
+			return false;
+		}
+		if (host.contains(":")) {
+			return true;
+		}
+		String[] parts = host.split("\\.");
+		if (parts.length != 4) {
+			return false;
+		}
+		for (String part : parts) {
+			if (part == null || part.isBlank()) {
+				return false;
+			}
+			for (int i = 0; i < part.length(); i++) {
+				if (!Character.isDigit(part.charAt(i))) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	private boolean isPrivateIpv4(String host) {
+		String[] parts = host.split("\\.");
+		if (parts.length != 4) {
+			return false;
+		}
+		int[] octets = new int[4];
+		for (int i = 0; i < 4; i++) {
+			try {
+				octets[i] = Integer.parseInt(parts[i]);
+			} catch (NumberFormatException ex) {
+				return false;
+			}
+			if (octets[i] < 0 || octets[i] > 255) {
+				return false;
+			}
+		}
+		int first = octets[0];
+		int second = octets[1];
+		return first == 10
+				|| first == 127
+				|| first == 0
+				|| first == 169 && second == 254
+				|| first == 172 && second >= 16 && second <= 31
+				|| first == 192 && second == 168
+				|| first == 100 && second >= 64 && second <= 127;
+	}
+
+	private boolean isPrivateIpv6(String host) {
+		String normalized = host.toLowerCase(Locale.ROOT);
+		if (!normalized.contains(":")) {
+			return false;
+		}
+		return normalized.equals("::1")
+				|| normalized.startsWith("fc")
+				|| normalized.startsWith("fd")
+				|| normalized.startsWith("fe80:")
+				|| normalized.startsWith("fe90:")
+				|| normalized.startsWith("fea0:")
+				|| normalized.startsWith("feb0:");
 	}
 
 	private String extractHost(String url) {
@@ -1330,12 +1602,118 @@ public class KnowledgeBaseQualityGateService {
 			return null;
 		}
 		try {
-			URI uri = URI.create(url.trim());
+			String trimmed = url.trim();
+			URI uri = URI.create(trimmed.contains("://") ? trimmed : "https://" + trimmed);
 			String host = uri.getHost();
-			return host == null ? null : host.toLowerCase(Locale.ROOT);
+			return canonicalHost(host);
 		} catch (Exception ex) {
 			return null;
 		}
+	}
+
+	private boolean publisherMatchesHost(String host, String publisher) {
+		if (host == null || host.isBlank() || publisher == null || publisher.isBlank()) {
+			return false;
+		}
+		String hostToken = primaryDomainToken(host);
+		if (hostToken == null) {
+			return false;
+		}
+		Set<String> publisherTokens = normalizeTextTokens(publisher);
+		for (String token : publisherTokens) {
+			if (hostToken.equals(token)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean hostMatchesIssuer(String host, Set<String> issuerTokens) {
+		if (host == null || host.isBlank() || issuerTokens == null || issuerTokens.isEmpty()) {
+			return false;
+		}
+		String hostToken = primaryDomainToken(host);
+		if (hostToken == null) {
+			return false;
+		}
+		for (String token : issuerTokens) {
+			if (token == null || token.isBlank()) {
+				continue;
+			}
+			String normalizedToken = token.toLowerCase(Locale.ROOT);
+			if (hostToken.equals(normalizedToken)) {
+				return true;
+			}
+			Set<String> aliases = ISSUER_HOST_ALIASES.get(normalizedToken);
+			if (aliases != null && aliases.contains(hostToken)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private Set<String> normalizeHostLabels(String host) {
+		if (host == null || host.isBlank()) {
+			return Set.of();
+		}
+		String normalized = canonicalHost(host);
+		if (normalized == null || normalized.isBlank()) {
+			return Set.of();
+		}
+		Set<String> labels = new LinkedHashSet<>();
+		for (String label : normalized.split("\\.")) {
+			String cleaned = label == null ? "" : label.trim().toLowerCase(Locale.ROOT);
+			if (!cleaned.isBlank()) {
+				labels.add(cleaned);
+			}
+		}
+		return labels;
+	}
+
+	private String primaryDomainToken(String host) {
+		List<String> labels = new ArrayList<>(normalizeHostLabels(host));
+		if (labels.isEmpty()) {
+			return null;
+		}
+		if (labels.size() == 1) {
+			return labels.getFirst();
+		}
+		String last = labels.get(labels.size() - 1);
+		String secondLast = labels.get(labels.size() - 2);
+		if (labels.size() >= 3
+				&& last.length() == 2
+				&& Set.of("co", "com", "org", "net", "gov", "ac").contains(secondLast)) {
+			return labels.get(labels.size() - 3);
+		}
+		return secondLast;
+	}
+
+	private List<String> normalizeDomains(List<String> domains) {
+		if (domains == null || domains.isEmpty()) {
+			return List.of();
+		}
+		List<String> normalized = new ArrayList<>();
+		Set<String> seen = new LinkedHashSet<>();
+		for (String domain : domains) {
+			String host = canonicalHost(extractHost(domain));
+			if (host == null) {
+				host = canonicalHost(domain);
+			}
+			if (!isPublicHost(host)) {
+				continue;
+			}
+			if (seen.add(host)) {
+				normalized.add(host);
+			}
+		}
+		return List.copyOf(normalized);
+	}
+
+	private boolean sameDomains(List<String> left, List<String> right) {
+		if (left == null || right == null) {
+			return left == right;
+		}
+		return new LinkedHashSet<>(left).equals(new LinkedHashSet<>(right));
 	}
 
 	private String textOrNull(JsonNode node, String field) {
@@ -1404,6 +1782,11 @@ public class KnowledgeBaseQualityGateService {
 	}
 
 	public record SimilarityResult(boolean passed, double score, List<String> reasons) {
+	}
+
+	public record PrimarySourceRetryPlan(List<String> allowedDomains,
+									 boolean primarySourceOnly,
+									 List<String> warnings) {
 	}
 
 	private record CitationInfo(String url, String publisher, String title) {
