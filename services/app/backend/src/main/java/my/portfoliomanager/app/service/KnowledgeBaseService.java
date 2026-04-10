@@ -478,28 +478,43 @@ public class KnowledgeBaseService {
                     dossierId, null, List.of(), "no_missing_fields");
         }
         KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
-        int retryLimit = Math.max(0, config.qualityGateRetryLimit());
-        KnowledgeBaseMissingMetricsResponseDto result = null;
-        List<String> remainingMissing = targetMissing;
-        KnowledgeBaseQualityGateService.DossierQualityResult lastQuality = null;
-        for (int attempt = 0; attempt <= retryLimit; attempt++) {
+		int retryLimit = Math.max(0, config.qualityGateRetryLimit());
+		KnowledgeBaseMissingMetricsResponseDto result = null;
+		List<String> remainingMissing = targetMissing;
+		KnowledgeBaseQualityGateService.DossierQualityResult lastQuality = null;
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan retryPlan =
+				new KnowledgeBaseQualityGateService.PrimarySourceRetryPlan(config.websearchAllowedDomains(), false, List.of());
+		List<String> warnings = new ArrayList<>();
+		for (int attempt = 0; attempt <= retryLimit; attempt++) {
             if (Thread.currentThread().isInterrupted()) {
                 throw new java.util.concurrent.CancellationException("Canceled");
             }
-            String baseContext = buildMissingMetricsContext(dossier, remainingMissing, targetMissing);
-            String context = attempt > 0 && lastQuality != null && qualityGateService != null
-                    ? buildQualityGateRetryContext(baseContext, lastQuality.reasons(), attempt)
-                    : baseContext;
-            KnowledgeBaseLlmDossierDraft draft = generateDossierDraft(isin, context, config);
-            KnowledgeBaseQualityGateService.DossierQualityResult quality = qualityGateService == null ? null
-                    : qualityGateService.evaluateDossier(isin, draft.contentMd(), draft.citations(), config);
-            lastQuality = quality;
-            if (quality != null
-                    && !quality.passed()
-                    && qualityGateService.isRetryableDossierFailure(quality.reasons())
-                    && attempt < retryLimit) {
-                continue;
-            }
+			String baseContext = buildMissingMetricsContext(dossier, remainingMissing, targetMissing);
+			String context = attempt > 0 && lastQuality != null && qualityGateService != null
+					? buildQualityGateRetryContext(baseContext, lastQuality.reasons(), attempt, retryPlan)
+					: baseContext;
+			KnowledgeBaseLlmDossierDraft draft = generateDossierDraft(
+					isin,
+					context,
+					config,
+					retryPlan == null ? null : retryPlan.allowedDomains()
+			);
+			KnowledgeBaseQualityGateService.DossierQualityResult quality = qualityGateService == null ? null
+					: qualityGateService.evaluateDossier(isin, draft.contentMd(), draft.citations(), config);
+			lastQuality = quality;
+			if (quality != null
+					&& !quality.passed()
+					&& qualityGateService.isRetryableDossierFailure(quality.reasons())
+					&& attempt < retryLimit) {
+				retryPlan = qualityGateService.planPrimarySourceRetry(
+						null,
+						draft.displayName(),
+						draft.citations(),
+						config.websearchAllowedDomains()
+				);
+				warnings = mergeWarningMessages(warnings, retryPlan.warnings());
+				continue;
+			}
             InstrumentDossierResponseDto newDossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
             InstrumentDossierExtractionResponseDto extraction = runExtraction(newDossier.dossierId());
             if (extraction.status() == DossierExtractionStatus.FAILED) {
@@ -507,9 +522,13 @@ public class KnowledgeBaseService {
                         newDossier.dossierId(), extraction.extractionId(), remainingMissing, extraction.error());
                 break;
             }
-            List<String> newMissing = extractMissingFields(extraction.missingFieldsJson());
-            result = new KnowledgeBaseMissingMetricsResponseDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED,
-                    newDossier.dossierId(), extraction.extractionId(), newMissing, null);
+			List<String> newMissing = extractMissingFields(extraction.missingFieldsJson());
+			appendExtractionWarnings(extraction.extractionId(), warnings);
+			if (extraction.extractionId() != null) {
+				extraction = getExtraction(extraction.extractionId());
+			}
+			result = new KnowledgeBaseMissingMetricsResponseDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED,
+					newDossier.dossierId(), extraction.extractionId(), newMissing, null);
             if (!shouldRetryMissingMetrics(targetMissing, newMissing) || attempt >= retryLimit) {
                 break;
             }
@@ -1008,6 +1027,7 @@ public class KnowledgeBaseService {
 
     private InstrumentDossierResponseDto toResponse(InstrumentDossier dossier) {
         KnowledgeBaseDossierQualityGateDto qualityGate = null;
+        List<String> warnings = latestExtractionWarningMessages(dossier == null ? null : dossier.getDossierId());
         if (qualityGateService != null && dossier != null) {
             KnowledgeBaseQualityGateService.DossierQualityResult result = qualityGateService.evaluateDossier(
                     dossier.getIsin(),
@@ -1035,6 +1055,7 @@ public class KnowledgeBaseService {
                 dossier.getApprovedAt(),
                 dossier.isAutoApproved(),
                 dossier.getSupersedesId(),
+                warnings,
                 qualityGate
         );
     }
@@ -1353,51 +1374,157 @@ public class KnowledgeBaseService {
 		return builder.toString().trim();
 	}
 
-    DossierDraftResult generateDossierDraftWithQualityRetries(String isin,
-                                                              String context,
-                                                              KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config,
-                                                              boolean checkQualityGate) {
-        KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot snapshot = config == null
-                ? configService.getSnapshot()
-                : config;
-        int retryLimit = Math.max(0, snapshot.qualityGateRetryLimit());
-        KnowledgeBaseLlmDossierDraft draft = null;
-        KnowledgeBaseQualityGateService.DossierQualityResult quality = null;
-        List<String> lastReasons = null;
-        for (int attempt = 0; attempt <= retryLimit; attempt++) {
-            String attemptContext = context;
-            if (attempt > 0 && lastReasons != null) {
-                attemptContext = buildQualityGateRetryContext(context, lastReasons, attempt);
-            }
-            draft = generateDossierDraft(isin, attemptContext, snapshot);
-            if (!checkQualityGate || qualityGateService == null) {
-                return new DossierDraftResult(draft, null);
-            }
-            quality = qualityGateService.evaluateDossier(isin, draft.contentMd(), draft.citations(), snapshot);
-            if (quality.passed()) {
-                return new DossierDraftResult(draft, quality);
-            }
-            if (!qualityGateService.isRetryableDossierFailure(quality.reasons()) || attempt >= retryLimit) {
-                return new DossierDraftResult(draft, quality);
-            }
-            lastReasons = quality.reasons();
-        }
-        return new DossierDraftResult(draft, quality);
-    }
+	DossierDraftResult generateDossierDraftWithQualityRetries(String isin,
+	                                                          String context,
+	                                                          KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config,
+	                                                          boolean checkQualityGate) {
+	    KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot snapshot = config == null
+	            ? configService.getSnapshot()
+	            : config;
+	    int retryLimit = Math.max(0, snapshot.qualityGateRetryLimit());
+	    KnowledgeBaseLlmDossierDraft draft = null;
+	    KnowledgeBaseQualityGateService.DossierQualityResult quality = null;
+	    KnowledgeBaseQualityGateService.PrimarySourceRetryPlan retryPlan =
+	            new KnowledgeBaseQualityGateService.PrimarySourceRetryPlan(snapshot.websearchAllowedDomains(), false, List.of());
+	    List<String> warnings = new ArrayList<>();
+	    List<String> lastReasons = null;
+	    for (int attempt = 0; attempt <= retryLimit; attempt++) {
+	        String attemptContext = context;
+	        if (attempt > 0 && lastReasons != null) {
+	            attemptContext = buildQualityGateRetryContext(context, lastReasons, attempt, retryPlan);
+	        }
+	        draft = generateDossierDraft(isin, attemptContext, snapshot, retryPlan == null ? null : retryPlan.allowedDomains());
+	        if (!checkQualityGate || qualityGateService == null) {
+	            return new DossierDraftResult(draft, null, warnings);
+	        }
+	        quality = qualityGateService.evaluateDossier(isin, draft.contentMd(), draft.citations(), snapshot);
+	        if (quality.passed()) {
+	            return new DossierDraftResult(draft, quality, warnings);
+	        }
+	        if (!qualityGateService.isRetryableDossierFailure(quality.reasons()) || attempt >= retryLimit) {
+	            return new DossierDraftResult(draft, quality, warnings);
+	        }
+	        retryPlan = qualityGateService.planPrimarySourceRetry(
+	                null,
+	                draft.displayName(),
+	                draft.citations(),
+	                snapshot.websearchAllowedDomains()
+	        );
+	        warnings = mergeWarningMessages(warnings, retryPlan.warnings());
+	        lastReasons = quality.reasons();
+	    }
+	    return new DossierDraftResult(draft, quality, warnings);
+	}
 
-    private KnowledgeBaseLlmDossierDraft generateDossierDraft(String isin,
-                                                              String context,
-                                                              KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config) {
-        KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot snapshot = config == null
-                ? configService.getSnapshot()
-                : config;
-        return knowledgeBaseLlmClient.generateDossier(
-                isin,
-                context,
-                snapshot.websearchAllowedDomains(),
-                snapshot.dossierMaxChars()
-        );
-    }
+	void appendExtractionWarnings(Long extractionId, List<String> warnings) {
+		if (extractionId == null || warnings == null || warnings.isEmpty()) {
+			return;
+		}
+		InstrumentDossierExtraction extraction = extractionRepository.findById(extractionId).orElse(null);
+		if (extraction == null) {
+			return;
+		}
+		List<InstrumentDossierExtractionPayload.WarningPayload> existing = new ArrayList<>();
+		JsonNode warningsJson = extraction.getWarningsJson();
+		if (warningsJson != null && warningsJson.isArray()) {
+			for (JsonNode node : warningsJson) {
+				String message = node == null ? null : trimToNull(node.path("message").asText(null));
+				if (message != null) {
+					existing.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
+				}
+			}
+		}
+		for (String warning : warnings) {
+			String message = trimToNull(warning);
+			if (message == null || containsWarningMessage(existing, message)) {
+				continue;
+			}
+			existing.add(new InstrumentDossierExtractionPayload.WarningPayload(message));
+		}
+		extraction.setWarningsJson(objectMapper.valueToTree(existing));
+		extractionRepository.save(extraction);
+	}
+
+	InstrumentDossierExtractionResponseDto getExtraction(Long extractionId) {
+		if (extractionId == null) {
+			return null;
+		}
+		return extractionRepository.findById(extractionId)
+				.map(this::toResponse)
+				.orElse(null);
+	}
+
+	private boolean containsWarningMessage(List<InstrumentDossierExtractionPayload.WarningPayload> warnings, String message) {
+		if (warnings == null || warnings.isEmpty() || message == null || message.isBlank()) {
+			return false;
+		}
+		for (InstrumentDossierExtractionPayload.WarningPayload warning : warnings) {
+			if (warning != null && message.equals(trimToNull(warning.message()))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private List<String> latestExtractionWarningMessages(Long dossierId) {
+		if (dossierId == null) {
+			return List.of();
+		}
+		return extractionRepository.findByDossierIdOrderByCreatedAtDesc(dossierId)
+				.stream()
+				.findFirst()
+				.map(InstrumentDossierExtraction::getWarningsJson)
+				.map(this::warningMessages)
+				.orElse(List.of());
+	}
+
+	private List<String> warningMessages(JsonNode warningsJson) {
+		if (warningsJson == null || !warningsJson.isArray()) {
+			return List.of();
+		}
+		List<String> warnings = new ArrayList<>();
+		for (JsonNode node : warningsJson) {
+			String message = node == null ? null : trimToNull(node.path("message").asText(null));
+			if (message != null && !warnings.contains(message)) {
+				warnings.add(message);
+			}
+		}
+		return List.copyOf(warnings);
+	}
+
+	private List<String> mergeWarningMessages(List<String> left, List<String> right) {
+		List<String> merged = new ArrayList<>();
+		appendWarnings(merged, left);
+		appendWarnings(merged, right);
+		return List.copyOf(merged);
+	}
+
+	private void appendWarnings(List<String> target, List<String> source) {
+		if (target == null || source == null || source.isEmpty()) {
+			return;
+		}
+		for (String warning : source) {
+			String message = trimToNull(warning);
+			if (message != null && !target.contains(message)) {
+				target.add(message);
+			}
+		}
+	}
+
+	private KnowledgeBaseLlmDossierDraft generateDossierDraft(String isin,
+	                                                          String context,
+	                                                          KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config,
+	                                                          List<String> allowedDomains) {
+	    KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot snapshot = config == null
+	            ? configService.getSnapshot()
+	            : config;
+	    return knowledgeBaseLlmClient.generateDossier(
+	            isin,
+	            context,
+	            allowedDomains == null || allowedDomains.isEmpty() ? snapshot.websearchAllowedDomains() : allowedDomains,
+	            snapshot.dossierMaxChars()
+	    );
+	}
 
     private InstrumentDossierResponseDto createDossierFromDraft(String isin,
                                                                 KnowledgeBaseLlmDossierDraft draft,
@@ -1468,19 +1595,31 @@ public class KnowledgeBaseService {
         return builder.toString();
     }
 
-    private String buildQualityGateRetryContext(String baseContext, List<String> reasons, int attempt) {
-        StringBuilder builder = new StringBuilder();
-        if (baseContext != null && !baseContext.isBlank()) {
-            builder.append(baseContext.trim()).append("\n\n");
-        }
-        builder.append("Retry attempt ").append(attempt).append(". ");
+	private String buildQualityGateRetryContext(String baseContext,
+	                                           List<String> reasons,
+	                                           int attempt,
+	                                           KnowledgeBaseQualityGateService.PrimarySourceRetryPlan retryPlan) {
+		StringBuilder builder = new StringBuilder();
+		if (baseContext != null && !baseContext.isBlank()) {
+			builder.append(baseContext.trim()).append("\n\n");
+		}
+		builder.append("Retry attempt ").append(attempt).append(". ");
         if (reasons != null && !reasons.isEmpty()) {
-            builder.append("Previous dossier failed the quality gate due to: ")
-                    .append(String.join(", ", reasons)).append(". ");
-        }
-        builder.append("Fix the missing sections/headers/citations and follow the required headings exactly.");
-        return builder.toString();
-    }
+			builder.append("Previous dossier failed the quality gate due to: ")
+					.append(String.join(", ", reasons)).append(". ");
+		}
+		if (retryPlan != null && retryPlan.primarySourceOnly() && retryPlan.allowedDomains() != null
+				&& !retryPlan.allowedDomains().isEmpty()) {
+			builder.append("Target the cited primary-source domains only: ")
+					.append(String.join(", ", retryPlan.allowedDomains()))
+					.append(". Do not fall back to the generic domain allow-list for this retry. ");
+		}
+		if (retryPlan != null && retryPlan.warnings() != null && !retryPlan.warnings().isEmpty()) {
+			builder.append("Warnings: ").append(String.join(" ", retryPlan.warnings())).append(" ");
+		}
+		builder.append("Fix the missing sections/headers/citations and follow the required headings exactly.");
+		return builder.toString();
+	}
 
 
 	private String buildBulkWebsearchPrompt(List<String> isins, int maxChars, Map<String, String> nameHints) {
@@ -1969,7 +2108,8 @@ public class KnowledgeBaseService {
 	}
 
 	record DossierDraftResult(KnowledgeBaseLlmDossierDraft draft,
-							KnowledgeBaseQualityGateService.DossierQualityResult quality) {
+							KnowledgeBaseQualityGateService.DossierQualityResult quality,
+							List<String> warnings) {
 	}
 
     private record DossierSearchSort(String key, String direction) {

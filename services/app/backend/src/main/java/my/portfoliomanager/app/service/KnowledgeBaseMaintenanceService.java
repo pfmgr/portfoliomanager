@@ -23,13 +23,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
@@ -64,28 +65,6 @@ public class KnowledgeBaseMaintenanceService {
 			"valuation.earnings_yield_ttm_holdings",
 			"valuation.holdings_coverage_weight_pct",
 			"valuation.holdings_coverage_count"
-	);
-	private static final Set<String> ETF_ISSUER_KEYWORDS = Set.of(
-			"ishares",
-			"blackrock",
-			"vanguard",
-			"spdr",
-			"ssga",
-			"statestreet",
-			"xtrackers",
-			"dws",
-			"amundi",
-			"lyxor",
-			"invesco",
-			"wisdomtree",
-			"ubs",
-			"pimco",
-			"vaneck",
-			"hanetf",
-			"hsbc",
-			"legalandgeneral",
-			"lseg",
-			"dbx"
 	);
     private final KnowledgeBaseConfigService configService;
     private final KnowledgeBaseLlmClient llmClient;
@@ -298,7 +277,7 @@ public class KnowledgeBaseMaintenanceService {
 						boolean requestedAutoApprove = autoApproveFlag
 								&& (draftResult.quality() == null || draftResult.quality().passed());
 						extractionResult = runExtractionFlow(
-								item.isin(), dossier.status(), dossierId, actor, false, applyOverrides
+								item.isin(), dossier.status(), dossierId, actor, false, applyOverrides, draftResult.warnings()
 						);
                         KnowledgeBaseBulkResearchItemDto extractionItem = extractionResult.item();
                         extractionId = extractionItem.extractionId();
@@ -379,7 +358,8 @@ public class KnowledgeBaseMaintenanceService {
                                                    Long dossierId,
                                                    String actor,
                                                    boolean autoApprove,
-                                                   boolean applyOverrides) {
+                                                   boolean applyOverrides,
+                                                   List<String> dossierWarnings) {
         if (Thread.currentThread().isInterrupted()) {
             throw new CancellationException("Canceled");
         }
@@ -423,6 +403,10 @@ public class KnowledgeBaseMaintenanceService {
             } else if (autoApprove) {
                 extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
                 extractionId = extraction.extractionId();
+            }
+            knowledgeBaseService.appendExtractionWarnings(extractionId, dossierWarnings);
+            if (extractionId != null) {
+                extraction = knowledgeBaseService.getExtraction(extractionId);
             }
             runService.markSucceeded(extractRun);
             KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
@@ -484,7 +468,7 @@ public class KnowledgeBaseMaintenanceService {
                 runService.markSucceeded(dossierRun);
 
                 ExtractionFlowResult extractionResult = runExtractionFlow(isin, dossier.status(), dossier.dossierId(), actor,
-                        localAutoApprove, applyOverrides);
+						localAutoApprove, applyOverrides, draftResult.warnings());
                 KnowledgeBaseBulkResearchItemDto extractionItem = extractionResult.item();
                 if (extractionItem.status() == KnowledgeBaseBulkResearchItemStatus.FAILED) {
                     logger.info("Dossier extraction for ISIN {} failed",isin);
@@ -663,16 +647,17 @@ public class KnowledgeBaseMaintenanceService {
 		if (first.dossier() != null) {
 			retryBase = dossierRepository.findById(first.dossier().dossierId()).orElse(baseDossier);
 		}
-		List<String> retryAllowedDomains = buildRetryAllowedDomains(firstPayload, retryBase, first);
+		List<String> retryTargets = resolveSecondPassTargets(firstPayload, remaining);
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan retryPlan = buildRetryPlan(firstPayload, retryBase, first);
 		PatchResult second = patchOnce(
 				retryBase,
-				remaining,
+				retryTargets,
 				firstPayload,
 				true,
 				autoApproveFlag,
 				applyOverrides,
 				actor,
-				retryAllowedDomains
+				retryPlan.allowedDomains()
 		);
 		if (second == null || second.extraction() == null) {
 			return first;
@@ -680,7 +665,179 @@ public class KnowledgeBaseMaintenanceService {
 		if (second.extraction().status() == DossierExtractionStatus.FAILED) {
 			return first;
 		}
+		List<String> warnings = new ArrayList<>();
+		appendWarnings(warnings, retryPlan.warnings());
+		appendWarnings(warnings, buildConflictWarnings(firstPayload, second.payload(), retryTargets));
+		knowledgeBaseService.appendExtractionWarnings(second.extraction().extractionId(), warnings);
+		if (second.extraction().extractionId() != null) {
+			return new PatchResult(second.dossier(), knowledgeBaseService.getExtraction(second.extraction().extractionId()), second.payload());
+		}
 		return second;
+	}
+
+	private List<String> resolveSecondPassTargets(InstrumentDossierExtractionPayload payload, List<String> remainingMissing) {
+		LinkedHashSet<String> targets = new LinkedHashSet<>();
+		if (remainingMissing != null) {
+			for (String field : remainingMissing) {
+				String normalized = normalizeRetryField(field);
+				if (normalized != null) {
+					targets.add(normalized);
+				}
+			}
+		}
+		for (String field : supportedRetryFields(payload)) {
+			if (hasComparableValue(payload, field)) {
+				targets.add(field);
+			}
+		}
+		return List.copyOf(targets);
+	}
+
+	private List<String> buildConflictWarnings(InstrumentDossierExtractionPayload firstPayload,
+											InstrumentDossierExtractionPayload secondPayload,
+											List<String> targetFields) {
+		if (firstPayload == null || secondPayload == null || targetFields == null || targetFields.isEmpty()) {
+			return List.of();
+		}
+		LinkedHashSet<String> conflictingFields = new LinkedHashSet<>();
+		for (String rawField : targetFields) {
+			String field = normalizeRetryField(rawField);
+			if (field == null) {
+				continue;
+			}
+			Object firstValue = comparableValue(firstPayload, field);
+			Object secondValue = comparableValue(secondPayload, field);
+			if (!hasComparableValue(firstValue) || !hasComparableValue(secondValue)) {
+				continue;
+			}
+			if (!comparableValuesEqual(firstValue, secondValue)) {
+				conflictingFields.add(field);
+			}
+		}
+		if (conflictingFields.isEmpty()) {
+			return List.of();
+		}
+		return List.of(
+				"Primary-source retry produced conflicting values for fields: "
+						+ String.join(", ", conflictingFields)
+						+ ". Using primary-source retry values."
+		);
+	}
+
+	private Set<String> supportedRetryFields(InstrumentDossierExtractionPayload payload) {
+		boolean singleStock = payload != null && isSingleStockType(payload.instrumentType(), payload.layer());
+		boolean etf = payload != null && isEtfType(payload.instrumentType());
+		LinkedHashSet<String> supported = new LinkedHashSet<>();
+		if (singleStock) {
+			for (String field : SINGLE_STOCK_RETRY_FIELDS) {
+				String normalized = normalizeRetryField(field);
+				if (normalized != null) {
+					supported.add(normalized);
+				}
+			}
+		}
+		if (etf) {
+			for (String field : ETF_RETRY_FIELDS) {
+				String normalized = normalizeRetryField(field);
+				if (normalized != null) {
+					supported.add(normalized);
+				}
+			}
+		}
+		return supported;
+	}
+
+	private String normalizeRetryField(String field) {
+		if (field == null || field.isBlank()) {
+			return null;
+		}
+		String normalized = field.trim().toLowerCase(Locale.ROOT);
+		return switch (normalized) {
+			case "price", "valuation.price" -> "valuation.price";
+			case "pe_current", "valuation.pe_current" -> "valuation.pe_current";
+			case "pb_current", "valuation.pb_current" -> "valuation.pb_current";
+			case "market_cap", "valuation.market_cap" -> "valuation.market_cap";
+			case "shares_outstanding", "valuation.shares_outstanding" -> "valuation.shares_outstanding";
+			case "eps_history", "valuation.eps_history" -> "valuation.eps_history";
+			case "etf.ongoing_charges_pct" -> "etf.ongoing_charges_pct";
+			case "etf.benchmark_index" -> "etf.benchmark_index";
+			case "valuation.pe_ttm_holdings" -> "valuation.pe_ttm_holdings";
+			case "valuation.earnings_yield_ttm_holdings" -> "valuation.earnings_yield_ttm_holdings";
+			case "valuation.holdings_coverage_weight_pct" -> "valuation.holdings_coverage_weight_pct";
+			case "valuation.holdings_coverage_count" -> "valuation.holdings_coverage_count";
+			default -> normalized;
+		};
+	}
+
+	private boolean hasComparableValue(InstrumentDossierExtractionPayload payload, String field) {
+		return hasComparableValue(comparableValue(payload, field));
+	}
+
+	private boolean hasComparableValue(Object value) {
+		if (value == null) {
+			return false;
+		}
+		if (value instanceof String stringValue) {
+			return !stringValue.isBlank();
+		}
+		if (value instanceof List<?> listValue) {
+			return !listValue.isEmpty();
+		}
+		return true;
+	}
+
+	private Object comparableValue(InstrumentDossierExtractionPayload payload, String field) {
+		if (payload == null || field == null || field.isBlank()) {
+			return null;
+		}
+		return switch (field) {
+			case "etf.ongoing_charges_pct" -> payload.etf() == null ? null : payload.etf().ongoingChargesPct();
+			case "etf.benchmark_index" -> payload.etf() == null ? null : trimToNull(payload.etf().benchmarkIndex());
+			case "valuation.price" -> payload.valuation() == null ? null : payload.valuation().price();
+			case "valuation.pe_current" -> payload.valuation() == null ? null : payload.valuation().peCurrent();
+			case "valuation.pb_current" -> payload.valuation() == null ? null : payload.valuation().pbCurrent();
+			case "valuation.market_cap" -> payload.valuation() == null ? null : payload.valuation().marketCap();
+			case "valuation.shares_outstanding" -> payload.valuation() == null ? null : payload.valuation().sharesOutstanding();
+			case "valuation.eps_history" -> payload.valuation() == null ? null : payload.valuation().epsHistory();
+			case "valuation.pe_ttm_holdings" -> payload.valuation() == null ? null : payload.valuation().peTtmHoldings();
+			case "valuation.earnings_yield_ttm_holdings" -> payload.valuation() == null ? null : payload.valuation().earningsYieldTtmHoldings();
+			case "valuation.holdings_coverage_weight_pct" -> payload.valuation() == null ? null : payload.valuation().holdingsCoverageWeightPct();
+			case "valuation.holdings_coverage_count" -> payload.valuation() == null ? null : payload.valuation().holdingsCoverageCount();
+			default -> null;
+		};
+	}
+
+	private boolean comparableValuesEqual(Object left, Object right) {
+		if (left instanceof BigDecimal leftNumber && right instanceof BigDecimal rightNumber) {
+			return leftNumber.compareTo(rightNumber) == 0;
+		}
+		if (left instanceof String leftString && right instanceof String rightString) {
+			return Objects.equals(trimToNull(leftString), trimToNull(rightString));
+		}
+		if (left instanceof List<?> || right instanceof List<?>) {
+			return objectMapper.valueToTree(left).equals(objectMapper.valueToTree(right));
+		}
+		return Objects.equals(left, right);
+	}
+
+	private void appendWarnings(List<String> target, List<String> warnings) {
+		if (target == null || warnings == null || warnings.isEmpty()) {
+			return;
+		}
+		for (String warning : warnings) {
+			String message = trimToNull(warning);
+			if (message != null && !target.contains(message)) {
+				target.add(message);
+			}
+		}
+	}
+
+	private String trimToNull(String value) {
+		if (value == null) {
+			return null;
+		}
+		String trimmed = value.trim();
+		return trimmed.isEmpty() ? null : trimmed;
 	}
 
 	private PatchResult patchOnce(InstrumentDossier baseDossier,
@@ -802,129 +959,25 @@ public class KnowledgeBaseMaintenanceService {
 		return context.toString().trim();
 	}
 
-	private List<String> buildRetryAllowedDomains(InstrumentDossierExtractionPayload payload,
-									 InstrumentDossier baseDossier,
-									 PatchResult firstAttempt) {
+	private KnowledgeBaseQualityGateService.PrimarySourceRetryPlan buildRetryPlan(InstrumentDossierExtractionPayload payload,
+														 InstrumentDossier baseDossier,
+														 PatchResult firstAttempt) {
 		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
-		LinkedHashSet<String> domains = new LinkedHashSet<>(config.websearchAllowedDomains());
 		JsonNode citations = null;
+		String displayName = null;
 		if (firstAttempt != null && firstAttempt.dossier() != null && firstAttempt.dossier().citations() != null) {
 			citations = firstAttempt.dossier().citations();
+			displayName = firstAttempt.dossier().displayName();
 		} else if (baseDossier != null) {
 			citations = baseDossier.getCitationsJson();
+			displayName = baseDossier.getDisplayName();
 		}
-		domains.addAll(extractIssuerDomains(payload, baseDossier, citations));
-		return List.copyOf(domains);
-	}
-
-	private Set<String> extractIssuerDomains(InstrumentDossierExtractionPayload payload,
-									 InstrumentDossier baseDossier,
-									 JsonNode citations) {
-		Set<String> domains = new LinkedHashSet<>();
-		if (citations == null || !citations.isArray()) {
-			return domains;
-		}
-		boolean singleStock = payload != null && isSingleStockType(payload.instrumentType(), payload.layer());
-		boolean etf = payload != null && isEtfType(payload.instrumentType());
-		if (!singleStock && !etf) {
-			return domains;
-		}
-		String name = payload != null && payload.name() != null ? payload.name() : null;
-		if ((name == null || name.isBlank()) && baseDossier != null) {
-			name = baseDossier.getDisplayName();
-		}
-		Set<String> nameTokens = normalizeNameTokens(name);
-		Set<String> issuerTokens = new LinkedHashSet<>(nameTokens);
-		if (etf) {
-			issuerTokens.addAll(ETF_ISSUER_KEYWORDS);
-		}
-		for (JsonNode item : citations) {
-			if (item == null || !item.isObject()) {
-				continue;
-			}
-			String url = textOrNull(item, "url");
-			String host = extractHost(url);
-			if (host == null) {
-				continue;
-			}
-			String publisher = textOrNull(item, "publisher");
-			String title = textOrNull(item, "title");
-			if (matchesIssuerDomain(host, issuerTokens, publisher, title)) {
-				domains.add(host);
-			}
-		}
-		return domains;
-	}
-
-	private boolean matchesIssuerDomain(String host,
-									 Set<String> issuerTokens,
-									 String publisher,
-									 String title) {
-		if (host == null || host.isBlank()) {
-			return false;
-		}
-		String hostLower = host.toLowerCase(Locale.ROOT);
-		if (containsAnyToken(hostLower, issuerTokens)) {
-			return true;
-		}
-		String combined = (publisher == null ? "" : publisher) + " " + (title == null ? "" : title);
-		return containsAnyToken(combined.toLowerCase(Locale.ROOT), issuerTokens);
-	}
-
-	private boolean containsAnyToken(String value, Set<String> tokens) {
-		if (value == null || value.isBlank() || tokens == null || tokens.isEmpty()) {
-			return false;
-		}
-		for (String token : tokens) {
-			if (token != null && !token.isBlank() && value.contains(token)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private Set<String> normalizeNameTokens(String name) {
-		if (name == null) {
-			return Set.of();
-		}
-		String normalized = name.toLowerCase(Locale.ROOT)
-				.replaceAll("[^a-z0-9]+", " ")
-				.trim();
-		if (normalized.isBlank()) {
-			return Set.of();
-		}
-		Set<String> tokens = new LinkedHashSet<>();
-		for (String token : normalized.split("\\s+")) {
-			if (token.length() >= 3) {
-				tokens.add(token);
-			}
-		}
-		return tokens;
-	}
-
-	private String extractHost(String url) {
-		if (url == null || url.isBlank()) {
-			return null;
-		}
-		String trimmed = url.trim();
-		try {
-			URI uri = new URI(trimmed);
-			String host = uri.getHost();
-			if (host == null) {
-				uri = new URI("https://" + trimmed);
-				host = uri.getHost();
-			}
-			if (host == null) {
-				return null;
-			}
-			String normalized = host.toLowerCase(Locale.ROOT);
-			if (normalized.startsWith("www.")) {
-				normalized = normalized.substring(4);
-			}
-			return normalized;
-		} catch (Exception ex) {
-			return null;
-		}
+		return qualityGateService.planPrimarySourceRetry(
+				payload,
+				displayName,
+				citations,
+				config.websearchAllowedDomains()
+		);
 	}
 
 	private boolean isEtfType(String instrumentType) {

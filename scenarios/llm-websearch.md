@@ -9,7 +9,9 @@
 
 - Starts async job to produce dossier draft content.
 - Returns job status and results via polling endpoint.
-- Missing-data patch retries websearch with primary sources and issuer or ETF domains discovered in first-pass citations.
+- Missing-data and quality-gate retries can switch from generic allowed domains to a targeted second pass that uses only qualifying primary-source domains discovered in first-pass citations, without falling back to the generic allow-list during that targeted retry.
+- When a targeted retry is used, the resulting extraction warnings remain API-visible on extraction responses and are also surfaced on dossier responses via `warnings` so detail views can show retry-scope hints without fetching extraction-only state first.
+- Extraction conflict warnings that explain precedence decisions (for example dossier ISIN winning over conflicting LLM output) stay visible in KB dossier/detail responses through the latest extraction warning summary.
 - Failures expose `Error ref KB-XXXXXXXX` to UI and logs for correlation.
 - Verification skill: `backend-junit-tests` - validate async job lifecycle, payload parsing, and retry behavior in backend tests.
 
@@ -18,6 +20,7 @@
 - `POST /api/kb/dossiers/websearch` -> returns `{jobId,status}`
 - `GET /api/kb/dossiers/websearch/{jobId}` -> returns `{status,result,error}`
 - `result` shape: `{contentMd,displayName,citations,model}`
+- KB dossier responses (`GET /api/kb/dossiers/{id}` and `GET /api/kb/dossiers/{isin}` via `latestDossier`) expose latest extraction warning messages in `warnings` for UI visibility.
 - Verification skill: `running-instance-smoke-tests` - verify authenticated websearch endpoints and polling behavior when a local stack is running.
 
 ## Configuration

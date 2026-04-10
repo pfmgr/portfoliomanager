@@ -7,6 +7,7 @@ import my.portfoliomanager.app.domain.DossierExtractionStatus;
 import my.portfoliomanager.app.domain.DossierStatus;
 import my.portfoliomanager.app.dto.KnowledgeBaseBulkResearchResponseDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseConfigDto;
+import my.portfoliomanager.app.dto.InstrumentDossierCreateRequest;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmAlternativesDraft;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmClient;
 import my.portfoliomanager.app.llm.KnowledgeBaseLlmDossierDraft;
@@ -29,8 +30,11 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,6 +46,9 @@ class KnowledgeBaseMaintenanceServiceTest {
 
 	@Autowired
 	private KnowledgeBaseMaintenanceService maintenanceService;
+
+	@Autowired
+	private KnowledgeBaseService knowledgeBaseService;
 
 	@Autowired
 	private KnowledgeBaseConfigService configService;
@@ -64,6 +71,9 @@ class KnowledgeBaseMaintenanceServiceTest {
 	@Autowired
 	private TestDatabaseCleaner databaseCleaner;
 
+	@Autowired
+	private ObjectMapper objectMapper;
+
 	private KnowledgeBaseConfigDto baselineConfig;
 
 	@DynamicPropertySource
@@ -78,6 +88,7 @@ class KnowledgeBaseMaintenanceServiceTest {
 
 	@BeforeEach
 	void setup() {
+		TestConfig.reset();
 		jdbcTemplate.update("delete from instrument_dossier_extractions");
 		jdbcTemplate.update("delete from instrument_dossiers");
 		jdbcTemplate.update("delete from instrument_overrides");
@@ -243,8 +254,89 @@ class KnowledgeBaseMaintenanceServiceTest {
 		assertThat(dossier.isAutoApproved()).isFalse();
 	}
 
+	@Test
+	void patchMissingDataIfNeeded_retriesWithPrimaryDomainsOnly() {
+		String isin = "US0378331005";
+		jdbcTemplate.update("insert into instruments (isin, name, depot_code, layer, is_deleted) values (?, ?, 'tr', 4, false)",
+				isin,
+				"Retry Equity");
+		configService.updateConfig(new KnowledgeBaseConfigDto(
+				baselineConfig.enabled(),
+				baselineConfig.refreshIntervalDays(),
+				baselineConfig.autoApprove(),
+				baselineConfig.applyExtractionsToOverrides(),
+				baselineConfig.overwriteExistingOverrides(),
+				baselineConfig.batchSizeInstruments(),
+				baselineConfig.batchMaxInputChars(),
+				baselineConfig.maxParallelBulkBatches(),
+				baselineConfig.maxBatchesPerRun(),
+				baselineConfig.pollIntervalSeconds(),
+				baselineConfig.maxInstrumentsPerRun(),
+				baselineConfig.maxRetriesPerInstrument(),
+				baselineConfig.baseBackoffSeconds(),
+				baselineConfig.maxBackoffSeconds(),
+				baselineConfig.dossierMaxChars(),
+				baselineConfig.kbRefreshMinDaysBetweenRunsPerInstrument(),
+				baselineConfig.runTimeoutMinutes(),
+				baselineConfig.websearchReasoningEffort(),
+				List.of("generic.example", "markets.example"),
+				baselineConfig.bulkMinCitations(),
+				baselineConfig.bulkRequirePrimarySource(),
+				baselineConfig.alternativesMinSimilarityScore(),
+				baselineConfig.extractionEvidenceRequired(),
+				baselineConfig.qualityGateRetryLimit(),
+				baselineConfig.qualityGateProfiles()
+		));
+
+		ArrayNode baseCitations = objectMapper.createArrayNode();
+		baseCitations.add(objectMapper.createObjectNode()
+				.put("id", "1")
+				.put("title", "Market overview")
+				.put("url", "https://markets.example/retry-equity")
+				.put("publisher", "Markets")
+				.put("accessed_at", "2026-04-10"));
+		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
+				isin,
+				"Retry Equity",
+				"# " + isin + " — Retry Equity\n\n"
+						+ "## Quick profile\n- ISIN: " + isin + "\n\n"
+						+ "## Classification\n- name: Retry Equity\n- instrument_type: Equity\n- asset_class: Equity\n- layer: 4\n\n"
+						+ "## Risk\n- SRI: unknown\n\n"
+						+ "## Costs & structure\n- currency: USD\n\n"
+						+ "## Exposures\n- regions: United States 100%\n\n"
+						+ "## Valuation & profitability\n- price: unknown\n- pe_current: unknown\n- pb_current: unknown\n- eps_history: unknown\n\n"
+						+ "## Sources\n1. https://markets.example/retry-equity\n",
+				my.portfoliomanager.app.domain.DossierOrigin.USER,
+				DossierStatus.PENDING_REVIEW,
+				baseCitations
+		);
+		var dossier = knowledgeBaseService.createDossier(request, "tester");
+		var extraction = knowledgeBaseService.runExtraction(dossier.dossierId());
+
+		var patched = maintenanceService.patchMissingDataIfNeeded(dossier.dossierId(), extraction, false, "tester");
+
+		assertThat(patched.dossierId()).isNotEqualTo(dossier.dossierId());
+		assertThat(patched.warningsJson().toString()).contains("primary-source domains");
+		assertThat(patched.warningsJson().toString()).contains("valuation.pe_current");
+		assertThat(TestConfig.patchAllowedDomainsByIsin.get(isin))
+				.containsExactly(
+						List.of("generic.example", "markets.example"),
+						List.of("retry.example")
+				);
+		assertThat(TestConfig.patchMissingFieldsByIsin.get(isin).get(1))
+				.contains("valuation.price", "valuation.pe_current", "valuation.pb_current");
+	}
+
 	@Configuration
 	static class TestConfig {
+		private static final Map<String, List<List<String>>> patchAllowedDomainsByIsin = new ConcurrentHashMap<>();
+		private static final Map<String, List<List<String>>> patchMissingFieldsByIsin = new ConcurrentHashMap<>();
+
+		static void reset() {
+			patchAllowedDomainsByIsin.clear();
+			patchMissingFieldsByIsin.clear();
+		}
+
 		@Bean
 		@org.springframework.context.annotation.Primary
 		KnowledgeBaseLlmClient knowledgeBaseLlmClient(ObjectMapper objectMapper) {
@@ -273,13 +365,13 @@ class KnowledgeBaseMaintenanceServiceTest {
 						citations.add(objectMapper.createObjectNode()
 								.put("id", "1")
 								.put("title", "Issuer Factsheet")
-								.put("url", "https://issuer.example.com/factsheet")
+								.put("url", "https://issuer.com/factsheet")
 								.put("publisher", "Issuer")
 								.put("accessed_at", "2024-01-01"));
 						citations.add(objectMapper.createObjectNode()
 								.put("id", "2")
 								.put("title", "KID")
-								.put("url", "https://issuer.example.com/kid")
+								.put("url", "https://issuer.com/kid")
 								.put("publisher", "Issuer")
 								.put("accessed_at", "2024-01-01"));
 					}
@@ -304,12 +396,52 @@ class KnowledgeBaseMaintenanceServiceTest {
 
 				@Override
 				public KnowledgeBaseLlmDossierDraft patchDossierMissingFields(String isin,
-														 String contentMd,
-														 JsonNode existingCitations,
-														 List<String> missingFields,
-														 String context,
-														 List<String> allowedDomains,
-														 int maxChars) {
+													 String contentMd,
+													 JsonNode existingCitations,
+													 List<String> missingFields,
+													 String context,
+													 List<String> allowedDomains,
+													 int maxChars) {
+					patchAllowedDomainsByIsin
+							.computeIfAbsent(isin, key -> new ArrayList<>())
+							.add(List.copyOf(allowedDomains));
+					patchMissingFieldsByIsin
+							.computeIfAbsent(isin, key -> new ArrayList<>())
+							.add(List.copyOf(missingFields));
+					if ("US0378331005".equalsIgnoreCase(isin)) {
+						int attempt = patchAllowedDomainsByIsin.get(isin).size();
+						ArrayNode citations = objectMapper.createArrayNode();
+						citations.add(objectMapper.createObjectNode()
+								.put("id", "1")
+								.put("title", "Issuer factsheet")
+								.put("url", "https://retry.example/factsheet")
+								.put("publisher", "Retry Equity Investor Relations")
+								.put("accessed_at", "2026-04-10"));
+						citations.add(objectMapper.createObjectNode()
+								.put("id", "2")
+								.put("title", "justETF stock profile")
+								.put("url", "https://www.justetf.com/en/stock-profile.html?isin=" + isin)
+								.put("publisher", "justETF")
+								.put("accessed_at", "2026-04-10"));
+						String patchedContent = attempt == 1
+								? "# " + isin + " — Retry Equity\n\n"
+								+ "## Quick profile\n- ISIN: " + isin + "\n\n"
+								+ "## Classification\n- name: Retry Equity\n- instrument_type: Equity\n- asset_class: Equity\n- layer: 4\n\n"
+								+ "## Risk\n- SRI: unknown\n\n"
+								+ "## Costs & structure\n- currency: USD\n\n"
+								+ "## Exposures\n- regions: United States 100%\n\n"
+								+ "## Valuation & profitability\n- price: unknown\n- pe_current: 24.1\n- pb_current: 3.2\n- eps_history: unknown\n  - 2024: 6.15 USD (FY, period_end=2024-12-31)\n  - 2023: 5.61 USD (FY, period_end=2023-12-31)\n\n"
+								+ "## Sources\n1. https://retry.example/factsheet\n2. https://www.justetf.com/en/stock-profile.html?isin=" + isin + "\n"
+								: "# " + isin + " — Retry Equity\n\n"
+								+ "## Quick profile\n- ISIN: " + isin + "\n\n"
+								+ "## Classification\n- name: Retry Equity\n- instrument_type: Equity\n- asset_class: Equity\n- layer: 4\n\n"
+								+ "## Risk\n- SRI: unknown\n\n"
+								+ "## Costs & structure\n- currency: USD\n\n"
+								+ "## Exposures\n- regions: United States 100%\n\n"
+								+ "## Valuation & profitability\n- price: 227.50 USD (as of 2026-04-10)\n- pe_current: 23.8\n- pb_current: 3.2\n- eps_history: unknown\n  - 2024: 6.15 USD (FY, period_end=2024-12-31)\n  - 2023: 5.61 USD (FY, period_end=2023-12-31)\n\n"
+								+ "## Sources\n1. https://retry.example/factsheet\n2. https://www.justetf.com/en/stock-profile.html?isin=" + isin + "\n";
+						return new KnowledgeBaseLlmDossierDraft(patchedContent, "Retry Equity", citations, "test-model");
+					}
 					JsonNode citations = existingCitations == null
 							? objectMapper.createArrayNode()
 							: existingCitations;

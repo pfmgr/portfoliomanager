@@ -78,6 +78,17 @@ batch runs are available via:
 - Approve/reject dossiers: `POST /api/kb/dossiers/{id}/approve|reject`
 - Approve/reject/apply extractions: `POST /api/kb/extractions/{id}/approve|reject|apply`
 
+## Warning visibility
+
+- Extraction responses keep structured warning payloads in `warningsJson`.
+- Dossier responses now expose the latest extraction warning messages as `warnings` on `InstrumentDossierResponseDto`.
+- `GET /api/kb/dossiers/{id}` returns `warnings` directly for the addressed dossier.
+- `GET /api/kb/dossiers/{isin}` exposes the same warning summary under `latestDossier.warnings`.
+- This is intended for UI/API visibility of conflict and precedence decisions, such as:
+  - dossier ISIN winning over conflicting LLM output
+  - targeted retry scope being restricted to cited primary-source domains
+  - secondary or non-public sources being ignored during targeted retry
+
 ## Sample curl
 
 ```bash

@@ -6,6 +6,7 @@ import my.portfoliomanager.app.domain.DossierOrigin;
 import my.portfoliomanager.app.domain.DossierStatus;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public record InstrumentDossierResponseDto(
 		Long dossierId,
@@ -25,6 +26,7 @@ public record InstrumentDossierResponseDto(
 		LocalDateTime approvedAt,
 		boolean autoApproved,
 		Long supersedesId,
+		List<String> warnings,
 		KnowledgeBaseDossierQualityGateDto qualityGate
 ) {
 }

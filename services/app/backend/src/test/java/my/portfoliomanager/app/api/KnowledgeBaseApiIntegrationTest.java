@@ -436,6 +436,96 @@ class KnowledgeBaseApiIntegrationTest {
 				.andExpect(jsonPath("$.items[0].extractionFreshness").value("CURRENT"));
 	}
 
+	@Test
+	void dossierEndpointsExposeLatestExtractionWarnings() throws Exception {
+		createDossier("DE6666666666", "Warning Detail ETF");
+
+		String detailPayload = mockMvc.perform(get("/api/kb/dossiers/DE6666666666")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		long dossierId = objectMapper.readTree(detailPayload).at("/latestDossier/dossierId").asLong();
+		jdbcTemplate.update(
+				"""
+				insert into instrument_dossier_extractions (
+				  dossier_id, model, extracted_json, missing_fields_json, warnings_json, status, created_at, auto_approved
+				) values (?, 'test', cast(? as jsonb), cast(? as jsonb), cast(? as jsonb), 'PENDING_REVIEW', ?, false)
+				""",
+				dossierId,
+				"{}",
+				"[]",
+				"[{\"message\":\"LLM output ISIN (US0000000001) does not match dossier ISIN (DE6666666666); dossier ISIN wins.\"},{\"message\":\"Retry plan restricted to cited primary-source domains: issuer.example\"}]",
+				LocalDateTime.now().plusMinutes(1)
+		);
+
+		mockMvc.perform(get("/api/kb/dossiers/" + dossierId)
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.warnings[0]").value("LLM output ISIN (US0000000001) does not match dossier ISIN (DE6666666666); dossier ISIN wins."))
+				.andExpect(jsonPath("$.warnings[1]").value("Retry plan restricted to cited primary-source domains: issuer.example"));
+
+		mockMvc.perform(get("/api/kb/dossiers/DE6666666666")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.latestDossier.warnings[0]").value("LLM output ISIN (US0000000001) does not match dossier ISIN (DE6666666666); dossier ISIN wins."))
+				.andExpect(jsonPath("$.latestDossier.warnings[1]").value("Retry plan restricted to cited primary-source domains: issuer.example"));
+	}
+
+
+	@Test
+	void dossierDetailEndpointsExposeDeduplicatedWarningsFromLatestExtractionOnly() throws Exception {
+		createDossier("DE7777777777", "Warning List ETF");
+
+		String detailPayload = mockMvc.perform(get("/api/kb/dossiers/DE7777777777")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		long dossierId = objectMapper.readTree(detailPayload).at("/latestDossier/dossierId").asLong();
+		jdbcTemplate.update(
+				"""
+				insert into instrument_dossier_extractions (
+				  dossier_id, model, extracted_json, missing_fields_json, warnings_json, status, created_at, auto_approved
+				) values (?, 'test', cast(? as jsonb), cast(? as jsonb), cast(? as jsonb), 'PENDING_REVIEW', ?, false)
+				""",
+				dossierId,
+				"{}",
+				"[]",
+				"[{\"message\":\"Old warning\"}]",
+				LocalDateTime.now().minusMinutes(1)
+		);
+		jdbcTemplate.update(
+				"""
+				insert into instrument_dossier_extractions (
+				  dossier_id, model, extracted_json, missing_fields_json, warnings_json, status, created_at, auto_approved
+				) values (?, 'test', cast(? as jsonb), cast(? as jsonb), cast(? as jsonb), 'PENDING_REVIEW', ?, false)
+				""",
+				dossierId,
+				"{}",
+				"[]",
+				"[{\"message\":\"Retry plan restricted to cited primary-source domains: issuer.example\"},{\"message\":\"Retry plan restricted to cited primary-source domains: issuer.example\"},{\"message\":\"\"},{\"other\":\"ignored\"},{\"message\":\"LLM output ISIN (US0000000001) does not match dossier ISIN (DE7777777777); dossier ISIN wins.\"}]",
+				LocalDateTime.now().plusMinutes(1)
+		);
+
+
+		mockMvc.perform(get("/api/kb/dossiers/" + dossierId)
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.warnings.length()").value(2))
+				.andExpect(jsonPath("$.warnings[0]").value("Retry plan restricted to cited primary-source domains: issuer.example"))
+				.andExpect(jsonPath("$.warnings[1]").value("LLM output ISIN (US0000000001) does not match dossier ISIN (DE7777777777); dossier ISIN wins."));
+
+		mockMvc.perform(get("/api/kb/dossiers/DE7777777777")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.latestDossier.warnings.length()").value(2))
+				.andExpect(jsonPath("$.latestDossier.warnings[0]").value("Retry plan restricted to cited primary-source domains: issuer.example"))
+				.andExpect(jsonPath("$.latestDossier.warnings[1]").value("LLM output ISIN (US0000000001) does not match dossier ISIN (DE7777777777); dossier ISIN wins."));
+	}
+
 	private void createDossier(String isin, String displayName) throws Exception {
 		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
 				isin,

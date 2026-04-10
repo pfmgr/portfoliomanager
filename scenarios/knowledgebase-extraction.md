@@ -24,6 +24,7 @@
 - On import and reclassification, KB extraction data by ISIN has precedence over ruleset output.
 - Rules are used when no KB entry exists.
 - Extraction lifecycle (run, approve, apply) syncs data into `knowledge_base_extractions`.
+- Extraction warnings document precedence and sanitization decisions when parser or dossier data wins over conflicting LLM output, and those warnings remain visible on extraction responses plus dossier/detail DTOs through the latest extraction warning summary.
 - Instrument-level rebalancer proposals are enabled only when latest extraction status is `COMPLETE`.
 - Missing-data patch can be triggered for a dossier and fills only absent fields while preserving existing structure.
 - Approved dossier blacklist policy is configured in KB dossier detail and becomes effective only after dossier approval or auto-approval.
@@ -42,6 +43,7 @@
 - Protected KB endpoints return `503` when the required KB or provider configuration is disabled and succeed when enabled.
 - Pending blacklist changes remain visible but inactive until dossier approval or auto-approval occurs.
 - Approved extraction state is reflected in downstream eligibility checks.
+- Primary-source retry hints and conflict warnings remain visible in dossier/detail API payloads after extraction generation so UI layers can explain precedence and retry scope.
 - Import and backup flows do not overwrite unrelated runtime LLM configuration.
 
 ## APIs

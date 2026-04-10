@@ -84,6 +84,8 @@ where file_hash = 'runtime-rebalancer-fixture';
 
 insert into knowledge_base_extractions (isin, status, extracted_json, updated_at)
 values
+  ('ZZTESTAAA001', 'COMPLETE', cast('{"isin":"ZZTESTAAA001","name":"Runtime Core ETF"}' as jsonb), now()),
+  ('ZZTESTBBB002', 'COMPLETE', cast('{"isin":"ZZTESTBBB002","name":"Runtime Bond ETF"}' as jsonb), now()),
   ('ZZTESTRBL003', 'COMPLETE', cast('{"isin":"ZZTESTRBL003","name":"Runtime Rebalancer ETF"}' as jsonb), now());
 
 insert into instrument_blacklists (isin, requested_scope, effective_scope, requested_updated_at, effective_updated_at)

@@ -216,6 +216,159 @@ class KnowledgeBaseQualityGateServiceTest {
 	}
 
 	@Test
+	void extractPrimarySourceDomains_prefersPublicPrimaryHostsOnly() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"Vanguard Factsheet",
+						"www.vanguard.com/investment-products/etfs/fund-factsheet/IE00BK5BQT80",
+						"Vanguard",
+						"2026-02-13"
+				),
+				citation(
+						"2",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BQT80",
+						"justETF",
+						"2026-02-13"
+				),
+				citation(
+						"3",
+						"Local factsheet mirror",
+						"https://localhost/factsheet/IE00BK5BQT80",
+						"Vanguard",
+						"2026-02-13"
+				)
+		);
+
+		List<String> domains = service.extractPrimarySourceDomains(
+				payload("IE00BK5BQT80", "ETF", null, null, null, null),
+				"Vanguard FTSE All-World UCITS ETF",
+				citations
+		);
+
+		assertThat(domains).containsExactly("vanguard.com");
+	}
+
+	@Test
+	void extractPrimarySourceDomains_rejectsBracketedIpv6Hosts() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"Loopback factsheet",
+						"https://[::1]/factsheet/IE00BK5BQT80",
+						"Vanguard",
+						"2026-02-13"
+				)
+		);
+
+		List<String> domains = service.extractPrimarySourceDomains(
+				payload("IE00BK5BQT80", "ETF", null, null, null, null),
+				"Vanguard FTSE All-World UCITS ETF",
+				citations
+		);
+
+		assertThat(domains).isEmpty();
+	}
+
+	@Test
+	void extractPrimarySourceDomains_rejectsLookalikePublicDomains() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"BlackRock prospectus mirror",
+						"https://blackrock-docs.example/prospectus/IE00BK5BQT80",
+						"BlackRock",
+						"2026-02-13"
+				)
+		);
+
+		List<String> domains = service.extractPrimarySourceDomains(
+				payload("IE00BK5BQT80", "ETF", null, null, null, null),
+				"Vanguard FTSE All-World UCITS ETF",
+				citations
+		);
+
+		assertThat(domains).isEmpty();
+	}
+
+	@Test
+	void extractPrimarySourceDomains_acceptsKnownIssuerAliasDomains() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"BlackRock prospectus",
+						"https://www.blackrock.com/prospectus/IE00BK5BQT80",
+						"BlackRock",
+						"2026-02-13"
+				)
+		);
+
+		List<String> domains = service.extractPrimarySourceDomains(
+				payload("IE00BK5BQT80", "ETF", null, null, null, null),
+				"iShares Core MSCI World UCITS ETF",
+				citations
+		);
+
+		assertThat(domains).containsExactly("blackrock.com");
+	}
+
+	@Test
+	void planPrimarySourceRetry_usesOnlyPrimaryDomainsAndAddsWarnings() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"Vanguard Factsheet",
+						"https://www.vanguard.com/fund-factsheet/IE00BK5BQT80",
+						"Vanguard",
+						"2026-02-13"
+				),
+				citation(
+						"2",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BQT80",
+						"justETF",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan plan = service.planPrimarySourceRetry(
+				payload("IE00BK5BQT80", "ETF", null, null, null, null),
+				"Vanguard FTSE All-World UCITS ETF",
+				citations,
+				List.of("example.com", "justetf.com")
+		);
+
+		assertThat(plan.primarySourceOnly()).isTrue();
+		assertThat(plan.allowedDomains()).containsExactly("vanguard.com");
+		assertThat(plan.warnings()).isNotEmpty();
+	}
+
+	@Test
+	void planPrimarySourceRetry_fallsBackToGenericDomainsWhenNoPrimaryDomainQualifies() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BQT80",
+						"justETF",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan plan = service.planPrimarySourceRetry(
+				payload("IE00BK5BQT80", "ETF", null, null, null, null),
+				"Vanguard FTSE All-World UCITS ETF",
+				citations,
+				List.of("example.com", "justetf.com")
+		);
+
+		assertThat(plan.primarySourceOnly()).isFalse();
+		assertThat(plan.allowedDomains()).containsExactly("example.com", "justetf.com");
+		assertThat(plan.warnings()).isEmpty();
+	}
+
+	@Test
 	void evaluateExtractionEvidence_fundProfile_requiresFundFieldsAndHoldings() {
 		InstrumentDossierExtractionPayload payload = payload(
 				"IE00B4L5Y983",
