@@ -11,8 +11,6 @@ test('rebalancer running stack shows the seeded blacklist proposal fixture', asy
   await page.goto('/rebalancer')
   await expect(page.getByRole('heading', { name: 'Rebalancer' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Refresh' }).click()
-
   await expect(page.getByText('Rebalancing Proposal (Savings plan amounts, EUR)')).toBeVisible({ timeout: 30000 })
   const fixtureRow = page.getByRole('table', { name: 'Instrument-level savings plan proposal.' })
     .locator('tr')

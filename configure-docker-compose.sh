@@ -23,6 +23,9 @@ CERT_PATH="${ADMIN_FRONTEND_TLS_CERT_PATH:-}"
 KEY_PATH="${ADMIN_FRONTEND_TLS_KEY_PATH:-}"
 FORCE=false
 NON_INTERACTIVE=false
+SSL_DIR_EXPLICIT=false
+CERT_PATH_EXPLICIT=false
+KEY_PATH_EXPLICIT=false
 
 usage() {
   cat <<'EOF'
@@ -465,6 +468,7 @@ if [ "$#" -gt 0 ]; then
       --ssl-dir)
         shift
         SSL_DIR="${1:-}"
+        SSL_DIR_EXPLICIT=true
         ;;
       --mode)
         shift
@@ -501,10 +505,12 @@ if [ "$#" -gt 0 ]; then
       --cert-path)
         shift
         CERT_PATH="${1:-}"
+        CERT_PATH_EXPLICIT=true
         ;;
       --key-path)
         shift
         KEY_PATH="${1:-}"
+        KEY_PATH_EXPLICIT=true
         ;;
       *)
         die "Unknown option: $1"
@@ -566,8 +572,16 @@ case "${TLS_MODE}" in
       SAN_NAMES="$(prompt 'Frontend SANs (comma-separated DNS/IP entries)' "${SAN_NAMES:-${FRONTEND_BIND},localhost,127.0.0.1,::1}")"
     fi
     SAN_NAMES="$(normalize_san_list "${SAN_NAMES}" "${FRONTEND_BIND}")"
-    CERT_PATH="${CERT_PATH:-${SSL_DIR}/frontend.crt}"
-    KEY_PATH="${KEY_PATH:-${SSL_DIR}/frontend.key}"
+    if [ "${SSL_DIR_EXPLICIT}" = "true" ] && [ "${CERT_PATH_EXPLICIT}" = "false" ]; then
+      CERT_PATH="${SSL_DIR}/frontend.crt"
+    else
+      CERT_PATH="${CERT_PATH:-${SSL_DIR}/frontend.crt}"
+    fi
+    if [ "${SSL_DIR_EXPLICIT}" = "true" ] && [ "${KEY_PATH_EXPLICIT}" = "false" ]; then
+      KEY_PATH="${SSL_DIR}/frontend.key"
+    else
+      KEY_PATH="${KEY_PATH:-${SSL_DIR}/frontend.key}"
+    fi
     STACK_ALLOW_INSECURE_TLS="true"
     ;;
   third-party)
