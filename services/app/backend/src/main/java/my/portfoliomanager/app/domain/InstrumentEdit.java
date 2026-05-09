@@ -23,10 +23,10 @@ public class InstrumentEdit {
 	@Column(name = "field", nullable = false)
 	private String field;
 
-	@Column(name = "old_value")
+	@Column(name = "old_value", columnDefinition = "TEXT")
 	private String oldValue;
 
-	@Column(name = "new_value")
+	@Column(name = "new_value", columnDefinition = "TEXT")
 	private String newValue;
 
 	@Column(name = "edited_at", nullable = false)

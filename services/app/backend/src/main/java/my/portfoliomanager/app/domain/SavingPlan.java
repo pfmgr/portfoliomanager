@@ -24,7 +24,7 @@ public class SavingPlan {
 	@Column(name = "isin", nullable = false)
 	private String isin;
 
-	@Column(name = "name")
+	@Column(name = "name", columnDefinition = "TEXT")
 	private String name;
 
 	@Column(name = "amount_eur", nullable = false)

@@ -13,7 +13,7 @@ public class SnapshotPosition {
 	@EmbeddedId
 	private SnapshotPositionId id;
 
-	@Column(name = "name")
+	@Column(name = "name", columnDefinition = "TEXT")
 	private String name;
 
 	@Column(name = "shares")

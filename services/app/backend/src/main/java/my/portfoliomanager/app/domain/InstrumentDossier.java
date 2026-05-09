@@ -25,7 +25,7 @@ public class InstrumentDossier {
 	@Column(name = "isin", nullable = false)
 	private String isin;
 
-	@Column(name = "display_name")
+	@Column(name = "display_name", columnDefinition = "TEXT")
 	private String displayName;
 
 	@Column(name = "created_by", nullable = false)

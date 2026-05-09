@@ -128,6 +128,73 @@ class SavingPlanApiIntegrationTest {
 	}
 
 	@Test
+	void createSavingPlanMaterializesInstrumentWithLongKnowledgeBaseFields() throws Exception {
+		String longName = longText("Long KB Global ETF ", 300).trim();
+		String longInstrumentType = longText("Instrument Type ", 160);
+		String longAssetClass = longText("Asset Class ", 160);
+		String longSubClass = longText("Sub Class ", 160);
+		String longLayerNotes = longText("Layer Notes ", 620);
+		createApprovedExtraction(
+				"LU0000000009",
+				longName,
+				longInstrumentType,
+				longAssetClass,
+				longSubClass,
+				2,
+				longLayerNotes
+		);
+
+		mockMvc.perform(post("/api/sparplans")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "depotId": 1,
+								  "isin": "LU0000000009",
+								  "amountEur": 25.00
+								}
+								"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isin").value("LU0000000009"))
+				.andExpect(jsonPath("$.name").value(longName))
+				.andExpect(jsonPath("$.layer").value(2));
+
+		assertThat(jdbcTemplate.queryForObject(
+				"select length(name) from instruments where isin = 'LU0000000009'",
+				Integer.class
+		)).isGreaterThan(255);
+		assertThat(jdbcTemplate.queryForObject(
+				"select length(asset_class) from instruments where isin = 'LU0000000009'",
+				Integer.class
+		)).isGreaterThan(128);
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from sparplans where isin = 'LU0000000009' and depot_id = 1",
+				Integer.class
+		)).isEqualTo(1);
+	}
+
+	@Test
+	void createSavingPlanRejectsOutOfRangeScheduleBeforePersistence() throws Exception {
+		mockMvc.perform(post("/api/sparplans")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "depotId": 1,
+								  "isin": "LU0000000010",
+								  "amountEur": 25.00,
+								  "dayOfMonth": 32
+								}
+								"""))
+				.andExpect(status().isBadRequest());
+
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from sparplans where isin = 'LU0000000010'",
+				Integer.class
+		)).isZero();
+	}
+
+	@Test
 	void createSavingPlanReactivatesDeletedInstrument() throws Exception {
 		createApprovedExtraction("LU0000000002", "Reactivated ETF", 4);
 		jdbcTemplate.update(
@@ -361,8 +428,19 @@ class SavingPlanApiIntegrationTest {
 	}
 
 	private void createApprovedExtraction(String isin, String name, Integer layer) throws Exception {
+		createApprovedExtraction(isin, name, "ETF", "Equity", "Global", layer, "KB seeded");
+	}
+
+	private void createApprovedExtraction(String isin,
+									  String name,
+									  String instrumentType,
+									  String assetClass,
+									  String subClass,
+									  Integer layer,
+									  String layerNotes) throws Exception {
 		InstrumentDossier dossier = new InstrumentDossier();
 		dossier.setIsin(isin);
+		dossier.setDisplayName(name);
 		dossier.setCreatedBy("tester");
 		dossier.setOrigin(DossierOrigin.USER);
 		dossier.setStatus(DossierStatus.DRAFT);
@@ -379,15 +457,15 @@ class SavingPlanApiIntegrationTest {
 		InstrumentDossierExtractionPayload payload = new InstrumentDossierExtractionPayload(
 				isin,
 				name,
-				"ETF",
-				"Equity",
-				"Global",
+				instrumentType,
+				assetClass,
+				subClass,
 				null,
 				null,
 				null,
 				null,
 				layer,
-				"KB seeded",
+				layerNotes,
 				null,
 				null,
 				null,
@@ -408,5 +486,13 @@ class SavingPlanApiIntegrationTest {
 		extraction.setApprovedBy("tester");
 		extraction.setApprovedAt(LocalDateTime.now());
 		extractionRepository.save(extraction);
+	}
+
+	private String longText(String prefix, int minLength) {
+		StringBuilder builder = new StringBuilder(prefix);
+		while (builder.length() < minLength) {
+			builder.append(prefix);
+		}
+		return builder.substring(0, minLength);
 	}
 }
