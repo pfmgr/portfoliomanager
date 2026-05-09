@@ -4,13 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SCRIPT_DIR}"
 ENV_FILE="${REPO_ROOT}/.env"
+COMPOSE_FILE="${REPO_ROOT}/docker-compose.yml"
 OVERRIDE_FILE="${REPO_ROOT}/.local/docker-compose.override.yml"
 DEFAULT_OVERRIDE_FILE="${REPO_ROOT}/.local/docker-compose.override.yml"
 ROOT_OVERRIDE_FILE="${REPO_ROOT}/docker-compose.override.yml"
 SSL_DIR="${REPO_ROOT}/.local/ssl"
-# Reuse existing local values when upgrading an already configured stack.
-# shellcheck disable=SC1091
-[ -f "${REPO_ROOT}/services/app/scripts/stack-env.sh" ] && . "${REPO_ROOT}/services/app/scripts/stack-env.sh"
+FRONTEND_TLS_CONFIG_FILE="${REPO_ROOT}/.local/nginx.tls.conf"
 TLS_MODE=""
 BACKEND_EXPOSED=""
 FRONTEND_BIND="${ADMIN_FRONTEND_BIND:-127.0.0.1}"
@@ -35,7 +34,9 @@ Options:
   --non-interactive        Fail instead of prompting for missing values
   --force                  Overwrite existing target files
   --env-file PATH          Write .env to PATH
+  --compose-file PATH      Write base docker-compose.yml to PATH when missing
   --compose-override PATH  Write local compose override to PATH
+  --tls-config PATH        Write frontend TLS nginx config to PATH when TLS is enabled
   --ssl-dir PATH           Write self-signed certs to PATH
   --mode MODE              http | self-signed | third-party
   --backend-exposed BOOL   true | false
@@ -171,6 +172,140 @@ write_atomic() {
   tmp="$(mktemp "$(dirname -- "${target}")/.wizard.XXXXXX")"
   printf '%s' "${content}" > "${tmp}"
   mv -- "${tmp}" "${target}"
+}
+
+load_env_file() {
+  local env_file="$1"
+  local line key value
+
+  [ -f "${env_file}" ] || return 0
+
+  while IFS= read -r line || [ -n "${line}" ]; do
+    case "${line}" in
+      ''|'#'*)
+        continue
+        ;;
+    esac
+
+    if [[ ! "${line}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      continue
+    fi
+
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    if [ -n "${!key+x}" ]; then
+      continue
+    fi
+
+    case "${value}" in
+      '"'*)
+        if [ "${value: -1}" = '"' ]; then
+          value="${value:1:${#value}-2}"
+        fi
+        ;;
+      "'"*)
+        if [ "${value: -1}" = "'" ]; then
+          value="${value:1:${#value}-2}"
+        fi
+        ;;
+    esac
+
+    export "${key}=${value}"
+  done < "${env_file}"
+}
+
+# Reuse existing local values when upgrading an already configured stack. This
+# keeps the wizard standalone; it does not depend on repository helper scripts.
+load_env_file "${STACK_ENV_FILE:-${ENV_FILE}}"
+
+FRONTEND_BIND="${ADMIN_FRONTEND_BIND:-${FRONTEND_BIND}}"
+FRONTEND_HTTP_PORT="${ADMIN_FRONTEND_PORT:-${FRONTEND_HTTP_PORT}}"
+FRONTEND_TLS_PORT="${ADMIN_FRONTEND_TLS_PORT:-${FRONTEND_TLS_PORT}}"
+BACKEND_BIND="${ADMIN_SPRING_BIND:-${BACKEND_BIND}}"
+BACKEND_PORT="${ADMIN_SPRING_PORT:-${BACKEND_PORT}}"
+SAN_NAMES="${ADMIN_FRONTEND_TLS_SAN_NAMES:-${SAN_NAMES}}"
+CERT_PATH="${ADMIN_FRONTEND_TLS_CERT_PATH:-${CERT_PATH}}"
+KEY_PATH="${ADMIN_FRONTEND_TLS_KEY_PATH:-${KEY_PATH}}"
+
+base_compose_content() {
+  cat <<'EOF'
+services:
+  db_portfolio:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: portfolio
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: ${PORTFOLIO_DB_PASSWORD}
+    volumes:
+      - portfolio_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  admin_spring:
+    image: fg1212/portfoliomanager-backend:${PORTFOLIO_MANAGER_VERSION:-latest}
+    environment:
+      DB_URL: jdbc:postgresql://db_portfolio:5432/portfolio
+      DB_USER: portfolio
+      DB_PASSWORD: ${PORTFOLIO_DB_PASSWORD}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASS: ${ADMIN_PASS}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_JTI_HASH_SECRET: ${JWT_JTI_HASH_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-portfolio-manager}
+      LLM_CONFIG_ENCRYPTION_PASSWORD: ${LLM_CONFIG_ENCRYPTION_PASSWORD:-}
+      KB_ENABLED: ${KB_ENABLED:-true}
+      KB_LLM_ENABLED: ${KB_LLM_ENABLED:-false}
+      APP_KB_ENABLED: ${KB_ENABLED:-true}
+      APP_KB_LLM_ENABLED: ${KB_LLM_ENABLED:-false}
+    depends_on:
+      - db_portfolio
+    restart: unless-stopped
+
+  admin_frontend:
+    image: fg1212/portfoliomanager-frontend:${PORTFOLIO_MANAGER_VERSION:-latest}
+    depends_on:
+      - admin_spring
+    ports:
+      - "${ADMIN_FRONTEND_BIND:-127.0.0.1}:${ADMIN_FRONTEND_PORT:-8080}:${ADMIN_FRONTEND_CONTAINER_PORT:-80}"
+    restart: unless-stopped
+
+volumes:
+  portfolio_data:
+EOF
+}
+
+frontend_tls_config_content() {
+  cat <<'EOF'
+server {
+  listen 443 ssl;
+  server_name _;
+  client_max_body_size 25m;
+
+  ssl_certificate /etc/nginx/certs/frontend.crt;
+  ssl_certificate_key /etc/nginx/certs/frontend.key;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_prefer_server_ciphers on;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  location /api/ {
+    proxy_pass http://admin_spring:8080/api/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+  }
+
+  location /auth/ {
+    proxy_pass http://admin_spring:8080/auth/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+  }
+
+  location / {
+    try_files $uri /index.html;
+  }
+}
+EOF
 }
 
 is_ipv4() {
@@ -461,9 +596,17 @@ if [ "$#" -gt 0 ]; then
         shift
         ENV_FILE="${1:-}"
         ;;
+      --compose-file)
+        shift
+        COMPOSE_FILE="${1:-}"
+        ;;
       --compose-override|--compose-override-file)
         shift
         OVERRIDE_FILE="${1:-}"
+        ;;
+      --tls-config|--tls-config-file)
+        shift
+        FRONTEND_TLS_CONFIG_FILE="${1:-}"
         ;;
       --ssl-dir)
         shift
@@ -623,7 +766,10 @@ fi
 if [ "${TLS_ENABLED}" = "true" ]; then
   ensure_parent_dir "${CERT_PATH}"
   ensure_parent_dir "${KEY_PATH}"
+  ensure_parent_dir "${FRONTEND_TLS_CONFIG_FILE}"
 fi
+
+ensure_parent_dir "${COMPOSE_FILE}"
 
 if [ "${TLS_MODE}" = "self-signed" ] && { [ -e "${CERT_PATH}" ] || [ -e "${KEY_PATH}" ]; } && [ "${FORCE}" = "false" ]; then
   if [ -t 0 ] && [ "${NON_INTERACTIVE}" = "false" ]; then
@@ -655,6 +801,16 @@ if [ -e "${OVERRIDE_FILE}" ] && [ "${FORCE}" = "false" ]; then
   fi
 fi
 
+if [ "${TLS_ENABLED}" = "true" ] && [ -e "${FRONTEND_TLS_CONFIG_FILE}" ] && [ "${FORCE}" = "false" ]; then
+  if [ -t 0 ] && [ "${NON_INTERACTIVE}" = "false" ]; then
+    if [ "$(prompt_yes_no "${FRONTEND_TLS_CONFIG_FILE} exists. Overwrite it?" 'false')" != "true" ]; then
+      die "Aborted without changing ${FRONTEND_TLS_CONFIG_FILE}."
+    fi
+  else
+    die "${FRONTEND_TLS_CONFIG_FILE} already exists. Re-run with --force to overwrite it."
+  fi
+fi
+
 if [ "${CREATE_ROOT_OVERRIDE}" = "true" ] && [ -e "${ROOT_OVERRIDE_FILE}" ] && [ "${FORCE}" = "false" ]; then
   if [ -t 0 ] && [ "${NON_INTERACTIVE}" = "false" ]; then
     if [ "$(prompt_yes_no "${ROOT_OVERRIDE_FILE} exists. Overwrite it?" 'false')" != "true" ]; then
@@ -682,9 +838,16 @@ if [ "${TLS_MODE}" = "self-signed" ]; then
   mv -- "${temp_key_path}" "${KEY_PATH}"
 fi
 
-frontend_tls_config_path="${REPO_ROOT}/services/app/frontend/nginx.tls.conf"
-override_content="$(compose_override_content "${TLS_ENABLED}" "${BACKEND_EXPOSED}" "${CERT_PATH}" "${KEY_PATH}" "${frontend_tls_config_path}")"
+override_content="$(compose_override_content "${TLS_ENABLED}" "${BACKEND_EXPOSED}" "${CERT_PATH}" "${KEY_PATH}" "${FRONTEND_TLS_CONFIG_FILE}")"
 env_content="$(env_content "${TLS_ENABLED}" "${SELF_SIGNED}" "${CERT_PATH}" "${KEY_PATH}" "${SAN_NAMES}")"
+
+if [ ! -e "${COMPOSE_FILE}" ]; then
+  write_atomic "${COMPOSE_FILE}" "$(base_compose_content)"
+fi
+
+if [ "${TLS_ENABLED}" = "true" ]; then
+  write_atomic "${FRONTEND_TLS_CONFIG_FILE}" "$(frontend_tls_config_content)"
+fi
 
 write_atomic "${OVERRIDE_FILE}" "${override_content}"
 write_atomic "${ENV_FILE}" "${env_content}"
@@ -694,9 +857,15 @@ if [ "${CREATE_ROOT_OVERRIDE}" = "true" ]; then
 fi
 
 printf 'Wrote %s\n' "${ENV_FILE}"
+if [ -e "${COMPOSE_FILE}" ]; then
+  printf 'Ensured %s\n' "${COMPOSE_FILE}"
+fi
 printf 'Wrote %s\n' "${OVERRIDE_FILE}"
 if [ "${CREATE_ROOT_OVERRIDE}" = "true" ]; then
   printf 'Wrote %s\n' "${ROOT_OVERRIDE_FILE}"
+fi
+if [ "${TLS_ENABLED}" = "true" ]; then
+  printf 'Wrote %s\n' "${FRONTEND_TLS_CONFIG_FILE}"
 fi
 if [ "${TLS_MODE}" = "self-signed" ]; then
   printf 'Wrote self-signed certificate to %s and %s\n' "${CERT_PATH}" "${KEY_PATH}"

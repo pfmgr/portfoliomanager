@@ -1,4 +1,5 @@
 import os
+import shutil
 import shlex
 import subprocess
 import tempfile
@@ -36,6 +37,7 @@ class ConfigureDockerComposeWizardTest(unittest.TestCase):
             temp_dir = Path(td)
             env_file = temp_dir / "out.env"
             override_file = temp_dir / "docker-compose.override.yml"
+            tls_config_file = temp_dir / "nginx.tls.conf"
             cert_path = temp_dir / "ssl" / "frontend.crt"
             key_path = temp_dir / "ssl" / "frontend.key"
 
@@ -44,6 +46,7 @@ class ConfigureDockerComposeWizardTest(unittest.TestCase):
                 [
                     "--env-file", env_file,
                     "--compose-override", override_file,
+                    "--tls-config", tls_config_file,
                     "--cert-path", cert_path,
                     "--key-path", key_path,
                     "--force",
@@ -53,6 +56,7 @@ class ConfigureDockerComposeWizardTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
             self.assertTrue(env_file.exists())
             self.assertTrue(override_file.exists())
+            self.assertTrue(tls_config_file.exists())
             self.assertTrue(cert_path.exists())
             self.assertTrue(key_path.exists())
             env_text = env_file.read_text()
@@ -65,6 +69,7 @@ class ConfigureDockerComposeWizardTest(unittest.TestCase):
             self.assertIn(str(key_path), env_text)
             self.assertIn(str(cert_path), override_text)
             self.assertIn(str(key_path), override_text)
+            self.assertIn(str(tls_config_file), override_text)
             self.assertNotIn("admin_spring", override_text)
 
             san_dump = subprocess.run(
@@ -82,6 +87,7 @@ class ConfigureDockerComposeWizardTest(unittest.TestCase):
             temp_dir = Path(td)
             env_file = temp_dir / "out.env"
             override_file = temp_dir / "docker-compose.override.yml"
+            tls_config_file = temp_dir / "nginx.tls.conf"
             cert_path = temp_dir / "third-party.crt"
             key_path = temp_dir / "third-party.key"
             cert_path.write_text("cert")
@@ -89,7 +95,7 @@ class ConfigureDockerComposeWizardTest(unittest.TestCase):
 
             result = self.run_wizard(
                 f"3\ny\n127.0.0.1\n9443\n0.0.0.0\n18080\n{cert_path}\n{key_path}\n",
-                ["--env-file", env_file, "--compose-override", override_file, "--force"],
+                ["--env-file", env_file, "--compose-override", override_file, "--tls-config", tls_config_file, "--force"],
                 extra_env={
                     "ADMIN_FRONTEND_TLS_CERT_PATH": "",
                     "ADMIN_FRONTEND_TLS_KEY_PATH": "",
@@ -105,7 +111,50 @@ class ConfigureDockerComposeWizardTest(unittest.TestCase):
             self.assertIn("ADMIN_FRONTEND_TLS_SELF_SIGNED='false'", env_text)
             self.assertIn(f"ADMIN_FRONTEND_TLS_CERT_PATH='{cert_path}'", env_text)
             self.assertIn(f"ADMIN_FRONTEND_TLS_KEY_PATH='{key_path}'", env_text)
+            self.assertIn(str(tls_config_file), override_text)
             self.assertIn('      - "0.0.0.0:18080:8080"', override_text)
+
+    def test_copied_script_generates_standalone_compose_setup(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_dir = Path(td)
+            copied_script = temp_dir / "configure-docker-compose.sh"
+            shutil.copy2(SCRIPT_PATH, copied_script)
+
+            result = subprocess.run(
+                [
+                    str(copied_script),
+                    "--non-interactive",
+                    "--mode", "self-signed",
+                    "--sans", "localhost,127.0.0.1",
+                    "--force",
+                ],
+                cwd=temp_dir,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                timeout=120,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            env_file = temp_dir / ".env"
+            compose_file = temp_dir / "docker-compose.yml"
+            local_override_file = temp_dir / ".local" / "docker-compose.override.yml"
+            root_override_file = temp_dir / "docker-compose.override.yml"
+            tls_config_file = temp_dir / ".local" / "nginx.tls.conf"
+            cert_path = temp_dir / ".local" / "ssl" / "frontend.crt"
+            key_path = temp_dir / ".local" / "ssl" / "frontend.key"
+
+            for path in [env_file, compose_file, local_override_file, root_override_file, tls_config_file, cert_path, key_path]:
+                self.assertTrue(path.exists(), msg=f"Missing generated file: {path}")
+
+            compose_text = compose_file.read_text()
+            override_text = local_override_file.read_text()
+            tls_config_text = tls_config_file.read_text()
+            self.assertIn("fg1212/portfoliomanager-backend", compose_text)
+            self.assertIn("fg1212/portfoliomanager-frontend", compose_text)
+            self.assertIn(str(tls_config_file), override_text)
+            self.assertIn(str(cert_path), override_text)
+            self.assertIn("proxy_pass http://admin_spring:8080/api/;", tls_config_text)
 
     def test_interactive_self_signed_mode_respects_overwrite_rejection(self):
         with tempfile.TemporaryDirectory() as td:
