@@ -38,6 +38,10 @@ if [ "${revoked_status}" != "401" ]; then
   exit 1
 fi
 
+if [ "${SMOKE_INCLUDE_SAVING_PLAN_LONG_METADATA:-false}" = "true" ]; then
+  "${SCRIPT_DIR}/run-saving-plan-long-metadata-smoke.sh"
+fi
+
 printf 'Running stack smoke checks passed.\n'
 printf 'Auth health: %s\n' "${AUTH_HEALTH_URL}"
 printf 'Protected endpoint: %s\n' "${PROTECTED_URL}"

@@ -42,6 +42,22 @@ delete from sparplans where isin in ('ZZTESTAAA001', 'ZZTESTBBB002', 'ZZTESTRBL0
 delete from instruments where isin in ('ZZTESTAAA001', 'ZZTESTBBB002', 'ZZTESTRBL003');
 delete from depots where depot_code in ('tst_assr', 'tst_reb');
 
+update depots
+set active_snapshot_id = null
+where depot_code = 'tst_long';
+delete from sparplans_history where isin in ('ZZLONGSP0001', 'ZZLONGSP0011', 'ZZLONGSP0022', 'ZZLONGSP0033', 'ZZLONGSP0044');
+delete from sparplans where isin in ('ZZLONGSP0001', 'ZZLONGSP0011', 'ZZLONGSP0022', 'ZZLONGSP0033', 'ZZLONGSP0044');
+delete from instrument_dossier_extractions
+where dossier_id in (
+  select dossier_id
+  from instrument_dossiers
+  where isin in ('ZZLONGSP0001', 'ZZLONGSP0011', 'ZZLONGSP0022', 'ZZLONGSP0033', 'ZZLONGSP0044')
+);
+delete from instrument_dossiers where isin in ('ZZLONGSP0001', 'ZZLONGSP0011', 'ZZLONGSP0022', 'ZZLONGSP0033', 'ZZLONGSP0044');
+delete from knowledge_base_extractions where isin in ('ZZLONGSP0001', 'ZZLONGSP0011', 'ZZLONGSP0022', 'ZZLONGSP0033', 'ZZLONGSP0044');
+delete from instruments where isin in ('ZZLONGSP0001', 'ZZLONGSP0011', 'ZZLONGSP0022', 'ZZLONGSP0033', 'ZZLONGSP0044');
+delete from depots where depot_code = 'tst_long';
+
 commit;
 SQL
 

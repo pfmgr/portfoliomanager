@@ -14,19 +14,19 @@ public class Instrument {
 	@Column(name = "isin")
 	private String isin;
 
-	@Column(name = "name", nullable = false)
+	@Column(name = "name", nullable = false, columnDefinition = "TEXT")
 	private String name;
 
 	@Column(name = "depot_code", nullable = false)
 	private String depotCode;
 
-	@Column(name = "instrument_type")
+	@Column(name = "instrument_type", columnDefinition = "TEXT")
 	private String instrumentType;
 
-	@Column(name = "asset_class")
+	@Column(name = "asset_class", columnDefinition = "TEXT")
 	private String assetClass;
 
-	@Column(name = "sub_class")
+	@Column(name = "sub_class", columnDefinition = "TEXT")
 	private String subClass;
 
 	@Column(name = "layer", nullable = false)
@@ -35,7 +35,7 @@ public class Instrument {
 	@Column(name = "layer_last_changed")
 	private LocalDate layerLastChanged;
 
-	@Column(name = "layer_notes")
+	@Column(name = "layer_notes", columnDefinition = "TEXT")
 	private String layerNotes;
 
 	@Column(name = "is_deleted", nullable = false)

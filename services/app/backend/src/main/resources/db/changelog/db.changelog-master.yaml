@@ -1580,3 +1580,65 @@ databaseChangeLog:
                   type: TIMESTAMP
                   constraints:
                     nullable: false
+  - changeSet:
+      id: 021-descriptive-fields-text
+      author: codex
+      changes:
+        - sql:
+            splitStatements: false
+            dbms: postgresql
+            sql: |
+              DROP VIEW IF EXISTS snapshot_positions_effective;
+              DROP VIEW IF EXISTS instruments_effective;
+
+              ALTER TABLE instruments ALTER COLUMN name TYPE TEXT;
+              ALTER TABLE instruments ALTER COLUMN instrument_type TYPE TEXT;
+              ALTER TABLE instruments ALTER COLUMN asset_class TYPE TEXT;
+              ALTER TABLE instruments ALTER COLUMN sub_class TYPE TEXT;
+              ALTER TABLE instruments ALTER COLUMN layer_notes TYPE TEXT;
+              ALTER TABLE sparplans ALTER COLUMN name TYPE TEXT;
+              ALTER TABLE snapshot_positions ALTER COLUMN name TYPE TEXT;
+              ALTER TABLE instrument_edits ALTER COLUMN old_value TYPE TEXT;
+              ALTER TABLE instrument_edits ALTER COLUMN new_value TYPE TEXT;
+              ALTER TABLE instrument_dossiers ALTER COLUMN display_name TYPE TEXT;
+
+              CREATE OR REPLACE VIEW instruments_effective AS
+              SELECT
+                i.isin,
+                COALESCE(o.name, i.name) AS name,
+                COALESCE(o.instrument_type, c.instrument_type, i.instrument_type) AS instrument_type,
+                COALESCE(o.asset_class, c.asset_class, i.asset_class) AS asset_class,
+                COALESCE(o.sub_class, c.sub_class, i.sub_class) AS sub_class,
+                COALESCE(o.layer, c.layer, i.layer) AS layer,
+                COALESCE(o.layer_last_changed, c.layer_last_changed, i.layer_last_changed) AS layer_last_changed,
+                COALESCE(o.layer_notes, c.layer_notes, i.layer_notes) AS layer_notes,
+                (c.rule_id IS NOT NULL) AS classified_by_rule,
+                c.rule_id AS applied_rule_id,
+                (o.isin IS NOT NULL) AS has_override,
+                GREATEST(
+                  COALESCE(o.updated_at, 'epoch'::timestamp),
+                  COALESCE(c.updated_at, 'epoch'::timestamp),
+                  'epoch'::timestamp
+                ) AS effective_updated_at
+              FROM instruments i
+              LEFT JOIN instrument_classifications c USING (isin)
+              LEFT JOIN instrument_overrides o USING (isin)
+              WHERE NOT i.is_deleted;
+
+              CREATE OR REPLACE VIEW snapshot_positions_effective AS
+              SELECT
+                s.snapshot_id,
+                d.depot_code,
+                s.as_of_date,
+                s.source,
+                s.file_hash,
+                s.imported_at,
+                sp.isin,
+                sp.name,
+                sp.shares,
+                sp.value_eur,
+                sp.currency
+              FROM depots d
+              JOIN snapshots s ON s.snapshot_id = d.active_snapshot_id
+              JOIN snapshot_positions sp ON sp.snapshot_id = s.snapshot_id
+              JOIN instruments_effective ie ON ie.isin = sp.isin;
