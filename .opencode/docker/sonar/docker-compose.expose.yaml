@@ -1,0 +1,6 @@
+services:
+  sonarqube:
+    # This file is deliberately applied only after sonar-start.sh has rotated the
+    # factory credential and created the least-privilege project users.
+    ports:
+      - "127.0.0.1:${SONAR_PORT}:9000"

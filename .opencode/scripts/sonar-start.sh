@@ -1,556 +1,280 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Starts SonarQube without a host port, performs first-use bootstrap over the
+# container's loopback interface, then publishes a loopback-only host port.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/.opencode/docker/sonar/docker-compose.yaml"
-RUNTIME_ENV="${ROOT_DIR}/.opencode/docker/sonar/.runtime.env"
-
-PORT_OVERRIDE=""
-TIMEOUT_SECONDS=180
-QUIET=false
-DEFAULT_QUALITY_GATE="${SONAR_DEFAULT_QUALITY_GATE:-PortfolioManager Default}"
-CONFIGURE_DEFAULT_QUALITY_GATE=true
-CREATE_DEFAULT_QUALITY_GATE="${SONAR_CREATE_DEFAULT_QUALITY_GATE:-true}"
-REUSE_RUNNING=false
+EXPOSE_COMPOSE_FILE="${ROOT_DIR}/.opencode/docker/sonar/docker-compose.expose.yaml"
+RUNTIME_DIR="${ROOT_DIR}/.opencode/docker/sonar/runtime"
+ANALYSIS_ENV="${RUNTIME_DIR}/analysis.env"
+READ_ENV="${RUNTIME_DIR}/read.env"
+BOOTSTRAP_ENV="${RUNTIME_DIR}/bootstrap.env"
+QUIET=false PORT_OVERRIDE="" TIMEOUT_SECONDS=600 PROJECT_KEY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --port)
-      PORT_OVERRIDE="$2"
-      shift 2
-      ;;
-    --timeout)
-      TIMEOUT_SECONDS="$2"
-      shift 2
-      ;;
-    --quiet)
-      QUIET=true
-      shift
-      ;;
-    --default-gate)
-      DEFAULT_QUALITY_GATE="$2"
-      shift 2
-      ;;
-    --skip-default-gate)
-      CONFIGURE_DEFAULT_QUALITY_GATE=false
-      shift
-      ;;
-    --skip-default-gate-create)
-      CREATE_DEFAULT_QUALITY_GATE=false
-      shift
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      exit 4
-      ;;
+    --project-key) PROJECT_KEY="${2:?missing project key}"; shift 2 ;;
+    --port) PORT_OVERRIDE="${2:?missing port}"; shift 2 ;;
+    --timeout) TIMEOUT_SECONDS="${2:?missing timeout}"; shift 2 ;;
+    --quiet) QUIET=true; shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 4 ;;
   esac
 done
-
-log() {
-  if [[ "${QUIET}" != "true" ]]; then
-    echo "$@"
-  fi
-}
-
-if [[ ! -f "${COMPOSE_FILE}" ]]; then
-  echo "Missing compose file: ${COMPOSE_FILE}" >&2
-  exit 4
-fi
-
-PYTHON_BIN=""
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-  PYTHON_BIN="python"
-else
-  echo "Python is required to detect a free port." >&2
-  exit 4
-fi
-
-REPO_NAME="$(basename "${ROOT_DIR}")"
-REPO_PREFIX="$(printf '%s' "${REPO_NAME}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')"
-if [[ -z "${REPO_PREFIX}" ]]; then
-  REPO_PREFIX="repo"
-fi
-
+log() { [[ "$QUIET" == true ]] || printf '%s\n' "$*" >&2; }
+command -v python3 >/dev/null || { echo "Python 3 is required." >&2; exit 4; }
+[[ -f "$COMPOSE_FILE" && -f "$EXPOSE_COMPOSE_FILE" ]] || { echo "Sonar Compose files are missing." >&2; exit 4; }
+PROJECT_KEY="${PROJECT_KEY:-$(basename "$ROOT_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')}"
+[[ "$PROJECT_KEY" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo "Invalid Sonar project key." >&2; exit 4; }
+REPO_PREFIX="$(basename "$ROOT_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')"
+REPO_PREFIX="${REPO_PREFIX:-repo}"
 COMPOSE_PROJECT_NAME="${REPO_PREFIX}_sonar"
 
-if [[ -z "${PORT_OVERRIDE}" && -f "${RUNTIME_ENV}" ]]; then
-  EXISTING_COMPOSE_PROJECT_NAME=""
-  EXISTING_SONAR_PORT=""
-  EXISTING_SONAR_URL=""
-  EXISTING_SONAR_TOKEN=""
-  EXISTING_SONAR_TOKEN_NAME=""
-  set -a
-  # shellcheck disable=SC1090
-  source "${RUNTIME_ENV}" 2>/dev/null || true
-  set +a
-  EXISTING_COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-}"
-  EXISTING_SONAR_PORT="${SONAR_PORT:-}"
-  EXISTING_SONAR_URL="${SONAR_URL:-}"
-  EXISTING_SONAR_TOKEN="${SONAR_TOKEN:-}"
-  EXISTING_SONAR_TOKEN_NAME="${SONAR_TOKEN_NAME:-}"
-  COMPOSE_PROJECT_NAME="${REPO_PREFIX}_sonar"
-
-  if [[ "${EXISTING_COMPOSE_PROJECT_NAME}" == "${COMPOSE_PROJECT_NAME}" && -n "${EXISTING_SONAR_PORT}" && -n "${EXISTING_SONAR_URL}" ]]; then
-    existing_container_id="$(docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" ps -q sonarqube 2>/dev/null || true)"
-    if [[ -n "${existing_container_id}" ]]; then
-      if curl -sf "${EXISTING_SONAR_URL}/api/system/status" | grep -q '"status":"UP"'; then
-        SONAR_PORT="${EXISTING_SONAR_PORT}"
-        SONAR_URL="${EXISTING_SONAR_URL}"
-        REUSE_RUNNING=true
-      fi
-    fi
+safe_value() {
+  python3 - "$RUNTIME_DIR" "$1" "$2" <<'PY'
+import os, stat, sys
+directory, path, wanted = sys.argv[1:]
+for candidate, kind, mode in ((directory, stat.S_ISDIR, 0o700), (path, stat.S_ISREG, 0o600)):
+    try: info = os.lstat(candidate)
+    except FileNotFoundError: raise SystemExit(0)
+    if stat.S_ISLNK(info.st_mode) or not kind(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != mode:
+        raise SystemExit("unsafe Sonar runtime path")
+allowed = {"SONAR_URL", "SONAR_PROJECT_KEY", "SONAR_ANALYSIS_TOKEN", "SONAR_READ_TOKEN", "SONAR_BOOTSTRAP_PASSWORD"}
+if wanted not in allowed: raise SystemExit(2)
+values = {}
+with open(path, encoding="utf-8") as source:
+    for line in source:
+        key, separator, value = line.rstrip("\n").partition("=")
+        if not separator or key not in allowed or not value or "\x00" in value or key in values:
+            raise SystemExit("invalid Sonar runtime data")
+        values[key] = value
+print(values.get(wanted, ""))
+PY
+}
+prepare_runtime_dir() {
+  if [[ -e "$RUNTIME_DIR" ]]; then
+    python3 - "$RUNTIME_DIR" <<'PY'
+import os, stat, sys
+s=os.lstat(sys.argv[1])
+if stat.S_ISLNK(s.st_mode) or not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or stat.S_IMODE(s.st_mode) != 0o700: raise SystemExit(1)
+PY
+  else
+    (umask 077 && mkdir "$RUNTIME_DIR")
   fi
-fi
-
-is_port_free() {
-  local port="$1"
-  "${PYTHON_BIN}" - "$port" <<'PY'
-import socket
-import sys
-
-port = int(sys.argv[1])
-sock = socket.socket()
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-try:
-    sock.bind(("127.0.0.1", port))
-except OSError:
-    sys.exit(1)
-finally:
-    sock.close()
+}
+write_runtime_file() {
+  local path="$1" temporary
+  prepare_runtime_dir || { echo "Unsafe Sonar runtime directory." >&2; exit 4; }
+  [[ ! -L "$path" ]] || { echo "Unsafe Sonar runtime file." >&2; exit 4; }
+  temporary="$(mktemp "$RUNTIME_DIR/.runtime.XXXXXX")"
+  chmod 600 "$temporary"
+  # stdin keeps line endings literal and the rename makes the update atomic.
+  cat >"$temporary"
+  mv -f "$temporary" "$path"
+}
+write_bootstrap_file() { write_runtime_file "$BOOTSTRAP_ENV" <<EOF
+SONAR_BOOTSTRAP_PASSWORD=$1
+EOF
+}
+write_analysis_file() { write_runtime_file "$ANALYSIS_ENV" <<EOF
+SONAR_URL=$SONAR_URL
+SONAR_PROJECT_KEY=$PROJECT_KEY
+SONAR_ANALYSIS_TOKEN=$ANALYSIS_TOKEN
+EOF
+}
+write_read_file() { write_runtime_file "$READ_ENV" <<EOF
+SONAR_URL=$SONAR_URL
+SONAR_PROJECT_KEY=$PROJECT_KEY
+SONAR_READ_TOKEN=$READ_TOKEN
+EOF
+}
+random_secret() { python3 -c 'import secrets; print(secrets.token_urlsafe(48))'; }
+port_free() { python3 - "$1" <<'PY'
+import socket, sys
+s=socket.socket()
+try: s.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError: raise SystemExit(1)
+finally: s.close()
 PY
 }
 
-if [[ "${REUSE_RUNNING}" != "true" ]]; then
-  SONAR_PORT="${PORT_OVERRIDE}"
-fi
-if [[ -z "${SONAR_PORT}" ]]; then
-  for port in $(seq 9000 9100); do
-    if is_port_free "${port}"; then
-      SONAR_PORT="${port}"
-      break
-    fi
-  done
-fi
-
-if [[ -z "${SONAR_PORT}" ]]; then
-  echo "No free SonarQube port found." >&2
-  exit 2
-fi
-
+# Runtime credentials are generated and retained only in protected local files.
+for forbidden in SONAR_TOKEN SONAR_ADMIN_TOKEN SONAR_ANALYSIS_TOKEN SONAR_READ_TOKEN; do
+  if [[ -v "$forbidden" ]]; then
+    echo "Externally supplied ${forbidden} is not accepted as a Sonar runtime token; preflight blocked." >&2
+    exit 4
+  fi
+done
+ANALYSIS_TOKEN=""
+READ_TOKEN=""
+if [[ -f "$ANALYSIS_ENV" ]]; then ANALYSIS_TOKEN="$(safe_value "$ANALYSIS_ENV" SONAR_ANALYSIS_TOKEN)" || { echo "Unsafe analysis runtime file." >&2; exit 4; }; fi
+if [[ -f "$READ_ENV" ]]; then READ_TOKEN="$(safe_value "$READ_ENV" SONAR_READ_TOKEN)" || { echo "Unsafe read runtime file." >&2; exit 4; }; fi
+SONAR_PORT="$PORT_OVERRIDE"
+if [[ -z "$SONAR_PORT" && -f "$READ_ENV" ]]; then SONAR_URL="$(safe_value "$READ_ENV" SONAR_URL)" || exit 4; SONAR_PORT="${SONAR_URL##*:}"; fi
+if [[ -z "$SONAR_PORT" ]]; then for port in $(seq 9000 9100); do port_free "$port" && { SONAR_PORT="$port"; break; }; done; fi
+[[ "$SONAR_PORT" =~ ^[0-9]+$ ]] && (( SONAR_PORT > 0 && SONAR_PORT < 65536 )) || { echo "No valid free SonarQube port found." >&2; exit 4; }
 SONAR_URL="http://127.0.0.1:${SONAR_PORT}"
-SONAR_ADMIN_USER="${SONAR_ADMIN_USER:-admin}"
-SONAR_ADMIN_PASSWORD="${SONAR_ADMIN_PASSWORD:-admin}"
-SONAR_TOKEN="${SONAR_TOKEN:-${SONAR_ADMIN_TOKEN:-${EXISTING_SONAR_TOKEN:-}}}"
-SONAR_TOKEN_NAME="${SONAR_TOKEN_NAME:-${EXISTING_SONAR_TOKEN_NAME:-}}"
+export REPO_PREFIX SONAR_PORT
+docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" config >/dev/null || { echo "Sonar Compose configuration is invalid." >&2; exit 4; }
 
-sonar_api() {
-  curl -sf -H "Authorization: Bearer ${SONAR_TOKEN}" "$@"
-}
-
-is_true() {
-  case "${1:-}" in
-    1|true|TRUE|yes|YES|on|ON)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-write_runtime_env() {
-  cat > "${RUNTIME_ENV}" <<EOF
-REPO_PREFIX=$(printf '%q' "${REPO_PREFIX}")
-COMPOSE_PROJECT_NAME=$(printf '%q' "${COMPOSE_PROJECT_NAME}")
-SONAR_PORT=$(printf '%q' "${SONAR_PORT}")
-SONAR_URL=$(printf '%q' "${SONAR_URL}")
-SONAR_TOKEN=$(printf '%q' "${SONAR_TOKEN}")
-SONAR_TOKEN_NAME=$(printf '%q' "${SONAR_TOKEN_NAME}")
-SONAR_DEFAULT_QUALITY_GATE=$(printf '%q' "${DEFAULT_QUALITY_GATE}")
-EOF
-}
-
-count_quality_gates_named() {
-  local gates_json="$1"
-  local gate_name="$2"
-
-  "${PYTHON_BIN}" -c 'import json,sys
-payload=sys.argv[1] if len(sys.argv)>1 else ""
-target=sys.argv[2] if len(sys.argv)>2 else ""
-data=json.loads(payload) if payload else {}
-print(sum(1 for gate in data.get("qualitygates", []) if gate.get("name") == target))' "${gates_json}" "${gate_name}" 2>/dev/null || printf '0'
-}
-
-resolve_default_quality_gate_name() {
-  if [[ -z "${DEFAULT_QUALITY_GATE}" ]]; then
-    return 0
-  fi
-
-  local gates_json
-  local duplicate_count
-  local candidate
-  local suffix
-  local attempt
-
-  gates_json="$(sonar_api "${SONAR_URL}/api/qualitygates/list" || true)"
-  if [[ -z "${gates_json}" ]]; then
-    log "Warning: unable to inspect quality gates for duplicate names."
-    return 0
-  fi
-
-  duplicate_count="$(count_quality_gates_named "${gates_json}" "${DEFAULT_QUALITY_GATE}")"
-  if [[ "${duplicate_count}" -le 1 ]]; then
-    return 0
-  fi
-
-  suffix="${REPO_PREFIX}"
-  candidate="${DEFAULT_QUALITY_GATE} ${suffix}"
-  attempt=2
-  while [[ "$(count_quality_gates_named "${gates_json}" "${candidate}")" -gt 0 ]]; do
-    candidate="${DEFAULT_QUALITY_GATE} ${suffix} ${attempt}"
-    attempt=$((attempt + 1))
-  done
-
-  log "Warning: found ${duplicate_count} quality gates named '${DEFAULT_QUALITY_GATE}'. Using fallback gate name '${candidate}'."
-  DEFAULT_QUALITY_GATE="${candidate}"
-}
-
-token_is_valid() {
-  if [[ -z "${SONAR_TOKEN}" ]]; then
-    return 1
-  fi
-  sonar_api "${SONAR_URL}/api/qualitygates/list" >/dev/null 2>&1
-}
-
-generate_sonar_token() {
-  local cookie_file
-  local token_name
-  local token_json
-  local generated
-  local xsrf_token
-
-  cookie_file="$(mktemp)"
-  if ! curl -sf -c "${cookie_file}" -X POST \
-    "${SONAR_URL}/api/authentication/login" \
-    --data-urlencode "login=${SONAR_ADMIN_USER}" \
-    --data-urlencode "password=${SONAR_ADMIN_PASSWORD}" >/dev/null; then
-    rm -f "${cookie_file}"
-    log "Error: failed SonarQube login for token bootstrap."
-    return 1
-  fi
-
-  token_name="opencode_${REPO_PREFIX}_$(date +%s%N)"
-  xsrf_token="$(awk '$6=="XSRF-TOKEN" {print $7}' "${cookie_file}" || true)"
-  if [[ -z "${xsrf_token}" ]]; then
-    rm -f "${cookie_file}"
-    log "Error: failed to obtain SonarQube XSRF token for API token generation."
-    return 1
-  fi
-  token_json="$(curl -sf -b "${cookie_file}" -X POST \
-    "${SONAR_URL}/api/user_tokens/generate" \
-    -H "X-XSRF-TOKEN: ${xsrf_token}" \
-    --data-urlencode "name=${token_name}" || true)"
-  rm -f "${cookie_file}"
-
-  generated="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else ""; data=json.loads(payload) if payload else {}; print(data.get("token", ""))' "${token_json}" 2>/dev/null || true)"
-  if [[ -z "${generated}" ]]; then
-    log "Error: failed to generate SonarQube token."
-    return 1
-  fi
-
-  SONAR_TOKEN="${generated}"
-  SONAR_TOKEN_NAME="${token_name}"
-  log "Generated SonarQube token '${SONAR_TOKEN_NAME}'."
-  return 0
-}
-
-ensure_sonar_token() {
-  if token_is_valid; then
-    return 0
-  fi
-
-  if [[ -n "${SONAR_TOKEN}" ]]; then
-    log "Warning: existing SonarQube token is invalid; generating a fresh token."
-  fi
-
-  generate_sonar_token || return 1
-
-  if ! token_is_valid; then
-    log "Error: generated SonarQube token is not valid for API access."
-    return 1
-  fi
-
-  return 0
-}
-
-ensure_quality_gate_condition() {
-  local gate_name="$1"
-  local metric="$2"
-  local op="$3"
-  local error="$4"
-  local gate_show_json="$5"
-
-  local exists
-  exists="$(${PYTHON_BIN} -c 'import json,sys
-payload=sys.argv[1] if len(sys.argv)>1 else ""
-metric=sys.argv[2] if len(sys.argv)>2 else ""
-op=sys.argv[3] if len(sys.argv)>3 else ""
-error=sys.argv[4] if len(sys.argv)>4 else ""
-data=json.loads(payload) if payload else {}
-conditions=data.get("conditions",[])
-def as_str(v):
-    return "" if v is None else str(v)
-print("1" if any(c.get("metric")==metric and c.get("op")==op and as_str(c.get("error"))==error for c in conditions) else "")' "${gate_show_json}" "${metric}" "${op}" "${error}" 2>/dev/null || true)"
-
-  if [[ -n "${exists}" ]]; then
-    return 0
-  fi
-
-  if sonar_api -X POST \
-    "${SONAR_URL}/api/qualitygates/create_condition" \
-    --data-urlencode "gateName=${gate_name}" \
-    --data-urlencode "metric=${metric}" \
-    --data-urlencode "op=${op}" \
-    --data-urlencode "error=${error}" >/dev/null; then
-    log "Added quality gate condition: ${metric} ${op} ${error}."
-    return 0
-  fi
-
-  log "Error: failed to add quality gate condition ${metric} ${op} ${error}."
-  return 1
-}
-
-remove_quality_gate_metric_conditions() {
-  local gate_name="$1"
-  local gate_show_json="$2"
-  shift 2
-
-  local delete_ids
-  delete_ids="$(${PYTHON_BIN} -c 'import json,sys
-payload=sys.argv[1] if len(sys.argv)>1 else ""
-metrics=set(sys.argv[2:])
-data=json.loads(payload) if payload else {}
-for c in data.get("conditions",[]):
-    metric=c.get("metric")
-    cond_id=c.get("id")
-    if metric in metrics and cond_id is not None:
-        print(cond_id)
-' "${gate_show_json}" "$@" 2>/dev/null || true)"
-
-  if [[ -z "${delete_ids}" ]]; then
-    return 0
-  fi
-
-  local cond_id
-  while IFS= read -r cond_id; do
-    [[ -z "${cond_id}" ]] && continue
-    if ! sonar_api -X POST \
-      "${SONAR_URL}/api/qualitygates/delete_condition" \
-      --data-urlencode "id=${cond_id}" >/dev/null; then
-      log "Error: failed to delete quality gate condition id ${cond_id} on '${gate_name}'."
-      return 1
-    fi
-    log "Removed quality gate condition id ${cond_id}."
-  done <<< "${delete_ids}"
-
-  return 0
-}
-
-is_default_quality_gate_active() {
-  local gate_name="$1"
-  local gates_json
-
-  gates_json="$(sonar_api "${SONAR_URL}/api/qualitygates/list" || true)"
-  if [[ -z "${gates_json}" ]]; then
-    return 1
-  fi
-
-  local active
-  active="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
-data=json.loads(payload) if payload else {};\
-target=sys.argv[2] if len(sys.argv)>2 else "";\
-print("1" if any(g.get("name")==target and g.get("isDefault") for g in data.get("qualitygates",[])) else "")' "${gates_json}" "${gate_name}" 2>/dev/null || true)"
-  [[ -n "${active}" ]]
-}
-
-ensure_default_quality_gate_policy() {
-  local gate_name="$1"
-  local gate_show_json
-
-  gate_show_json="$(sonar_api -G \
-    "${SONAR_URL}/api/qualitygates/show" \
-    --data-urlencode "name=${gate_name}" || true)"
-  if [[ -z "${gate_show_json}" ]]; then
-    log "Warning: unable to read gate '${gate_name}' details; skipping policy condition setup."
-    return 0
-  fi
-
-  remove_quality_gate_metric_conditions "${gate_name}" "${gate_show_json}" \
-    "new_reliability_rating" \
-    "new_security_rating" \
-    "new_maintainability_rating" \
-    "new_issues" \
-    "new_violations" \
-    "new_coverage" \
-    "new_duplicated_lines_density" \
-    "new_security_hotspots_reviewed" \
-    "new_blocker_violations" \
-    "new_critical_violations" \
-    "new_major_violations" \
-    "new_minor_violations"
-
-  gate_show_json="$(sonar_api -G \
-    "${SONAR_URL}/api/qualitygates/show" \
-    --data-urlencode "name=${gate_name}" || true)"
-  if [[ -z "${gate_show_json}" ]]; then
-    log "Error: unable to refresh gate '${gate_name}' details after condition cleanup."
-    return 1
-  fi
-
-  ensure_quality_gate_condition "${gate_name}" "new_coverage" "LT" "80" "${gate_show_json}"
-  ensure_quality_gate_condition "${gate_name}" "new_duplicated_lines_density" "GT" "3" "${gate_show_json}"
-  ensure_quality_gate_condition "${gate_name}" "new_blocker_violations" "GT" "0" "${gate_show_json}"
-  ensure_quality_gate_condition "${gate_name}" "new_critical_violations" "GT" "0" "${gate_show_json}"
-  ensure_quality_gate_condition "${gate_name}" "new_major_violations" "GT" "0" "${gate_show_json}"
-  ensure_quality_gate_condition "${gate_name}" "new_minor_violations" "GT" "0" "${gate_show_json}"
-}
-
-configure_default_quality_gate() {
-  if [[ "${CONFIGURE_DEFAULT_QUALITY_GATE}" != "true" ]]; then
-    return 0
-  fi
-
-  if [[ -z "${DEFAULT_QUALITY_GATE}" ]]; then
-    log "Skipping default quality gate setup: empty gate name."
-    return 0
-  fi
-
-  resolve_default_quality_gate_name
-
-  GATES_JSON="$(sonar_api "${SONAR_URL}/api/qualitygates/list" || true)"
-  if [[ -z "${GATES_JSON}" ]]; then
-    log "Warning: unable to read quality gates; skipping default gate setup."
-    return 0
-  fi
-
-  GATE_EXISTS="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
-data=json.loads(payload) if payload else {};\
-target=sys.argv[2] if len(sys.argv)>2 else "";\
-print("1" if any(g.get("name")==target for g in data.get("qualitygates",[])) else "")' "${GATES_JSON}" "${DEFAULT_QUALITY_GATE}" 2>/dev/null || true)"
-
-  if [[ -z "${GATE_EXISTS}" ]]; then
-    if is_true "${CREATE_DEFAULT_QUALITY_GATE}"; then
-      if sonar_api -X POST \
-        "${SONAR_URL}/api/qualitygates/create" \
-        --data-urlencode "name=${DEFAULT_QUALITY_GATE}" >/dev/null; then
-        log "Created quality gate '${DEFAULT_QUALITY_GATE}'."
-        GATE_EXISTS="1"
-      else
-        log "Warning: failed to create quality gate '${DEFAULT_QUALITY_GATE}'."
-      fi
-    fi
-  fi
-
-  if [[ -z "${GATE_EXISTS}" ]]; then
-    log "Warning: quality gate '${DEFAULT_QUALITY_GATE}' not found; skipping default gate setup."
-    return 0
-  fi
-
-  ensure_default_quality_gate_policy "${DEFAULT_QUALITY_GATE}"
-
-  CURRENT_DEFAULT_GATE="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
-data=json.loads(payload) if payload else {};\
-print(next((g.get("name","") for g in data.get("qualitygates",[]) if g.get("isDefault")),""))' "${GATES_JSON}" 2>/dev/null || true)"
-
-  if [[ "${CURRENT_DEFAULT_GATE}" == "${DEFAULT_QUALITY_GATE}" ]]; then
-    if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
-      log "Default quality gate already set to '${DEFAULT_QUALITY_GATE}'."
-      return 0
-    fi
-    log "Warning: unable to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
-    return 0
-  fi
-
-  GATE_ID="$(${PYTHON_BIN} -c 'import json,sys; payload=sys.argv[1] if len(sys.argv)>1 else "";\
-data=json.loads(payload) if payload else {};\
-target=sys.argv[2] if len(sys.argv)>2 else "";\
-print(next((str(g.get("id","")) for g in data.get("qualitygates",[]) if g.get("name")==target),""))' "${GATES_JSON}" "${DEFAULT_QUALITY_GATE}" 2>/dev/null || true)"
-
-  if sonar_api -X POST \
-    "${SONAR_URL}/api/qualitygates/set_as_default" \
-    --data-urlencode "name=${DEFAULT_QUALITY_GATE}" >/dev/null; then
-    if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
-      log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
-      return 0
-    fi
-    log "Warning: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
-    return 0
-  fi
-
-  if [[ -n "${GATE_ID}" ]] && sonar_api -X POST \
-    "${SONAR_URL}/api/qualitygates/set_as_default" \
-    --data-urlencode "id=${GATE_ID}" >/dev/null; then
-    if is_default_quality_gate_active "${DEFAULT_QUALITY_GATE}"; then
-      log "Default quality gate set to '${DEFAULT_QUALITY_GATE}'."
-      return 0
-    fi
-    log "Warning: failed to verify default quality gate '${DEFAULT_QUALITY_GATE}'."
-    return 0
-  fi
-
-  log "Warning: failed to set default quality gate '${DEFAULT_QUALITY_GATE}'. Continuing without changing SonarQube global default."
-  return 0
-}
-
-write_runtime_env
-
-export REPO_PREFIX SONAR_PORT SONAR_TOKEN
-
-if [[ "${REUSE_RUNNING}" == "true" ]]; then
-  if ! ensure_sonar_token; then
-    echo "Unable to ensure SonarQube token." >&2
+require_local_image() {
+  local approved="$1" digests
+  if ! digests="$(docker image inspect --format '{{join .RepoDigests "\n"}}' "$approved" 2>/dev/null)" || ! grep -Fxq "$approved" <<<"$digests"; then
+    echo "blocked: approved image is unavailable locally: ${approved}; automatic pulls are disabled." >&2
     exit 4
   fi
-  configure_default_quality_gate
-  write_runtime_env
-  log "SonarQube is already running and quality gate policy is ensured."
-  echo "SONAR_PORT=${SONAR_PORT}"
-  echo "SONAR_URL=${SONAR_URL}"
-  echo "SONAR_TOKEN=${SONAR_TOKEN}"
-  exit 0
-fi
+}
+require_local_image "postgres@sha256:056b54f00419b49289227ab12d09df508543883f407fe9935a2cec430ef8aa8d"
+require_local_image "sonarqube@sha256:24d75d7e0021f2d0f94e4d761b734088b1afc00395d161a7035d61df5a812f5b"
 
-log "Starting SonarQube stack (${COMPOSE_PROJECT_NAME}) on port ${SONAR_PORT}..."
-if ! docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" up -d; then
-  log "Warning: initial SonarQube startup failed; cleaning up existing stack artifacts and retrying once."
-  docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" down --remove-orphans >/dev/null 2>&1 || true
-  if ! docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" up -d; then
-    echo "Failed to start SonarQube stack." >&2
-    exit 4
-  fi
-fi
-
+# No host port exists during this phase.
+docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d
+CONTAINER_ID="$(docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" ps -q sonarqube)"
+[[ -n "$CONTAINER_ID" ]] || { echo "SonarQube container was not created." >&2; exit 4; }
+sonar_curl() { docker exec -i "$CONTAINER_ID" curl --connect-timeout 5 --max-time 30 -sf "$@"; }
 deadline=$((SECONDS + TIMEOUT_SECONDS))
-while (( SECONDS < deadline )); do
-  if curl -sf "${SONAR_URL}/api/system/status" | grep -q '"status":"UP"'; then
-    if ! ensure_sonar_token; then
-      echo "Unable to ensure SonarQube token." >&2
-      exit 4
-    fi
-    configure_default_quality_gate
-    write_runtime_env
-    log "SonarQube is UP."
-    echo "SONAR_PORT=${SONAR_PORT}"
-    echo "SONAR_URL=${SONAR_URL}"
-    echo "SONAR_TOKEN=${SONAR_TOKEN}"
-    exit 0
-  fi
+until sonar_curl http://127.0.0.1:9000/api/system/status 2>/dev/null | grep -q '"status":"UP"'; do
+  (( SECONDS < deadline )) || { echo "SonarQube did not become ready; preflight blocked." >&2; exit 4; }
   sleep 2
 done
 
-echo "SonarQube did not become ready within ${TIMEOUT_SECONDS}s." >&2
-docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=200 sonarqube || true
-docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" logs --tail=200 sonar_db || true
-exit 3
+token_login() { sonar_curl -H "Authorization: Bearer $1" http://127.0.0.1:9000/api/authentication/validate | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("login", "") if data.get("valid") else "")'; }
+SCANNER_USER="opencode_scan_${PROJECT_KEY}"
+READER_USER="opencode_read_${PROJECT_KEY}"
+
+if [[ -f "$BOOTSTRAP_ENV" ]]; then
+    ADMIN_PASSWORD="$(safe_value "$BOOTSTRAP_ENV" SONAR_BOOTSTRAP_PASSWORD)" || { echo "Unsafe Sonar bootstrap runtime file." >&2; exit 4; }
+    [[ -n "$ADMIN_PASSWORD" ]] || { echo "Missing persistent Sonar bootstrap data; preflight blocked." >&2; exit 4; }
+    admin_api() { sonar_curl -u "admin:${ADMIN_PASSWORD}" "$@"; }
+else
+    ADMIN_PASSWORD="$(random_secret)"
+    sonar_curl -u 'admin:admin' -X POST http://127.0.0.1:9000/api/users/change_password --data-urlencode login=admin --data-urlencode previousPassword=admin --data-urlencode "password=${ADMIN_PASSWORD}" >/dev/null || { echo "No local bootstrap credential exists and the default admin password was rejected; preflight blocked." >&2; exit 4; }
+    admin_api() { sonar_curl -u "admin:${ADMIN_PASSWORD}" "$@"; }
+    write_bootstrap_file "$ADMIN_PASSWORD"
+fi
+
+ensure_project_policy() {
+  local gate_json condition_ids permission visibility anyone_browse
+  admin_api -X POST http://127.0.0.1:9000/api/projects/create --data-urlencode "project=${PROJECT_KEY}" --data-urlencode "name=${PROJECT_KEY}" >/dev/null || true
+  admin_api -X POST http://127.0.0.1:9000/api/projects/update_visibility --data-urlencode "project=${PROJECT_KEY}" --data-urlencode visibility=private >/dev/null || return 1
+  # Explicit project scope prevents anonymous Browse even if global settings differ.
+  admin_api -X POST http://127.0.0.1:9000/api/permissions/remove_group --data-urlencode groupName=Anyone --data-urlencode permission=user --data-urlencode "projectKey=${PROJECT_KEY}" >/dev/null || return 1
+  visibility="$(admin_api -G http://127.0.0.1:9000/api/components/show --data-urlencode "component=${PROJECT_KEY}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("component", {}).get("visibility", ""))')" || return 1
+  [[ "$visibility" == private ]] || return 1
+  anyone_browse="$(admin_api -G http://127.0.0.1:9000/api/permissions/groups --data-urlencode permission=user --data-urlencode "projectKey=${PROJECT_KEY}" | python3 -c 'import json,sys; print(any(g.get("name") == "Anyone" for g in json.load(sys.stdin).get("groups", [])))')" || return 1
+  [[ "$anyone_browse" == False ]] || return 1
+  GATE_NAME="${PROJECT_KEY} Preflight"
+  admin_api -X POST http://127.0.0.1:9000/api/qualitygates/create --data-urlencode "name=${GATE_NAME}" >/dev/null || true
+  admin_api -X POST http://127.0.0.1:9000/api/qualitygates/select --data-urlencode "projectKey=${PROJECT_KEY}" --data-urlencode "gateName=${GATE_NAME}" >/dev/null || return 1
+  gate_json="$(admin_api -G http://127.0.0.1:9000/api/qualitygates/show --data-urlencode "name=${GATE_NAME}")" || return 1
+  condition_ids="$(GATE_JSON="$gate_json" python3 - <<'PY'
+import json, os
+for condition in json.loads(os.environ['GATE_JSON']).get('conditions', []):
+    if condition.get('id') is not None: print(condition['id'])
+PY
+)" || return 1
+  while IFS= read -r condition_id; do
+    [[ -z "$condition_id" ]] || admin_api -X POST http://127.0.0.1:9000/api/qualitygates/delete_condition --data-urlencode "id=${condition_id}" >/dev/null || return 1
+  done <<<"$condition_ids"
+  for condition in 'new_bugs:GT:0' 'new_vulnerabilities:GT:0' 'new_reliability_rating:GT:1' 'new_security_rating:GT:1'; do
+    IFS=: read -r metric op threshold <<<"$condition"
+    admin_api -X POST http://127.0.0.1:9000/api/qualitygates/create_condition --data-urlencode "gateName=${GATE_NAME}" --data-urlencode "metric=${metric}" --data-urlencode "op=${op}" --data-urlencode "error=${threshold}" >/dev/null || return 1
+  done
+  for permission in admin codeviewer issueadmin scan user; do
+    admin_api -X POST http://127.0.0.1:9000/api/permissions/remove_user --data-urlencode "login=${SCANNER_USER}" --data-urlencode "permission=${permission}" --data-urlencode "projectKey=${PROJECT_KEY}" >/dev/null || true
+    admin_api -X POST http://127.0.0.1:9000/api/permissions/remove_user --data-urlencode "login=${READER_USER}" --data-urlencode "permission=${permission}" --data-urlencode "projectKey=${PROJECT_KEY}" >/dev/null || true
+  done
+  admin_api -X POST http://127.0.0.1:9000/api/permissions/add_user --data-urlencode "login=${SCANNER_USER}" --data-urlencode permission=scan --data-urlencode "projectKey=${PROJECT_KEY}" >/dev/null || return 1
+  admin_api -X POST http://127.0.0.1:9000/api/permissions/add_user --data-urlencode "login=${READER_USER}" --data-urlencode permission=user --data-urlencode "projectKey=${PROJECT_KEY}" >/dev/null || return 1
+}
+
+remove_service_account_groups() {
+  local account groups group
+  for account in "$SCANNER_USER" "$READER_USER"; do
+    groups="$(admin_api -G http://127.0.0.1:9000/api/user_groups/search --data-urlencode "login=${account}" | python3 -c 'import json,sys; [print(g["name"]) for g in json.load(sys.stdin).get("groups", [])]')" || return 1
+    while IFS= read -r group; do
+      [[ -z "$group" ]] || admin_api -X POST http://127.0.0.1:9000/api/user_groups/remove_user --data-urlencode "login=${account}" --data-urlencode "name=${group}" >/dev/null || return 1
+    done <<<"$groups"
+  done
+}
+
+enforce_service_account_least_privilege() {
+  local global_permissions permission
+  # Remove direct global rights dynamically so new Sonar permission types do
+  # not silently become an exception to this service-account policy.
+  global_permissions="$(admin_api -G http://127.0.0.1:9000/api/permissions/search)" || return 1
+  while IFS= read -r permission; do
+    [[ -z "$permission" ]] && continue
+    admin_api -X POST http://127.0.0.1:9000/api/permissions/remove_user --data-urlencode "login=${SCANNER_USER}" --data-urlencode "permission=${permission}" >/dev/null || return 1
+    admin_api -X POST http://127.0.0.1:9000/api/permissions/remove_user --data-urlencode "login=${READER_USER}" --data-urlencode "permission=${permission}" >/dev/null || return 1
+    # Anyone is an effective global membership.  It must not grant either
+    # account a global right, so remove every global grant to that pseudo-group.
+    admin_api -X POST http://127.0.0.1:9000/api/permissions/remove_group --data-urlencode groupName=Anyone --data-urlencode "permission=${permission}" >/dev/null || return 1
+  done < <(python3 -c 'import json,sys; [print(p["key"]) for p in json.load(sys.stdin).get("permissions", [])]' <<<"$global_permissions")
+
+  remove_service_account_groups || return 1
+  ensure_project_policy || return 1
+
+  # The API response is the authoritative effective-permission check: no
+  # global direct/Anyone grant, no group membership, and exactly scan/browse
+  # as direct permissions on this private project.
+  global_permissions="$(admin_api -G http://127.0.0.1:9000/api/permissions/search)" || return 1
+  project_permissions="$(admin_api -G http://127.0.0.1:9000/api/permissions/search --data-urlencode "projectKey=${PROJECT_KEY}")" || return 1
+  scanner_groups="$(admin_api -G http://127.0.0.1:9000/api/user_groups/search --data-urlencode "login=${SCANNER_USER}")" || return 1
+  reader_groups="$(admin_api -G http://127.0.0.1:9000/api/user_groups/search --data-urlencode "login=${READER_USER}")" || return 1
+  SCANNER_USER="$SCANNER_USER" READER_USER="$READER_USER" GLOBAL_PERMISSIONS="$global_permissions" PROJECT_PERMISSIONS="$project_permissions" SCANNER_GROUPS="$scanner_groups" READER_GROUPS="$reader_groups" python3 - <<'PY'
+import json, os
+
+scanner = os.environ["SCANNER_USER"]
+reader = os.environ["READER_USER"]
+global_permissions = json.loads(os.environ["GLOBAL_PERMISSIONS"]).get("permissions", [])
+project_permissions = json.loads(os.environ["PROJECT_PERMISSIONS"]).get("permissions", [])
+groups = json.loads(os.environ["SCANNER_GROUPS"]).get("groups", []) + json.loads(os.environ["READER_GROUPS"]).get("groups", [])
+if any(scanner in p.get("users", []) or reader in p.get("users", []) or "Anyone" in p.get("groups", []) for p in global_permissions):
+    raise SystemExit(1)
+if groups:
+    raise SystemExit(1)
+actual = {account: set() for account in (scanner, reader)}
+for permission in project_permissions:
+    for account in actual:
+        if account in permission.get("users", []):
+            actual[account].add(permission.get("key"))
+if actual != {scanner: {"scan"}, reader: {"user"}}:
+    raise SystemExit(1)
+PY
+}
+
+NEEDS_ROTATION=false
+if [[ "$(token_login "$ANALYSIS_TOKEN" 2>/dev/null || true)" != "$SCANNER_USER" || "$(token_login "$READ_TOKEN" 2>/dev/null || true)" != "$READER_USER" ]]; then
+  NEEDS_ROTATION=true
+  SCANNER_PASSWORD="$(random_secret)"; READER_PASSWORD="$(random_secret)"
+  admin_api -X POST http://127.0.0.1:9000/api/users/create --data-urlencode "login=${SCANNER_USER}" --data-urlencode "name=${SCANNER_USER}" --data-urlencode "password=${SCANNER_PASSWORD}" >/dev/null || true
+  admin_api -X POST http://127.0.0.1:9000/api/users/create --data-urlencode "login=${READER_USER}" --data-urlencode "name=${READER_USER}" --data-urlencode "password=${READER_PASSWORD}" >/dev/null || true
+  admin_api -X POST http://127.0.0.1:9000/api/users/change_password --data-urlencode "login=${SCANNER_USER}" --data-urlencode "password=${SCANNER_PASSWORD}" >/dev/null
+  admin_api -X POST http://127.0.0.1:9000/api/users/change_password --data-urlencode "login=${READER_USER}" --data-urlencode "password=${READER_PASSWORD}" >/dev/null
+fi
+
+ensure_project_policy || { echo "Unable to enforce private project, permissions, or exact pre-test gate policy; preflight blocked." >&2; exit 4; }
+
+enforce_service_account_least_privilege || { echo "Unable to remove or verify global/group service-account rights and minimal project permissions; preflight blocked." >&2; exit 4; }
+
+if [[ "$NEEDS_ROTATION" == true ]]; then
+  # Revoke every old token for these service accounts before generating new ones.
+  for account in "$SCANNER_USER" "$READER_USER"; do
+    admin_api -G http://127.0.0.1:9000/api/user_tokens/search --data-urlencode "login=${account}" | python3 -c 'import json,sys; [print(t["name"]) for t in json.load(sys.stdin).get("userTokens", [])]' | while IFS= read -r token_name; do
+      admin_api -X POST http://127.0.0.1:9000/api/user_tokens/revoke --data-urlencode "login=${account}" --data-urlencode "name=${token_name}" >/dev/null || exit 1
+    done || { echo "Unable to revoke existing service-account tokens; preflight blocked." >&2; exit 4; }
+  done
+  token_json="$(sonar_curl -u "${SCANNER_USER}:${SCANNER_PASSWORD}" -X POST http://127.0.0.1:9000/api/user_tokens/generate --data-urlencode "name=scan_${PROJECT_KEY}")"
+  ANALYSIS_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("token", ""))' <<<"$token_json")"
+  token_json="$(sonar_curl -u "${READER_USER}:${READER_PASSWORD}" -X POST http://127.0.0.1:9000/api/user_tokens/generate --data-urlencode "name=read_${PROJECT_KEY}")"
+  READ_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("token", ""))' <<<"$token_json")"
+  [[ -n "$ANALYSIS_TOKEN" && -n "$READ_TOKEN" ]] || { echo "Least-privilege token bootstrap failed; preflight blocked." >&2; exit 4; }
+fi
+write_analysis_file
+write_read_file
+unset ADMIN_PASSWORD SCANNER_PASSWORD READER_PASSWORD token_json
+
+# Credentials are now rotated/validated. Only now is the loopback UI published.
+docker compose -f "$COMPOSE_FILE" -f "$EXPOSE_COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" up -d >/dev/null
+printf 'SONAR_URL=%s\n' "$SONAR_URL"

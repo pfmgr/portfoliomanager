@@ -9,6 +9,11 @@ test-results/
 .env
 docker-compose.override.yml
 .local/
+.opencode/docker/sonar/.runtime.env
+.opencode/docker/sonar/runtime/
+.opencode/docker/sonar/**/analysis-token*
+.opencode/docker/sonar/**/sonar-token*
+.opencode/docker/sonar/**/token*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

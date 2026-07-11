@@ -5,7 +5,7 @@ description: Run Playwright E2E tests against the running standard stack
 
 ## When to use
 
-Use this skill when a local standard stack is already running via the repo root `docker-compose.yml` and the goal is to verify real browser flows without rebuilding or replacing that environment.
+Use this skill only when the running standard stack is explicitly approved for the task, the environment is documented as loopback / non-production, and the verification does not require fixture seeding or destructive lifecycle commands. If any of those conditions is missing, use `frontend-e2e-tests` against the isolated stack instead.
 
 ## Scenario-first test scope
 
@@ -16,21 +16,21 @@ Use this skill when a local standard stack is already running via the repo root 
 
 ## Preconditions
 
-- The standard stack is already running from repo root `docker-compose.yml`.
+- The standard stack may only be reused after explicit release for this task.
 - `.env` contains valid `ADMIN_USER` and `ADMIN_PASS` values for the running stack.
 - Host and port bindings may vary through `.env`; do not hardcode frontend or backend URLs when this skill is used.
-- If the scenario depends on seeded assessor or rebalancer runtime data, run `running-stack-fixtures` first.
+- Do not use this skill when the scenario requires fixture seeding or any destructive stack lifecycle action.
 
 ## Preferred command
 
 - `cd services/app/frontend && npm run test:e2e:running-stack`
-- This resolves URLs and credentials from `.env`, checks readiness through `services/app/scripts/check-running-stack-ready.sh`, seeds the dedicated running-stack fixture rows for the default assessor/rebalancer runtime specs, and runs Playwright against the existing stack.
+- This resolves URLs and credentials from `.env`, checks readiness through `services/app/scripts/check-running-stack-ready.sh`, and runs Playwright against the already approved running stack only.
 
 ## Run a specific runtime spec
 
 - `cd services/app/frontend && ./scripts/run-running-stack-e2e.sh tests/e2e/<runtime-spec>.js`
 - Use this when only one running-stack scenario should be verified.
-- If the selected runtime spec depends on seeded fixture data, add `RUNNING_STACK_SEED_FIXTURES=true` or run `running-stack-fixtures` first.
+- Do not add fixture-seeding flags or prerequisite fixture-seeding commands here; switch to `frontend-e2e-tests` if the scenario depends on seeded data.
 
 ## Supporting commands
 
@@ -38,11 +38,9 @@ Use this skill when a local standard stack is already running via the repo root 
   - `services/app/scripts/check-running-stack-ready.sh`
 - Auth smoke before browser execution:
   - `services/app/scripts/run-running-stack-smoke.sh`
-- Seed reproducible runtime fixtures:
-  - `services/app/scripts/seed-running-stack-fixtures.sh`
+- If fixture seeding or stack recreation is required, use `frontend-e2e-tests` on the isolated stack instead.
 
 ## Notes
 
-- This skill complements `frontend-e2e-tests`.
-- `frontend-e2e-tests` is for the isolated E2E stack under `services/app/frontend/docker-compose.yml`.
-- This skill is for the already running standard stack under repo root `docker-compose.yml`.
+- `frontend-e2e-tests` is the default choice for Playwright verification and uses the isolated E2E stack under `services/app/frontend/docker-compose.yml`.
+- This skill is only for an explicitly released, already running standard stack under repo root `docker-compose.yml`.

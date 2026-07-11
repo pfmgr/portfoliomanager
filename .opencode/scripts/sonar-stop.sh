@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/.opencode/docker/sonar/docker-compose.yaml"
-RUNTIME_ENV="${ROOT_DIR}/.opencode/docker/sonar/.runtime.env"
+EXPOSE_COMPOSE_FILE="${ROOT_DIR}/.opencode/docker/sonar/docker-compose.expose.yaml"
+RUNTIME_ENV="${ROOT_DIR}/.opencode/docker/sonar/runtime/analysis.env"
 
 REMOVE_VOLUMES=false
 QUIET=false
@@ -36,32 +37,17 @@ if [[ ! -f "${COMPOSE_FILE}" ]]; then
   exit 4
 fi
 
-REPO_PREFIX=""
-COMPOSE_PROJECT_NAME=""
-
-if [[ -f "${RUNTIME_ENV}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${RUNTIME_ENV}" 2>/dev/null || true
-  set +a
-fi
-
-if [[ -z "${REPO_PREFIX:-}" ]]; then
-  REPO_NAME="$(basename "${ROOT_DIR}")"
-  REPO_PREFIX="$(printf '%s' "${REPO_NAME}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')"
-  if [[ -z "${REPO_PREFIX}" ]]; then
-    REPO_PREFIX="repo"
-  fi
-fi
-
-if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
-  COMPOSE_PROJECT_NAME="${REPO_PREFIX}_sonar"
-fi
+REPO_NAME="$(basename "${ROOT_DIR}")"
+REPO_PREFIX="$(printf '%s' "${REPO_NAME}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')"
+[[ -n "${REPO_PREFIX}" ]] || REPO_PREFIX="repo"
+COMPOSE_PROJECT_NAME="${REPO_PREFIX}_sonar"
+SONAR_PORT="${SONAR_PORT:-9000}"
+export REPO_PREFIX SONAR_PORT
 
 log "Stopping SonarQube stack (${COMPOSE_PROJECT_NAME})..."
 if [[ "${REMOVE_VOLUMES}" == "true" ]]; then
-  docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" down -v
+  docker compose -f "${COMPOSE_FILE}" -f "${EXPOSE_COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" down -v
 else
-  docker compose -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" down
+  docker compose -f "${COMPOSE_FILE}" -f "${EXPOSE_COMPOSE_FILE}" -p "${COMPOSE_PROJECT_NAME}" down
 fi
 log "SonarQube stack stopped."

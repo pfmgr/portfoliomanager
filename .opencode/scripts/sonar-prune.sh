@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/.opencode/docker/sonar/docker-compose.yaml"
-RUNTIME_ENV="${ROOT_DIR}/.opencode/docker/sonar/.runtime.env"
+RUNTIME_DIR="${ROOT_DIR}/.opencode/docker/sonar/runtime"
 
-REMOVE_VOLUMES=true
+REMOVE_VOLUMES=false
 FORCE=false
 
 while [[ $# -gt 0 ]]; do
@@ -30,26 +30,16 @@ if [[ ! -f "${COMPOSE_FILE}" ]]; then
   exit 4
 fi
 
-REPO_PREFIX=""
-COMPOSE_PROJECT_NAME=""
+REPO_NAME="$(basename "${ROOT_DIR}")"
+REPO_PREFIX="$(printf '%s' "${REPO_NAME}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')"
+[[ -n "${REPO_PREFIX}" ]] || REPO_PREFIX="repo"
+COMPOSE_PROJECT_NAME="${REPO_PREFIX}_sonar"
+SONAR_PORT="${SONAR_PORT:-9000}"
+export REPO_PREFIX SONAR_PORT
 
-if [[ -f "${RUNTIME_ENV}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${RUNTIME_ENV}" 2>/dev/null || true
-  set +a
-fi
-
-if [[ -z "${REPO_PREFIX:-}" ]]; then
-  REPO_NAME="$(basename "${ROOT_DIR}")"
-  REPO_PREFIX="$(printf '%s' "${REPO_NAME}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')"
-  if [[ -z "${REPO_PREFIX}" ]]; then
-    REPO_PREFIX="repo"
-  fi
-fi
-
-if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
-  COMPOSE_PROJECT_NAME="${REPO_PREFIX}_sonar"
+if [[ "${REMOVE_VOLUMES}" == "true" && "${FORCE}" != "true" ]]; then
+  echo "Refusing to delete Sonar volumes without --force. Volume deletion requires explicit human approval." >&2
+  exit 4
 fi
 
 if [[ "${REMOVE_VOLUMES}" == "true" ]]; then
@@ -78,4 +68,8 @@ if [[ "${REMOVE_VOLUMES}" == "true" ]]; then
   done
 fi
 
-rm -f "${RUNTIME_ENV}"
+# Runtime credentials are coupled to the persistent Sonar installation. A
+# non-destructive recovery must not strand existing users by deleting them.
+if [[ "${REMOVE_VOLUMES}" == "true" ]]; then
+  rm -rf "${RUNTIME_DIR}"
+fi

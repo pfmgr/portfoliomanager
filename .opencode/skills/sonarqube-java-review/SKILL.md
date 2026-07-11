@@ -10,8 +10,9 @@ Use this skill when reviewing Java code and you need static analysis findings to
 ## Preconditions
 
 - Docker and Docker Compose are available.
-- `sonar-start.sh` auto-generates and persists a Sonar token in `.opencode/docker/sonar/.runtime.env`.
-- Optional override: set `SONAR_TOKEN` (or `SONAR_ADMIN_TOKEN`) explicitly.
+- The approved pinned SonarQube, Postgres, and scanner images must already be available locally. If not, preflight is `blocked` and names the missing approved digest.
+- `sonar-start.sh` securely bootstraps two project-scoped tokens when needed: an analysis token with only `scan`, and a separate read/browse token for quality-gate and issue queries. Both are private runtime files and are never printed.
+- Bootstrap is local-only: the generated bootstrap password is kept in the protected runtime directory. No bootstrap-admin token environment variable is accepted or forwarded.
 
 ## Preferred command
 
@@ -29,10 +30,17 @@ Use this skill when reviewing Java code and you need static analysis findings to
 
 - SonarQube quality gate status.
 - Top open issues (up to 10).
+- The pre-test gate blocks new bugs, vulnerabilities, and degraded reliability/security ratings. It deliberately does **not** contain a coverage condition; coverage belongs to the later test/test-manager gate.
+
+## Diff context
+
+The script intentionally does not enumerate Git diffs: a generic repository scan could
+accidentally include runtime credentials or expose paths through shell output. The
+orchestrating agent must pass its already-sanitized diff context to the preflight report.
 
 ## Failure handling
 
-- If the SonarQube stack does not start or becomes unhealthy, run the `sonarqube-recovery` skill and retry once.
+- If the stack does not start or becomes unhealthy, report `blocked`. Do not run recovery automatically. A human may explicitly approve and execute the recovery skill; only then is one retry allowed.
 
 ## Cleanup
 
