@@ -17,6 +17,23 @@ class KnowledgeBaseQualityGateServiceTest {
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	@Test
+	void verifySources_keepsOnlyPolicyApprovedCanonicalEvidence() {
+		ArrayNode citations = objectMapper.createArrayNode();
+		citations.addObject().put("url", "https://issuer.example/factsheet?token=secret")
+				.put("publisher", "Issuer").put("title", "Factsheet");
+		citations.addObject().put("url", "http://issuer.example/not-secure");
+		citations.addObject().put("url", "https://other.example/ignored");
+
+		KnowledgeBaseQualityGateService.SourceVerificationResult result = service.verifySources(
+				citations, List.of("issuer.example"), 1);
+
+		assertThat(result.passed()).isFalse();
+		assertThat(result.sources()).singleElement().satisfies(source ->
+				assertThat(source.url()).isEqualTo("https://issuer.example/factsheet?token=[REDACTED]"));
+		assertThat(result.reasons()).contains("invalid_citation_url", "disallowed_citation_domain");
+	}
+
+	@Test
 	void evaluateDossier_acceptsBoldIsinHeaderAndBulletSections() {
 		String content = "# **DE000DK2CDS0 - Sample**\n"
 				+ "## Quick profile (table)\n"
@@ -221,7 +238,7 @@ class KnowledgeBaseQualityGateServiceTest {
 				citation(
 						"1",
 						"Vanguard Factsheet",
-						"www.vanguard.com/investment-products/etfs/fund-factsheet/IE00BK5BQT80",
+						"https://www.vanguard.com/investment-products/etfs/fund-factsheet/IE00BK5BQT80",
 						"Vanguard",
 						"2026-02-13"
 				),
@@ -333,6 +350,7 @@ class KnowledgeBaseQualityGateServiceTest {
 		);
 
 		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan plan = service.planPrimarySourceRetry(
+				"IE00BK5BQT80",
 				payload("IE00BK5BQT80", "ETF", null, null, null, null),
 				"Vanguard FTSE All-World UCITS ETF",
 				citations,
@@ -357,6 +375,7 @@ class KnowledgeBaseQualityGateServiceTest {
 		);
 
 		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan plan = service.planPrimarySourceRetry(
+				"IE00BK5BQT80",
 				payload("IE00BK5BQT80", "ETF", null, null, null, null),
 				"Vanguard FTSE All-World UCITS ETF",
 				citations,
@@ -365,6 +384,81 @@ class KnowledgeBaseQualityGateServiceTest {
 
 		assertThat(plan.primarySourceOnly()).isFalse();
 		assertThat(plan.allowedDomains()).containsExactly("example.com", "justetf.com");
+		assertThat(plan.warnings()).isEmpty();
+	}
+
+	@Test
+	void planPrimarySourceRetry_includesDekaPrimaryHintWhenAllowedDomainPresent() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=DE0005152623",
+						"justETF",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan plan = service.planPrimarySourceRetry(
+				"DE0005152623",
+				payload("DE0005152623", "Deka MSCI World UCITS ETF", null, null, null, null),
+				"Deka MSCI World UCITS ETF",
+				citations,
+				List.of("generic.example", "deka.de")
+		);
+
+		assertThat(plan.primarySourceOnly()).isTrue();
+		assertThat(plan.allowedDomains()).containsExactly("deka.de");
+		assertThat(plan.warnings()).anyMatch(message -> message.contains("https://www.deka.de/privatkunden/fondsprofil?id=DE0005152623"));
+	}
+
+	@Test
+	void planPrimarySourceRetry_skipsDekaHintWhenDomainIsNotAllowed() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=DE0005152623",
+						"justETF",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan plan = service.planPrimarySourceRetry(
+				"DE0005152623",
+				payload("DE0005152623", "Deka MSCI World UCITS ETF", null, null, null, null),
+				"Deka MSCI World UCITS ETF",
+				citations,
+				List.of("generic.example", "justetf.com")
+		);
+
+		assertThat(plan.primarySourceOnly()).isFalse();
+		assertThat(plan.allowedDomains()).containsExactly("generic.example", "justetf.com");
+		assertThat(plan.warnings()).isEmpty();
+	}
+
+	@Test
+	void planPrimarySourceRetry_ignoresDekaHintForNonDekaInstruments() {
+		ArrayNode citations = citations(
+				citation(
+						"1",
+						"justETF profile",
+						"https://www.justetf.com/en/etf-profile.html?isin=IE00BK5BQT80",
+						"justETF",
+						"2026-02-13"
+				)
+		);
+
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan plan = service.planPrimarySourceRetry(
+				"IE00BK5BQT80",
+				payload("IE00BK5BQT80", "ETF", null, null, null, null),
+				"Vanguard FTSE All-World UCITS ETF",
+				citations,
+				List.of("generic.example", "deka.de")
+		);
+
+		assertThat(plan.primarySourceOnly()).isFalse();
+		assertThat(plan.allowedDomains()).containsExactly("generic.example", "deka.de");
 		assertThat(plan.warnings()).isEmpty();
 	}
 
@@ -1151,7 +1245,7 @@ class KnowledgeBaseQualityGateServiceTest {
 				7,
 				30,
 				"low",
-				List.of("example.com"),
+				List.of("example.com", "justetf.com", "vanguard.com", "blackrock.com", "issuer.com", "retry.example", "markets.example"),
 				minCitations,
 				requirePrimarySource,
 				0.6,

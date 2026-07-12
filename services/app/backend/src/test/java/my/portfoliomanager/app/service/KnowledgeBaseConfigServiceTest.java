@@ -24,15 +24,9 @@ class KnowledgeBaseConfigServiceTest {
 		config.setId(1);
 		ObjectNode json = objectMapper.createObjectNode();
 		json.putArray("websearch_allowed_domains")
-				.add(" HTTPS://WWW.Example.COM/research?q=1 ")
+				.add("Example.com")
 				.add("example.com.")
-				.add("sub.domain.co.uk")
-				.add("issuer.example/path")
-				.add("127.0.0.1")
-				.add("localhost")
-				.add("service.local")
-				.add("example.com:443")
-				.add("*.example.com");
+				.add("sub.domain.co.uk");
 		config.setConfigJson(json);
 		when(repository.findById(1)).thenReturn(Optional.of(config));
 
@@ -48,18 +42,31 @@ class KnowledgeBaseConfigServiceTest {
 	}
 
 	@Test
-	void getSnapshot_fallsBackToDefaultAllowedDomainsWhenNormalizedListIsEmpty() {
+	void getSnapshot_preservesExplicitEmptyAllowedDomains() {
 		KnowledgeBaseConfigRepository repository = mock(KnowledgeBaseConfigRepository.class);
 		KnowledgeBaseConfig config = new KnowledgeBaseConfig();
 		config.setId(1);
 		ObjectNode json = objectMapper.createObjectNode();
-		json.putArray("websearch_allowed_domains")
-				.add("127.0.0.1")
-				.add("localhost")
-				.add("service.local")
-				.add("example.com:443")
-				.add("*.example.com");
+		json.putArray("websearch_allowed_domains");
 		config.setConfigJson(json);
+		when(repository.findById(1)).thenReturn(Optional.of(config));
+
+		KnowledgeBaseConfigService service = new KnowledgeBaseConfigService(
+				repository,
+				objectMapper,
+				new DefaultResourceLoader(),
+				null
+		);
+
+		assertThat(service.getSnapshot().websearchAllowedDomains()).isEmpty();
+	}
+
+	@Test
+	void getSnapshot_usesSeededDefaultsWhenDomainsAreAbsent() {
+		KnowledgeBaseConfigRepository repository = mock(KnowledgeBaseConfigRepository.class);
+		KnowledgeBaseConfig config = new KnowledgeBaseConfig();
+		config.setId(1);
+		config.setConfigJson(objectMapper.createObjectNode());
 		when(repository.findById(1)).thenReturn(Optional.of(config));
 
 		KnowledgeBaseConfigService service = new KnowledgeBaseConfigService(

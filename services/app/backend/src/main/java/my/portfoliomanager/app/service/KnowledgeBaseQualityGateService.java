@@ -2,6 +2,7 @@ package my.portfoliomanager.app.service;
 
 import tools.jackson.databind.JsonNode;
 import my.portfoliomanager.app.dto.InstrumentDossierExtractionPayload;
+import my.portfoliomanager.app.service.util.ISINUtil;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -106,6 +107,8 @@ public class KnowledgeBaseQualityGateService {
 			"lyxor", Set.of("lyxor", "amundi"),
 			"amundi", Set.of("amundi", "lyxor")
 	);
+	private static final String DEKA_HOST = "deka.de";
+	private static final String DEKA_PROFILE_URL_PREFIX = "https://www.deka.de/privatkunden/fondsprofil?id=";
 	private static final String PROFILE_FUND = "FUND";
 	private static final String PROFILE_EQUITY = "EQUITY";
 	private static final String PROFILE_REIT = "REIT";
@@ -196,7 +199,10 @@ public class KnowledgeBaseQualityGateService {
 				reasons.add("missing_section:" + section.code());
 			}
 		}
-		List<CitationInfo> parsed = parseCitations(citations);
+		List<String> allowedDomains = config == null ? List.of() : config.websearchAllowedDomains();
+		CitationParseResult citationResult = parseCitations(citations, allowedDomains);
+		List<CitationInfo> parsed = citationResult.citations();
+		reasons.addAll(citationResult.reasons());
 		int minCitations = config == null ? 0 : config.bulkMinCitations();
 		if (!hasSufficientCitations(parsed, minCitations, isin)) {
 			reasons.add("insufficient_citations");
@@ -220,15 +226,24 @@ public class KnowledgeBaseQualityGateService {
 			if (reason.startsWith("missing_section:")) {
 				return true;
 			}
-			switch (reason) {
-				case "missing_isin_header", "insufficient_citations", "missing_primary_source", "empty_content" -> {
-					return true;
-				}
+				switch (reason) {
+					case "missing_isin_header", "insufficient_citations", "missing_primary_source", "empty_content", "disallowed_citation_domain" -> {
+						return true;
+					}
 				default -> {
 				}
 			}
 		}
 		return false;
+	}
+
+	/** Welle 4 URL/domain policy applied independently of dossier presentation quality. */
+	public SourceVerificationResult verifySources(JsonNode citations, List<String> allowedDomains, int minimumSources) {
+		CitationParseResult parsed = parseCitations(citations, allowedDomains);
+		List<String> reasons = new ArrayList<>(parsed.reasons());
+		if (parsed.citations().size() < Math.max(1, minimumSources)) reasons.add("insufficient_verified_sources");
+		return new SourceVerificationResult(reasons.isEmpty(), parsed.citations().stream()
+				.map(source -> new VerifiedSource(KnowledgeBaseSourceUrlPolicy.redactSensitiveText(source.url()), safe(source.publisher()), safe(source.title()))).toList(), List.copyOf(reasons));
 	}
 
 	public EvidenceResult evaluateExtractionEvidence(String dossierContent,
@@ -1170,22 +1185,32 @@ public class KnowledgeBaseQualityGateService {
 		return union.isEmpty() ? 0.0 : (double) intersection.size() / (double) union.size();
 	}
 
-	private List<CitationInfo> parseCitations(JsonNode citations) {
+	private CitationParseResult parseCitations(JsonNode citations, List<String> allowedDomains) {
 		if (citations == null || !citations.isArray()) {
-			return List.of();
+			return new CitationParseResult(List.of(), List.of());
 		}
 		Map<String, CitationInfo> unique = new LinkedHashMap<>();
+		List<String> reasons = new ArrayList<>();
 		for (JsonNode node : citations) {
 			String url = node == null ? null : textOrNull(node, "url");
 			String publisher = node == null ? null : textOrNull(node, "publisher");
 			String title = node == null ? null : textOrNull(node, "title");
-			CitationInfo info = new CitationInfo(url, publisher, title);
+			KnowledgeBaseSourceUrlPolicy.ValidatedCitationUrl validated = KnowledgeBaseSourceUrlPolicy.validateCitationUrl(url);
+			if (validated == null) {
+				reasons.add("invalid_citation_url");
+				continue;
+			}
+			if (!KnowledgeBaseSourceUrlPolicy.matchesAllowedDomain(validated.host(), allowedDomains)) {
+				reasons.add("disallowed_citation_domain");
+				continue;
+			}
+			CitationInfo info = new CitationInfo(validated.canonicalUrl(), publisher, title);
 			String dedupeKey = dedupeKey(info);
 			if (!unique.containsKey(dedupeKey)) {
 				unique.put(dedupeKey, info);
 			}
 		}
-		return List.copyOf(unique.values());
+		return new CitationParseResult(List.copyOf(unique.values()), List.copyOf(reasons));
 	}
 
 	private boolean hasSufficientCitations(List<CitationInfo> citations, int minCitations, String isin) {
@@ -1272,40 +1297,8 @@ public class KnowledgeBaseQualityGateService {
 		if (rawUrl == null || rawUrl.isBlank()) {
 			return null;
 		}
-		String trimmed = rawUrl.trim();
-		try {
-			URI uri = URI.create(trimmed);
-			if (uri.getHost() == null) {
-				uri = URI.create("https://" + trimmed);
-			}
-			String host = uri.getHost();
-			if (host == null || host.isBlank()) {
-				return trimmed.toLowerCase(Locale.ROOT);
-			}
-			host = host.toLowerCase(Locale.ROOT);
-			if (host.startsWith("www.")) {
-				host = host.substring(4);
-			}
-			String scheme = uri.getScheme() == null ? "https" : uri.getScheme().toLowerCase(Locale.ROOT);
-			String path = uri.getPath();
-			if (path == null || path.isBlank()) {
-				path = "/";
-			}
-			path = path.replaceAll("/{2,}", "/");
-			if (path.length() > 1 && path.endsWith("/")) {
-				path = path.substring(0, path.length() - 1);
-			}
-			StringBuilder canonical = new StringBuilder(scheme)
-					.append("://")
-					.append(host)
-					.append(path);
-			if (uri.getRawQuery() != null && !uri.getRawQuery().isBlank()) {
-				canonical.append("?").append(uri.getRawQuery());
-			}
-			return canonical.toString();
-		} catch (Exception ex) {
-			return trimmed.toLowerCase(Locale.ROOT);
-		}
+		KnowledgeBaseSourceUrlPolicy.ValidatedCitationUrl validated = KnowledgeBaseSourceUrlPolicy.validateCitationUrl(rawUrl);
+		return validated == null ? rawUrl.trim().toLowerCase(Locale.ROOT) : validated.canonicalUrl();
 	}
 
 	private boolean hasPrimarySource(List<CitationInfo> citations) {
@@ -1367,23 +1360,84 @@ public class KnowledgeBaseQualityGateService {
 		return List.copyOf(domains);
 	}
 
-	public PrimarySourceRetryPlan planPrimarySourceRetry(InstrumentDossierExtractionPayload payload,
-										   String displayName,
-										   JsonNode citations,
-										   List<String> genericAllowedDomains) {
+	public PrimarySourceRetryPlan planPrimarySourceRetry(String isin,
+																	InstrumentDossierExtractionPayload payload,
+																	   String displayName,
+																	   JsonNode citations,
+																	   List<String> genericAllowedDomains) {
 		List<String> primaryDomains = extractPrimarySourceDomains(payload, displayName, citations);
 		List<String> genericDomains = normalizeDomains(genericAllowedDomains);
+		String dekaHint = buildDekaProfileHint(isin, payload, displayName, genericAllowedDomains);
+		if (dekaHint != null) {
+			primaryDomains = mergePrimaryDomains(primaryDomains, DEKA_HOST);
+		}
 		if (primaryDomains.isEmpty()) {
 			return new PrimarySourceRetryPlan(genericDomains, false, List.of());
 		}
 		List<String> warnings = new ArrayList<>();
 		if (!genericDomains.isEmpty() && !sameDomains(primaryDomains, genericDomains)) {
-			warnings.add("Retry plan restricted to cited primary-source domains: " + String.join(", ", primaryDomains));
+			warnings.add("Retry plan restricted to primary-source domains: " + String.join(", ", primaryDomains));
+		}
+		if (dekaHint != null) {
+			warnings.add("Candidate search instruction (not evidence): " + dekaHint);
 		}
 		if (hasIgnoredCitationHosts(payload, displayName, citations, primaryDomains)) {
 			warnings.add("Secondary or non-public citation hosts will be ignored for the targeted retry.");
 		}
 		return new PrimarySourceRetryPlan(primaryDomains, true, List.copyOf(warnings));
+	}
+
+	private List<String> mergePrimaryDomains(List<String> primaryDomains, String domain) {
+		List<String> normalized = new ArrayList<>();
+		Set<String> seen = new LinkedHashSet<>();
+		if (primaryDomains != null) {
+			for (String value : primaryDomains) {
+				if (value != null && seen.add(value)) {
+					normalized.add(value);
+				}
+			}
+		}
+		if (domain != null && seen.add(domain)) {
+			normalized.add(domain);
+		}
+		return List.copyOf(normalized);
+	}
+
+	private String buildDekaProfileHint(String isin,
+										InstrumentDossierExtractionPayload payload,
+										String displayName,
+										List<String> genericAllowedDomains) {
+		if (!normalizeDomains(genericAllowedDomains).contains(DEKA_HOST)) {
+			return null;
+		}
+		String candidateName = displayName != null && !displayName.isBlank()
+				? displayName
+				: payload != null && payload.name() != null && !payload.name().isBlank()
+					? payload.name()
+					: null;
+		if (!looksLikeDekaProfile(candidateName)) {
+			return null;
+		}
+		String normalizedIsin = normalizeIsinOrNull(isin);
+		if (normalizedIsin == null) {
+			return null;
+		}
+		return DEKA_PROFILE_URL_PREFIX + normalizedIsin;
+	}
+
+	private boolean looksLikeDekaProfile(String value) {
+		return value != null && normalizeTextTokens(value).contains("deka");
+	}
+
+	private String normalizeIsinOrNull(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		try {
+			return ISINUtil.normalizeIsin(value);
+		} catch (IllegalArgumentException ex) {
+			return null;
+		}
 	}
 
 	private boolean hasIgnoredCitationHosts(InstrumentDossierExtractionPayload payload,
@@ -1402,13 +1456,14 @@ public class KnowledgeBaseQualityGateService {
 			if (item == null || !item.isObject()) {
 				continue;
 			}
-			String host = canonicalHost(extractHost(textOrNull(item, "url")));
-			if (host == null) {
+			String rawHost = extractHost(textOrNull(item, "url"));
+			if (rawHost == null) {
 				continue;
 			}
-			if (accepted.contains(host)) {
+			if (KnowledgeBaseSourceUrlPolicy.matchesAllowedDomain(rawHost, new ArrayList<>(accepted))) {
 				continue;
 			}
+			String host = canonicalHost(rawHost);
 			if (!matchesPrimarySourceDomain(host, issuerTokens, textOrNull(item, "publisher"), textOrNull(item, "title"))) {
 				return true;
 			}
@@ -1482,12 +1537,12 @@ public class KnowledgeBaseQualityGateService {
 		if (host == null || host.isBlank()) {
 			return null;
 		}
-		String normalized = host.toLowerCase(Locale.ROOT);
+		String normalized = KnowledgeBaseSourceUrlPolicy.normalizeHost(host);
+		if (normalized == null) {
+			return null;
+		}
 		if (normalized.startsWith("www.")) {
 			normalized = normalized.substring(4);
-		}
-		if (normalized.endsWith(".")) {
-			normalized = normalized.substring(0, normalized.length() - 1);
 		}
 		return normalized;
 	}
@@ -1601,14 +1656,8 @@ public class KnowledgeBaseQualityGateService {
 		if (url == null || url.isBlank()) {
 			return null;
 		}
-		try {
-			String trimmed = url.trim();
-			URI uri = URI.create(trimmed.contains("://") ? trimmed : "https://" + trimmed);
-			String host = uri.getHost();
-			return canonicalHost(host);
-		} catch (Exception ex) {
-			return null;
-		}
+		KnowledgeBaseSourceUrlPolicy.ValidatedCitationUrl validated = KnowledgeBaseSourceUrlPolicy.validateCitationUrl(url);
+		return validated == null ? null : validated.host();
 	}
 
 	private boolean publisherMatchesHost(String host, String publisher) {
@@ -1695,12 +1744,9 @@ public class KnowledgeBaseQualityGateService {
 		List<String> normalized = new ArrayList<>();
 		Set<String> seen = new LinkedHashSet<>();
 		for (String domain : domains) {
-			String host = canonicalHost(extractHost(domain));
+			String host = KnowledgeBaseSourceUrlPolicy.normalizeConfiguredDomain(domain);
 			if (host == null) {
-				host = canonicalHost(domain);
-			}
-			if (!isPublicHost(host)) {
-				continue;
+				throw new IllegalArgumentException("Malformed websearch allowed domain");
 			}
 			if (seen.add(host)) {
 				normalized.add(host);
@@ -1784,9 +1830,18 @@ public class KnowledgeBaseQualityGateService {
 	public record SimilarityResult(boolean passed, double score, List<String> reasons) {
 	}
 
+	public record SourceVerificationResult(boolean passed, List<VerifiedSource> sources, List<String> reasons) {
+	}
+
+	public record VerifiedSource(String url, String publisher, String title) {
+	}
+
 	public record PrimarySourceRetryPlan(List<String> allowedDomains,
 									 boolean primarySourceOnly,
 									 List<String> warnings) {
+	}
+
+	private record CitationParseResult(List<CitationInfo> citations, List<String> reasons) {
 	}
 
 	private record CitationInfo(String url, String publisher, String title) {

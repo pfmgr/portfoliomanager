@@ -174,7 +174,11 @@ public class KnowledgeBaseRefreshService {
 			InstrumentDossierResponseDto dossier = createDossierFromDraft(isin, draft, actor, DossierStatus.PENDING_REVIEW);
 			boolean localAutoApprove = autoApprove && (draftResult.quality() == null || draftResult.quality().passed());
 			if (localAutoApprove) {
+				runService.recordStep(run, "QUALITY_GATE");
 				dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
+				if (dossier.status() != DossierStatus.APPROVED) {
+					runService.markReviewRequired(run, "Quality gate blocked auto-approval");
+				}
 			}
 			runService.markSucceeded(run);
 			KnowledgeBaseBulkResearchItemDto extractionResult = runExtractionFlow(
@@ -203,13 +207,18 @@ public class KnowledgeBaseRefreshService {
         }
 		KnowledgeBaseRun extractRun = runService.startRun(isin, KnowledgeBaseRunAction.EXTRACT, null, null);
 		runService.incrementAttempt(extractRun);
+		runService.recordStep(extractRun, "STRUCTURED_EXTRACTION");
 		try {
             InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossierId);
+				runService.recordStep(extractRun, "SCHEMA_VALIDATION");
             if (extraction.status() == DossierExtractionStatus.FAILED) {
                 runService.markFailed(extractRun, extraction.error());
                 return new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
                         extraction.extractionId(), extraction.error(),
                         knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status()));
+            }
+            if (autoApprove) {
+                runService.recordStep(extractRun, "EVIDENCE_VALIDATION");
             }
             extraction = maintenanceService.patchMissingDataIfNeeded(dossierId, extraction, autoApprove, actor);
             Long extractionId = extraction.extractionId();
@@ -217,6 +226,10 @@ public class KnowledgeBaseRefreshService {
                     && extraction.status() != DossierExtractionStatus.APPLIED) {
                 extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
                 extractionId = extraction.extractionId();
+                if (extraction.status() != DossierExtractionStatus.APPROVED
+                        && extraction.status() != DossierExtractionStatus.APPLIED) {
+                    runService.markReviewRequired(extractRun, "Evidence gate blocked auto-approval");
+                }
             }
             Long resolvedDossierId = extraction.dossierId() == null ? dossierId : extraction.dossierId();
             runService.markSucceeded(extractRun);

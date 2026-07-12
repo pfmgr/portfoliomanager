@@ -2,7 +2,7 @@
 name: review-preflight
 description: Prüft PR-Diff, Szenarien und Akzeptanzkriterien vor Build/Test auf offensichtliche Defekte.
 mode: subagent
-model: openai/gpt-5.6-luna
+model: openai/gpt-5.4-mini
 permission:
   edit: deny
   bash:

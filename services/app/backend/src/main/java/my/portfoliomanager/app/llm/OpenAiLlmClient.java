@@ -5,16 +5,22 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import my.portfoliomanager.app.service.KnowledgeBaseSourceUrlPolicy;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
 
 public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     private static final Logger logger = LoggerFactory.getLogger(OpenAiLlmClient.class);
@@ -30,6 +36,16 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     private static final String REASONING_KEY = "reasoning";
     private static final String EFFORT_KEY = "effort";
     private static final String UNKNOWN_VALUE = "unknown";
+    private static final Duration MAX_RETRY_AFTER = Duration.ofMinutes(1);
+    private static final List<String> REQUEST_ID_HEADERS = List.of(
+            "x-request-id",
+            "x-openai-request-id",
+            "x-amzn-requestid",
+            "x-amzn-request-id",
+            "request-id",
+            "x-correlation-id",
+            "x-azure-ref"
+    );
     public static final List<String> allowedWebSearchDomains = List.of("justetf.com", "ishares.com", "vanguard.com", "ssga.com",
             "spdrs.com", "amundietf.com", "wisdomtree.eu", "invesco.com", "vaneck.com",
             "xtrackers.com", "blackrock.com", "statestreet.com", "lyxoretf.com", "openfigi.com",
@@ -57,6 +73,11 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
                 .build();
         this.model = model;
     }
+
+	OpenAiLlmClient(RestClient restClient, String model) {
+		this.restClient = restClient;
+		this.model = model;
+	}
 
     @Override
     public LlmSuggestion suggestReclassification(String context) {
@@ -212,7 +233,7 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
                                                       String schemaName,
                                                       Map<String, Object> schema,
                                                       String reasoningEffort) {
-        List<String> domains = allowedDomains == null || allowedDomains.isEmpty() ? allowedWebSearchDomains : allowedDomains;
+        List<String> domains = allowedDomains == null ? allowedWebSearchDomains : allowedDomains;
         String effort = normalizeReasoningEffort(reasoningEffort);
         Map<String, Object> request = new HashMap<>();
         request.put(MODEL_KEY, model);
@@ -245,24 +266,35 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     }
 
     private KnowledgeBaseLlmResponse callResponsesApi(Map<String, Object> request) {
-        Map<?, ?> response;
+        ResponseEntity<Map> response;
         try {
-            response = restClient.post().uri("/responses").body(request).retrieve().body(Map.class);
+            response = restClient.post().uri("/responses").body(request).retrieve().toEntity(Map.class);
         } catch (RestClientResponseException ex) {
             logResponseError(ex, request);
-            throw new LlmRequestException(safeMessage(ex), ex.getStatusCode().value(), isRetryable(ex), ex);
+            throw new LlmRequestException(safeMessage(ex),
+                    ex.getStatusCode() == null ? null : ex.getStatusCode().value(),
+                    isRetryable(ex),
+                    parseRetryAfter(ex.getResponseHeaders()),
+                    parseRequestId(ex.getResponseHeaders()),
+                    ex);
         } catch (ResourceAccessException ex) {
             logRequestError(ex, request);
-            throw new LlmRequestException(safeMessage(ex), null, true, ex);
+            throw new LlmRequestException(safeMessage(ex), null, true, null, null, ex);
         } catch (Exception ex) {
             logRequestError(ex, request);
-            throw new LlmRequestException(safeMessage(ex), null, false, ex);
+            throw new LlmRequestException(safeMessage(ex), null, isTimeoutLike(ex), null, null, ex);
         }
-        String text = extractOutputText(response);
+        String text = extractOutputText(response.getBody());
         if (text == null || text.isBlank()) {
-            throw new LlmRequestException("No output_text", null, false, null);
+            throw new LlmRequestException("No output_text",
+                    response.getStatusCode().value(),
+                    false,
+                    null,
+                    parseRequestId(response.getHeaders()),
+                    null);
         }
-        return new KnowledgeBaseLlmResponse(text, model);
+        return new KnowledgeBaseLlmResponse(text, model, response.getStatusCode().value(), false, null,
+                parseRequestId(response.getHeaders()));
     }
 
     private String extractOutputText(Map<?, ?> response) {
@@ -326,6 +358,15 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         return status == 408 || status == 429 || status >= 500;
     }
 
+	private boolean isTimeoutLike(Throwable throwable) {
+		for (Throwable current = throwable; current != null; current = current.getCause()) {
+			if (current instanceof java.net.SocketTimeoutException || current instanceof java.io.InterruptedIOException) {
+				return true;
+			}
+		}
+		return false;
+	}
+
     private Duration ensureMinimumTimeout(Duration value, Duration minimum) {
         if (value == null) {
             return minimum;
@@ -340,17 +381,18 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
         String contentType = ex.getResponseHeaders() == null || ex.getResponseHeaders().getContentType() == null
                 ? UNKNOWN_VALUE
                 : ex.getResponseHeaders().getContentType().toString();
-        int bodyLength = ex.getResponseBodyAsByteArray() == null ? 0 : ex.getResponseBodyAsByteArray().length;
         String effort = extractReasoningEffort(request);
         int status = ex.getStatusCode() == null ? 0 : ex.getStatusCode().value();
-        logger.error("OpenAI responses API error (model={}, effort={}, status={}, contentType={}, bodyLength={})",
-                model, effort, status, contentType, bodyLength, ex);
+        String requestId = parseRequestId(ex.getResponseHeaders());
+        Duration retryAfter = parseRetryAfter(ex.getResponseHeaders());
+        logger.error("OpenAI responses API error (model={}, effort={}, status={}, requestId={}, retryAfter={}, contentType={}, error={})",
+                model, effort, status, requestId, retryAfter, contentType, redactForLog(safeMessage(ex)));
     }
 
     private void logRequestError(Exception ex, Map<String, Object> request) {
         String effort = extractReasoningEffort(request);
         logger.error("OpenAI responses API request failed (model={}, effort={}, error={})",
-                model, effort, safeMessage(ex), ex);
+                model, effort, redactForLog(safeMessage(ex)));
     }
 
     private String extractReasoningEffort(Map<String, Object> request) {
@@ -366,17 +408,93 @@ public class OpenAiLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
     }
 
     private LlmSuggestion llmErrorSuggestion(LlmRequestException ex) {
-        return new LlmSuggestion("", RESPONSE_ORIGIN_PREFIX + model + "): " + ex.getMessage());
+        String reference = errorReference(ex);
+        return new LlmSuggestion("", RESPONSE_ORIGIN_PREFIX + model + "): " + "LLM_REQUEST_FAILED (ref=" + reference + ")");
     }
 
     private String safeMessage(Exception ex) {
         if (ex == null) {
             return "Unknown error";
         }
+        if (ex instanceof RestClientResponseException responseException) {
+            Integer status = responseException.getStatusCode() == null ? null : responseException.getStatusCode().value();
+            return status == null ? "OpenAI responses API error" : "OpenAI responses API returned HTTP " + status;
+        }
         String message = ex.getMessage();
         if (message == null || message.isBlank()) {
             message = ex.getClass().getSimpleName();
         }
-        return message;
+        return redactForLog(message);
     }
+
+	private String redactForLog(String value) {
+		return KnowledgeBaseSourceUrlPolicy.redactSensitiveText(value);
+	}
+
+	private String errorReference(Exception ex) {
+		String message = ex == null ? "unknown" : redactForLog(safeMessage(ex));
+		return Integer.toHexString(message.hashCode());
+	}
+
+	private Duration parseRetryAfter(HttpHeaders headers) {
+		String value = headerValue(headers, HttpHeaders.RETRY_AFTER);
+		if (value == null) {
+			return null;
+		}
+		String trimmed = value.trim();
+		if (trimmed.isEmpty()) {
+			return null;
+		}
+		try {
+			long seconds = Long.parseLong(trimmed);
+			return clampRetryAfter(Duration.ofSeconds(Math.max(0L, seconds)));
+		} catch (NumberFormatException ignored) {
+			try {
+				ZonedDateTime dateTime = ZonedDateTime.parse(trimmed, DateTimeFormatter.RFC_1123_DATE_TIME);
+				Duration delay = Duration.between(Instant.now(), dateTime.toInstant());
+				return clampRetryAfter(delay.isNegative() ? Duration.ZERO : delay);
+			} catch (DateTimeParseException ignoredDate) {
+				return null;
+			}
+		}
+	}
+
+	private Duration clampRetryAfter(Duration retryAfter) {
+		if (retryAfter == null) {
+			return null;
+		}
+		if (retryAfter.isNegative()) {
+			return Duration.ZERO;
+		}
+		return retryAfter.compareTo(MAX_RETRY_AFTER) > 0 ? MAX_RETRY_AFTER : retryAfter;
+	}
+
+	private String parseRequestId(HttpHeaders headers) {
+		if (headers == null) {
+			return null;
+		}
+		for (String header : REQUEST_ID_HEADERS) {
+			String value = headerValue(headers, header);
+			if (value != null && !value.isBlank()) {
+				return sanitizeHeaderValue(value);
+			}
+		}
+		return null;
+	}
+
+	private String headerValue(HttpHeaders headers, String name) {
+		if (headers == null || name == null) {
+			return null;
+		}
+		String value = headers.getFirst(name);
+		return value == null || value.isBlank() ? null : value;
+	}
+
+	private String sanitizeHeaderValue(String value) {
+		String sanitized = value.replaceAll("[\\r\\n]+", "").trim();
+		if (sanitized.length() > 128) {
+			return sanitized.substring(0, 128);
+		}
+		return sanitized.isEmpty() ? null : sanitized;
+	}
 }

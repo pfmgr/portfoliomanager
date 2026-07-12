@@ -22,11 +22,11 @@ public class NoopLlmClient implements LlmClient, KnowledgeBaseLlmProvider {
 
 	@Override
 	public KnowledgeBaseLlmResponse runWebSearch(String prompt, List<String> allowedDomains) {
-		throw new LlmRequestException(LLM_DISABLED, null, false, null);
+		throw new LlmRequestException(LLM_DISABLED, null, false, null, null, null);
 	}
 
 	@Override
 	public KnowledgeBaseLlmResponse runJsonPrompt(String prompt) {
-		throw new LlmRequestException(LLM_DISABLED, null, false, null);
+		throw new LlmRequestException(LLM_DISABLED, null, false, null, null, null);
 	}
 }

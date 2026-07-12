@@ -142,6 +142,34 @@ class KnowledgeBaseApiIntegrationTest {
 	}
 
 	@Test
+	void llmActionsListRemainsSummaryOnlyButDetailHydratesResults() throws Exception {
+		MvcResult result = mockMvc.perform(post("/api/kb/dossiers/bulk-research")
+						.with(adminJwt())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"isins\":[\"DE0000000001\"],\"autoApprove\":false}"))
+				.andExpect(status().isOk())
+				.andReturn();
+		KnowledgeBaseLlmActionDto action = objectMapper.readValue(
+				result.getResponse().getContentAsString(),
+				KnowledgeBaseLlmActionDto.class
+		);
+
+		awaitAction(action.actionId());
+
+		mockMvc.perform(get("/api/kb/llm-actions")
+					.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$[0].bulkResearchResult").doesNotExist())
+				.andExpect(jsonPath("$[0].alternativesResult").doesNotExist())
+				.andExpect(jsonPath("$[0].refreshBatchResult").doesNotExist());
+
+		mockMvc.perform(get("/api/kb/llm-actions/" + action.actionId())
+					.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.bulkResearchResult.items[0].isin").value("DE0000000001"));
+	}
+
+	@Test
 	void alternatives_returnsItems() throws Exception {
 		MvcResult result = mockMvc.perform(post("/api/kb/alternatives/DE0000000001")
 						.with(adminJwt())
@@ -154,6 +182,11 @@ class KnowledgeBaseApiIntegrationTest {
 				KnowledgeBaseLlmActionDto.class
 		);
 		KnowledgeBaseLlmActionDto completed = awaitAction(action.actionId());
+		MvcResult detail = mockMvc.perform(get("/api/kb/llm-actions/" + action.actionId())
+					.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andReturn();
+		System.out.println(detail.getResponse().getContentAsString());
 		assertThat(completed.alternativesResult()).isNotNull();
 		assertThat(completed.alternativesResult().alternatives()).isNotEmpty();
 		assertThat(completed.alternativesResult().alternatives().get(0).isin()).isEqualTo("DE0000000002");
@@ -390,6 +423,29 @@ class KnowledgeBaseApiIntegrationTest {
 	}
 
 	@Test
+	void numericTwelveDigitPathResolvesToDossierIdRoute() throws Exception {
+		jdbcTemplate.update(
+				"""
+				insert into instrument_dossiers (
+				  dossier_id, isin, created_by, origin, status, authored_by, version, content_md,
+				  citations_json, content_hash, created_at, updated_at, auto_approved
+				) values (?, ?, 'tester', 'USER', 'DRAFT', 'USER', 1, 'Name: Numeric Route',
+				          cast('[]' as jsonb), 'hash', ?, ?, false)
+				""",
+				123456789012L,
+				"DE0000000001",
+				LocalDateTime.now(),
+				LocalDateTime.now()
+		);
+
+		mockMvc.perform(get("/api/kb/dossiers/123456789012")
+						.with(adminJwt()))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.dossierId").value(123456789012L))
+				.andExpect(jsonPath("$.isin").value("DE0000000001"));
+	}
+
+	@Test
 	void blacklistOnlyKbUpdateDoesNotMarkExtractionOutdated() throws Exception {
 		createDossier("DE5555555555", "Freshness ETF");
 
@@ -552,7 +608,7 @@ class KnowledgeBaseApiIntegrationTest {
 					result.getResponse().getContentAsString(),
 					KnowledgeBaseLlmActionDto.class
 			);
-			if (action.status() != KnowledgeBaseLlmActionStatus.RUNNING) {
+			if (!action.status().name().equals("RUNNING") && !action.status().name().equals("QUEUED") && !action.status().name().equals("WAITING_RETRY")) {
 				return action;
 			}
 			Thread.sleep(50L);
@@ -606,7 +662,34 @@ class KnowledgeBaseApiIntegrationTest {
 
 				@Override
 				public my.portfoliomanager.app.llm.KnowledgeBaseLlmExtractionDraft extractMetadata(String dossierText) {
-					throw new UnsupportedOperationException();
+					tools.jackson.databind.node.ObjectNode extraction = objectMapper.createObjectNode();
+					extraction.put("isin", "DE0000000002");
+					extraction.put("name", "Test Instrument");
+					extraction.put("instrument_type", "ETF");
+					extraction.put("asset_class", "Equity");
+					extraction.put("sub_class", "ETF");
+					extraction.putNull("gics_sector");
+					extraction.putNull("gics_industry_group");
+					extraction.putNull("gics_industry");
+					extraction.putNull("gics_sub_industry");
+					extraction.put("layer", 2);
+					extraction.put("layer_notes", "test");
+					extraction.set("etf", objectMapper.createObjectNode()
+							.put("ongoing_charges_pct", 0.2)
+							.put("benchmark_index", "MSCI World"));
+					tools.jackson.databind.node.ObjectNode risk = objectMapper.createObjectNode();
+					risk.set("summary_risk_indicator", objectMapper.createObjectNode().put("value", 4));
+					risk.put("section_present", true);
+					extraction.set("risk", risk);
+					extraction.set("regions", objectMapper.createArrayNode());
+					extraction.set("sectors", objectMapper.createArrayNode());
+					extraction.set("top_holdings", objectMapper.createArrayNode());
+					extraction.putNull("financials");
+					extraction.putNull("valuation");
+					extraction.set("sources", objectMapper.createArrayNode());
+					extraction.set("missing_fields", objectMapper.createArrayNode());
+					extraction.set("warnings", objectMapper.createArrayNode());
+					return new my.portfoliomanager.app.llm.KnowledgeBaseLlmExtractionDraft(extraction, "test-model");
 				}
 
 				@Override
@@ -637,6 +720,47 @@ class KnowledgeBaseApiIntegrationTest {
 				@Override
 				public LlmSuggestion suggestSavingPlanProposal(String context) {
 					return new LlmSuggestion("", "test");
+				}
+			};
+		}
+
+		@Bean
+		@org.springframework.context.annotation.Primary
+		my.portfoliomanager.app.service.KnowledgeBaseMaintenanceService knowledgeBaseMaintenanceService(
+				my.portfoliomanager.app.service.KnowledgeBaseConfigService configService,
+				KnowledgeBaseLlmClient llmClient,
+				my.portfoliomanager.app.service.KnowledgeBaseService knowledgeBaseService,
+				my.portfoliomanager.app.service.KnowledgeBaseRunService runService,
+				my.portfoliomanager.app.repository.InstrumentDossierRepository dossierRepository,
+				my.portfoliomanager.app.repository.KnowledgeBaseAlternativeRepository alternativeRepository,
+				my.portfoliomanager.app.service.KnowledgeBaseExtractionService knowledgeBaseExtractionService,
+				my.portfoliomanager.app.service.KnowledgeBaseQualityGateService qualityGateService,
+				ObjectMapper objectMapper) {
+			return new my.portfoliomanager.app.service.KnowledgeBaseMaintenanceService(
+					configService,
+					llmClient,
+					knowledgeBaseService,
+					runService,
+					dossierRepository,
+					alternativeRepository,
+					knowledgeBaseExtractionService,
+					qualityGateService,
+					objectMapper
+			) {
+				@Override
+				public my.portfoliomanager.app.dto.KnowledgeBaseAlternativesResponseDto findAlternatives(String baseIsin, Boolean autoApprove, String actor, java.util.Set<String> blockedIsins) {
+					return new my.portfoliomanager.app.dto.KnowledgeBaseAlternativesResponseDto(baseIsin, List.of(
+							new my.portfoliomanager.app.dto.KnowledgeBaseAlternativeItemDto(
+									"DE0000000002",
+									"Similar exposure",
+									null,
+									my.portfoliomanager.app.domain.KnowledgeBaseAlternativeStatus.GENERATED,
+									null,
+									null,
+									null,
+									null
+							)
+					));
 				}
 			};
 		}

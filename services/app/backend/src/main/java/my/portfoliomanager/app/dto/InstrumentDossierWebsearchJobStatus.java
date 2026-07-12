@@ -4,6 +4,6 @@ public enum InstrumentDossierWebsearchJobStatus {
 	PENDING,
 	RUNNING,
 	DONE,
-	FAILED
+	FAILED,
+	CANCELED
 }
-

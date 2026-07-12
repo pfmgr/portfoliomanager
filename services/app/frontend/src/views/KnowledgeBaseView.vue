@@ -499,12 +499,10 @@
                 <p v-if="missingMetricsError" class="toast error">{{ missingMetricsError }}</p>
                 <p v-if="isIsinBusy(dossierDetail.isin)" class="hint">LLM action already running for this ISIN.</p>
                 <p v-if="extractionAction" class="hint">
-                  {{ formatActionType(extractionAction.type) }} action {{ formatActionStatus(extractionAction.status) }}:
-                  {{ extractionAction.message || '-' }}
+                  {{ formatActionType(extractionAction.type) }} action {{ actionSummaryText(extractionAction) }}<span v-if="actionSafeNote(extractionAction) !== '-'"> · {{ actionSafeNote(extractionAction) }}</span>
                 </p>
                 <p v-if="missingMetricsAction" class="hint">
-                  Missing metrics action {{ formatActionStatus(missingMetricsAction.status) }}:
-                  {{ missingMetricsAction.message || '-' }}
+                  Missing metrics action {{ actionSummaryText(missingMetricsAction) }}<span v-if="actionSafeNote(missingMetricsAction) !== '-'"> · {{ actionSafeNote(missingMetricsAction) }}</span>
                 </p>
 
                 <div v-if="latestExtraction">
@@ -517,6 +515,13 @@
                     <span :class="['badge', gateBadgeClass(extractionEvidenceGate.passed)]">
                       {{ extractionEvidenceGate.passed ? 'PASS' : 'FAIL' }}
                     </span>
+                  </p>
+                  <p v-if="extractionAction" class="hint">
+                    Action record:
+                    <span :class="['badge', actionStatusBadgeClass(extractionAction.status)]">
+                      {{ canonicalActionStatusLabel(extractionAction.status) }}
+                    </span>
+                    <span v-if="actionSafeNote(extractionAction) !== '-'">{{ actionSafeNote(extractionAction) }}</span>
                   </p>
                   <dl class="kb-dl">
                     <template v-for="field in extractionBaseFields" :key="field.label">
@@ -565,6 +570,12 @@
                     <h5>Evidence gate missing fields</h5>
                     <ul>
                       <li v-for="field in extractionEvidenceMissing" :key="field">{{ field }}</li>
+                    </ul>
+                  </div>
+                  <div v-if="actionNotes(extractionAction).length" class="section">
+                    <h5>Review notes</h5>
+                    <ul>
+                      <li v-for="note in actionNotes(extractionAction)" :key="note">{{ note }}</li>
                     </ul>
                   </div>
                 </div>
@@ -697,7 +708,7 @@
         <p v-if="bulkError" class="toast error">{{ bulkError }}</p>
         <p v-if="bulkWarning" class="hint">{{ bulkWarning }}</p>
         <p v-if="bulkAction" class="hint">
-          Bulk action {{ formatActionStatus(bulkAction.status) }}: {{ bulkAction.message || '-' }}
+          Bulk action {{ actionSummaryText(bulkAction) }}<span v-if="actionSafeNote(bulkAction) !== '-'"> · {{ actionSafeNote(bulkAction) }}</span>
         </p>
 
         <div v-if="bulkResult" class="section">
@@ -800,7 +811,7 @@
           LLM action already running for this ISIN.
         </p>
         <p v-if="alternativesAction" class="hint">
-          Alternatives action {{ formatActionStatus(alternativesAction.status) }}: {{ alternativesAction.message || '-' }}
+          Alternatives action {{ actionSummaryText(alternativesAction) }}<span v-if="actionSafeNote(alternativesAction) !== '-'"> · {{ actionSafeNote(alternativesAction) }}</span>
         </p>
 
         <div v-if="alternativesItems.length" class="section">
@@ -957,7 +968,7 @@
 
         <p v-if="refreshError" class="toast error">{{ refreshError }}</p>
         <p v-if="refreshAction" class="hint">
-          Refresh action {{ formatActionStatus(refreshAction.status) }}: {{ refreshAction.message || '-' }}
+          Refresh action {{ actionSummaryText(refreshAction) }}<span v-if="actionSafeNote(refreshAction) !== '-'"> · {{ actionSafeNote(refreshAction) }}</span>
         </p>
 
         <div v-if="refreshResult" class="section">
@@ -1019,12 +1030,22 @@
         :aria-labelledby="tabId('ACTIONS')"
       >
         <h3>LLM actions</h3>
-        <p class="hint">Track running and recent LLM jobs. Actions are stored in memory only.</p>
+        <p class="hint">Track persisted workflow records. Status, retry timing, and evidence stay server-authoritative.</p>
+        <p class="sr-only" role="status" aria-live="polite">{{ llmActionsLiveMessage }}</p>
 
-        <p v-if="llmActionsError" class="toast error">{{ llmActionsError }}</p>
+        <p v-if="llmActionsError" class="toast error" role="alert">{{ llmActionsError }}</p>
 
-        <div class="table-wrap">
-          <table class="table">
+        <p id="kb-llm-actions-table-hint" class="hint kb-table-hint">Focus the table and use Left/Right arrows to scroll horizontally.</p>
+
+        <div
+          class="table-wrap kb-table-wrap kb-llm-actions-table-wrap"
+          role="region"
+          aria-label="LLM actions table"
+          aria-describedby="kb-llm-actions-table-hint"
+          tabindex="0"
+          @keydown="handleLlmActionsTableKeydown"
+        >
+          <table class="table kb-llm-actions-table">
             <caption class="sr-only">LLM actions</caption>
             <thead>
               <tr>
@@ -1060,18 +1081,19 @@
                     Status <span class="sort-indicator" aria-hidden="true">{{ sortIndicator(llmActionsSort, 'status') }}</span>
                   </button>
                 </th>
-                <th scope="col">ISINs</th>
-                <th scope="col">Manual approvals</th>
-                <th scope="col">Message</th>
+                <th scope="col">Step</th>
+                <th scope="col">Timing</th>
+                <th scope="col">Progress</th>
+                <th scope="col">Notes</th>
                 <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="llmActionsLoading">
-                <td colspan="9">Loading LLM actions...</td>
+                <td colspan="10">Loading LLM actions...</td>
               </tr>
               <tr v-else-if="llmActionRows.length === 0">
-                <td colspan="9">No actions yet.</td>
+                <td colspan="10">No actions yet.</td>
               </tr>
               <tr v-else v-for="action in llmActionRows" :key="action.actionId">
                 <th scope="row">{{ action.createdAt ? formatDate(action.createdAt) : '-' }}</th>
@@ -1079,41 +1101,55 @@
                 <td>{{ formatActionType(action.type) }}</td>
                 <td>{{ formatActionTrigger(action.trigger) }}</td>
                 <td>
-                  <span :class="['badge', statusBadgeClass(action.status)]">{{ action.status }}</span>
+                  <span :class="['badge', actionStatusBadgeClass(action.status)]">{{ canonicalActionStatusLabel(action.status) }}</span>
                 </td>
                 <td>
-                  <details v-if="shouldUseDetails(formatIsinList(action.isins))" class="kb-details">
-                    <summary>{{ summarizeText(formatIsinList(action.isins)) }}</summary>
-                    <p>{{ formatIsinList(action.isins) }}</p>
+                  {{ formatActionStep(action.currentStep) }}
+                </td>
+                <td>
+                  {{ formatActionTiming(action) }}
+                </td>
+                <td>
+                  {{ formatActionProgress(action) }}
+                </td>
+                <td>
+                  <details v-if="actionNotes(action).length || actionSafeNote(action) !== '-'" class="kb-details">
+                    <summary>{{ actionSummaryText(action) }}</summary>
+                    <p v-if="actionSafeNote(action) !== '-'">{{ actionSafeNote(action) }}</p>
+                    <ul v-if="actionNotes(action).length">
+                      <li v-for="note in actionNotes(action)" :key="note">{{ note }}</li>
+                    </ul>
                   </details>
-                  <span v-else>{{ formatIsinList(action.isins) }}</span>
+                  <span v-else>{{ actionSummaryText(action) }}</span>
                 </td>
                 <td>
-                  <details v-if="shouldUseDetails(formatManualApprovals(action.manualApprovals))" class="kb-details">
-                    <summary>{{ summarizeText(formatManualApprovals(action.manualApprovals)) }}</summary>
-                    <p>{{ formatManualApprovals(action.manualApprovals) }}</p>
-                  </details>
-                  <span v-else>{{ formatManualApprovals(action.manualApprovals) }}</span>
-                </td>
-                <td>
-                  <details v-if="shouldUseDetails(action.message)" class="kb-details">
-                    <summary>{{ summarizeText(action.message) }}</summary>
-                    <p>{{ action.message }}</p>
-                  </details>
-                  <span v-else>{{ action.message || '-' }}</span>
-                </td>
-                <td>
+                  <template v-if="isActionCancelable(action.status)">
+                    <div v-if="llmActionCancelPromptId === action.actionId" class="kb-inline-confirm" role="group" aria-label="Confirm cancel action">
+                      <span class="muted">Cancel this running action?</span>
+                      <button
+                        :ref="(el) => setLlmActionCancelConfirmButtonRef(action.actionId, el)"
+                        class="ghost danger"
+                        type="button"
+                        :disabled="isActionBusy(action.actionId)"
+                        @click="confirmCancelLlmAction(action.actionId)"
+                      >
+                        Confirm
+                      </button>
+                      <button class="ghost" type="button" :disabled="isActionBusy(action.actionId)" @click="dismissCancelLlmAction(action.actionId)">Keep running</button>
+                    </div>
+                    <button
+                      v-else
+                      :ref="(el) => setLlmActionCancelButtonRef(action.actionId, el)"
+                      class="ghost"
+                      type="button"
+                      :disabled="isActionBusy(action.actionId)"
+                      @click="promptCancelLlmAction(action.actionId)"
+                    >
+                      Cancel
+                    </button>
+                  </template>
                   <button
-                    v-if="action.status === 'RUNNING'"
-                    class="ghost"
-                    type="button"
-                    :disabled="isActionBusy(action.actionId)"
-                    @click="cancelLlmAction(action.actionId)"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    v-else
+                    v-else-if="isActionTerminalStatus(action.status)"
                     class="ghost"
                     type="button"
                     :disabled="isActionBusy(action.actionId)"
@@ -1533,9 +1569,15 @@ const refreshSort = reactive({ key: 'isin', direction: 'asc' })
 const llmActions = ref([])
 const llmActionsLoading = ref(false)
 const llmActionsError = ref('')
+const llmActionsLiveMessage = ref('')
 const llmActionsSort = reactive({ key: 'updatedAt', direction: 'desc' })
 const llmActionsBusy = ref(new Set())
 const llmActionResultsLoaded = ref(new Set())
+const llmActionDetails = ref({})
+const llmActionDetailsLoading = ref(new Set())
+const llmActionCancelPromptId = ref('')
+const llmActionCancelButtonRefs = ref({})
+const llmActionCancelConfirmButtonRefs = ref({})
 const bulkActionId = ref('')
 const alternativesActionId = ref('')
 const refreshActionId = ref('')
@@ -1544,6 +1586,8 @@ const missingMetricsActionId = ref('')
 const bulkWarning = ref('')
 const ACTIONS_POLL_INTERVAL_MS = 5000
 let actionsPollHandle = null
+let llmActionsLoadPromise = null
+let knowledgeBaseViewActive = false
 
 const runsFilters = ref({
   isin: '',
@@ -1661,11 +1705,29 @@ const bulkBlockedIsins = computed(() => bulkIsins.value.filter((isin) => running
 const bulkAllBusy = computed(
   () => bulkIsins.value.length > 0 && bulkBlockedIsins.value.length === bulkIsins.value.length
 )
-const bulkAction = computed(() => findActionById(bulkActionId.value))
-const alternativesAction = computed(() => findActionById(alternativesActionId.value))
-const refreshAction = computed(() => findActionById(refreshActionId.value))
-const extractionAction = computed(() => findActionById(extractionActionId.value))
-const missingMetricsAction = computed(() => findActionById(missingMetricsActionId.value))
+const bulkAction = computed(() => resolveActionByIdOrLatest(bulkActionId.value, 'RESEARCH'))
+const alternativesAction = computed(() =>
+  resolveActionByIdOrLatest(
+    alternativesActionId.value,
+    'ALTERNATIVES',
+    alternativesIsinNormalized.value ? [alternativesIsinNormalized.value] : []
+  )
+)
+const refreshAction = computed(() => resolveActionByIdOrLatest(refreshActionId.value, 'REFRESH'))
+const extractionAction = computed(() =>
+  resolveActionByIdOrLatest(
+    extractionActionId.value,
+    'EXTRACTION',
+    dossierDetail.value?.isin ? [dossierDetail.value.isin] : []
+  )
+)
+const missingMetricsAction = computed(() =>
+  resolveActionByIdOrLatest(
+    missingMetricsActionId.value,
+    'MISSING_METRICS',
+    dossierDetail.value?.isin ? [dossierDetail.value.isin] : []
+  )
+)
 const alternativesRunning = computed(() => alternativesAction.value?.status === 'RUNNING')
 const sortSnapshot = computed(() => ({
   dossier: { key: dossierSort.key, direction: dossierSort.direction },
@@ -1948,15 +2010,18 @@ const canRejectDossier = computed(() => {
 })
 
 const isNewDossier = computed(() => !dossierDetail.value?.latestDossier?.dossierId)
+const extractionEvidenceGatePassed = computed(() => extractionEvidenceGate.value?.passed !== false)
 const canApproveExtraction = computed(() => {
   const status = latestExtraction.value?.status
-  return status === 'CREATED' || status === 'PENDING_REVIEW'
+  return extractionEvidenceGatePassed.value && (status === 'CREATED' || status === 'PENDING_REVIEW')
 })
 const canRejectExtraction = computed(() => {
   const status = latestExtraction.value?.status
   return status === 'CREATED' || status === 'PENDING_REVIEW'
 })
-const canApplyExtraction = computed(() => latestExtraction.value?.status === 'APPROVED')
+const canApplyExtraction = computed(
+  () => extractionEvidenceGatePassed.value && latestExtraction.value?.status === 'APPROVED'
+)
 
 const hasPrevDossierPage = computed(() => dossierPage.value.page > 0)
 const hasNextDossierPage = computed(() => (dossierPage.value.page + 1) * dossierPage.value.size < dossierPage.value.total)
@@ -1997,6 +2062,7 @@ watch(sortSnapshot, (next) => {
 })
 
 onMounted(async () => {
+  knowledgeBaseViewActive = true
   hydrateSortState()
   hydrateBackupStatus()
   await loadConfig()
@@ -2004,7 +2070,7 @@ onMounted(async () => {
     await loadDossiers()
     await loadRefreshStats()
     await loadLlmActions()
-    startLlmActionsPolling()
+    syncLlmActionPolling()
     await nextTick()
     updateDossierScrollHint()
   }
@@ -2013,6 +2079,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  knowledgeBaseViewActive = false
   stopLlmActionsPolling()
   window.removeEventListener('resize', updateDossierScrollHint)
   window.removeEventListener('storage', handleStorageEvent)
@@ -2824,25 +2891,49 @@ function stopLlmActionsPolling() {
   actionsPollHandle = null
 }
 
+function syncLlmActionPolling() {
+  if (!knowledgeBaseViewActive || kbDisabled.value) {
+    stopLlmActionsPolling()
+    return
+  }
+  if (hasActiveServerActions(llmActions.value)) {
+    startLlmActionsPolling()
+  } else {
+    stopLlmActionsPolling()
+  }
+}
+
 async function loadLlmActions(silent = false) {
   if (kbDisabled.value) return
-  if (!silent) {
-    llmActionsLoading.value = true
-  }
-  llmActionsError.value = ''
+  if (llmActionsLoadPromise) return llmActionsLoadPromise
+  const promise = (async () => {
+    if (!silent) {
+      llmActionsLoading.value = true
+    }
+    llmActionsError.value = ''
   try {
     const result = await apiRequest('/kb/llm-actions')
-    llmActions.value = Array.isArray(result) ? result : []
-    await syncActionResults()
-  } catch (err) {
-    if (!handleKbError(err, 'Failed to load LLM actions')) {
-      llmActionsError.value = err?.message || 'Failed to load LLM actions'
+      if (!knowledgeBaseViewActive) return
+      llmActions.value = Array.isArray(result) ? result : []
+      llmActionsLiveMessage.value = summarizeServerActions(llmActions.value)
+      await syncTrackedActionResults()
+      await syncTerminalActionDetails()
+      if (!knowledgeBaseViewActive) return
+      syncLlmActionPolling()
+    } catch (err) {
+      if (!handleKbError(err, 'Failed to load LLM actions')) {
+        await announceLlmActionsError(err?.message || 'Failed to load LLM actions')
+      }
+    } finally {
+      if (!silent) {
+        llmActionsLoading.value = false
+      }
     }
-  } finally {
-    if (!silent) {
-      llmActionsLoading.value = false
-    }
-  }
+  })()
+  llmActionsLoadPromise = promise.finally(() => {
+    llmActionsLoadPromise = null
+  })
+  return llmActionsLoadPromise
 }
 
 async function loadLlmActionDetail(actionId) {
@@ -2850,12 +2941,71 @@ async function loadLlmActionDetail(actionId) {
   return apiRequest(`/kb/llm-actions/${encodeURIComponent(actionId)}`)
 }
 
-async function syncActionResults() {
-  await syncActionResult(bulkActionId.value, handleBulkActionResult)
-  await syncActionResult(alternativesActionId.value, handleAlternativesActionResult)
-  await syncActionResult(refreshActionId.value, handleRefreshActionResult)
-  await syncActionResult(extractionActionId.value, handleExtractionActionResult)
-  await syncActionResult(missingMetricsActionId.value, handleMissingMetricsActionResult)
+function getActionDetail(actionId) {
+  if (!actionId) return null
+  return llmActionDetails.value?.[actionId] || null
+}
+
+function setActionDetail(detail) {
+  if (!detail?.actionId) return
+  llmActionDetails.value = {
+    ...llmActionDetails.value,
+    [detail.actionId]: detail
+  }
+}
+
+function hasActiveServerActions(actions) {
+  return Array.isArray(actions) && actions.some((action) => ['QUEUED', 'RUNNING', 'WAITING_RETRY'].includes(action?.status))
+}
+
+function isActionTerminalStatus(status) {
+  return ['REVIEW_REQUIRED', 'COMPLETED', 'FAILED', 'CANCELED'].includes(status)
+}
+
+function isActionCancelable(status) {
+  return ['QUEUED', 'RUNNING', 'WAITING_RETRY'].includes(status)
+}
+
+function summarizeServerActions(actions) {
+  const total = Array.isArray(actions) ? actions.length : 0
+  if (!total) return 'No LLM actions.'
+  const active = actions.filter((action) => ['QUEUED', 'RUNNING', 'WAITING_RETRY'].includes(action?.status)).length
+  const review = actions.filter((action) => action?.status === 'REVIEW_REQUIRED').length
+  if (active > 0) {
+    return review > 0
+      ? `${active} active action${active === 1 ? '' : 's'} and ${review} pending review.`
+      : `${active} active action${active === 1 ? '' : 's'} polling from the server.`
+  }
+  return review > 0 ? `${review} action${review === 1 ? '' : 's'} require review.` : `${total} action${total === 1 ? '' : 's'} loaded.`
+}
+
+async function syncTerminalActionDetails(actions = llmActions.value) {
+  if (!Array.isArray(actions) || !actions.length) return
+  await Promise.all(
+    actions.map(async (action) => {
+      if (!action?.actionId || !isActionTerminalStatus(action.status)) return
+      if (getActionDetail(action.actionId) || llmActionDetailsLoading.value.has(action.actionId)) return
+      const nextLoading = new Set(llmActionDetailsLoading.value)
+      nextLoading.add(action.actionId)
+      llmActionDetailsLoading.value = nextLoading
+      try {
+        const detail = await loadLlmActionDetail(action.actionId)
+        if (detail) setActionDetail(detail)
+      } finally {
+        const finishedLoading = new Set(llmActionDetailsLoading.value)
+        finishedLoading.delete(action.actionId)
+        llmActionDetailsLoading.value = finishedLoading
+      }
+    })
+  )
+}
+
+async function syncTrackedActionResults() {
+  await syncActionResult(bulkAction.value?.actionId || bulkActionId.value, handleBulkActionResult)
+  await syncActionResult(alternativesAction.value?.actionId || alternativesActionId.value, handleAlternativesActionResult)
+  await syncActionResult(refreshAction.value?.actionId || refreshActionId.value, handleRefreshActionResult)
+  await syncActionResult(extractionAction.value?.actionId || extractionActionId.value, handleExtractionActionResult)
+  await syncActionResult(missingMetricsAction.value?.actionId || missingMetricsActionId.value, handleMissingMetricsActionResult)
 }
 
 async function syncActionResult(actionId, handler) {
@@ -2863,17 +3013,17 @@ async function syncActionResult(actionId, handler) {
     return
   }
   const action = findActionById(actionId)
-  if (!action || action.status === 'RUNNING') {
+  if (!action || !isActionTerminalStatus(action.status)) {
     return
   }
   try {
-    const detail = await loadLlmActionDetail(actionId)
+    const detail = getActionDetail(actionId) || (await loadAndStoreActionDetail(actionId))
     if (detail) {
       await handler(detail)
       markActionResultLoaded(actionId)
     }
   } catch (err) {
-    llmActionsError.value = err?.message || 'Failed to load LLM action detail'
+    await announceLlmActionsError(err?.message || 'Failed to load LLM action detail')
   }
 }
 
@@ -2884,7 +3034,79 @@ function markActionResultLoaded(actionId) {
   llmActionResultsLoaded.value = next
 }
 
+async function loadAndStoreActionDetail(actionId) {
+  if (!actionId) return null
+  if (llmActionDetailsLoading.value.has(actionId)) {
+    return getActionDetail(actionId)
+  }
+  const nextLoading = new Set(llmActionDetailsLoading.value)
+  nextLoading.add(actionId)
+  llmActionDetailsLoading.value = nextLoading
+  try {
+    const detail = await loadLlmActionDetail(actionId)
+    if (detail) setActionDetail(detail)
+    return detail
+  } finally {
+    const finishedLoading = new Set(llmActionDetailsLoading.value)
+    finishedLoading.delete(actionId)
+    llmActionDetailsLoading.value = finishedLoading
+  }
+}
+
+function resolveActionByIdOrLatest(actionId, type, isins = []) {
+  const byId = findActionById(actionId)
+  if (byId) return byId
+  return findLatestAction((action) => {
+    if (action?.type !== type) return false
+    if (!isins.length) return true
+    return isins.every((isin) => (action.isins || []).includes(isin))
+  })
+}
+
+function findLatestAction(predicate) {
+  const candidates = (llmActions.value || []).filter((action) => predicate(action))
+  if (!candidates.length) return null
+  return candidates.slice().sort((left, right) => actionSortDateValue(right) - actionSortDateValue(left))[0]
+}
+
+function actionSortDateValue(action) {
+  const value = action?.updatedAt || action?.createdAt || 0
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime()
+}
+
+async function confirmCancelLlmAction(actionId) {
+  if (!actionId) return
+  llmActionCancelPromptId.value = ''
+  setActionBusy(actionId, true)
+  llmActionsError.value = ''
+  try {
+    const result = await apiRequest(`/kb/llm-actions/${encodeURIComponent(actionId)}/cancel`, { method: 'POST' })
+    if (result) setActionDetail(result)
+    await loadLlmActions(true)
+  } catch (err) {
+    await announceLlmActionsError(err?.message || 'Failed to cancel LLM action')
+  } finally {
+    setActionBusy(actionId, false)
+  }
+}
+
+async function promptCancelLlmAction(actionId) {
+  llmActionCancelPromptId.value = actionId || ''
+  await announceLlmActions('Cancel confirmation opened.')
+  await nextTick()
+  llmActionCancelConfirmButtonRefs.value?.[actionId]?.focus?.()
+}
+
+async function dismissCancelLlmAction(actionId) {
+  llmActionCancelPromptId.value = ''
+  await announceLlmActions('Cancel confirmation dismissed.')
+  await nextTick()
+  llmActionCancelButtonRefs.value?.[actionId]?.focus?.()
+}
+
 async function handleBulkActionResult(detail) {
+  setActionDetail(detail)
   bulkResult.value = detail.bulkResearchResult || null
   if (detail.status === 'FAILED') {
     bulkError.value = detail.message || 'Bulk research failed'
@@ -2897,6 +3119,7 @@ async function handleBulkActionResult(detail) {
 }
 
 async function handleAlternativesActionResult(detail) {
+  setActionDetail(detail)
   const items = detail.alternativesResult?.alternatives || []
   alternativesItems.value = items
   if (detail.status === 'FAILED') {
@@ -2910,6 +3133,7 @@ async function handleAlternativesActionResult(detail) {
 }
 
 async function handleRefreshActionResult(detail) {
+  setActionDetail(detail)
   refreshResult.value = detail.refreshBatchResult || null
   if (detail.status === 'FAILED') {
     refreshError.value = detail.message || 'Refresh batch failed'
@@ -2923,6 +3147,7 @@ async function handleRefreshActionResult(detail) {
 }
 
 async function handleExtractionActionResult(detail) {
+  setActionDetail(detail)
   const actionLabel = detail?.type === 'MISSING_DATA' ? 'Missing data fill' : 'Extraction'
   if (detail.status === 'FAILED') {
     extractionError.value = detail.message || `${actionLabel} failed`
@@ -2938,6 +3163,7 @@ async function handleExtractionActionResult(detail) {
 }
 
 async function handleMissingMetricsActionResult(detail) {
+  setActionDetail(detail)
   if (detail.status === 'FAILED') {
     missingMetricsError.value = detail.message || 'Missing metrics completion failed'
   } else if (detail.status === 'CANCELED') {
@@ -2965,20 +3191,6 @@ function setActionBusy(actionId, busy) {
   llmActionsBusy.value = next
 }
 
-async function cancelLlmAction(actionId) {
-  if (!actionId) return
-  setActionBusy(actionId, true)
-  llmActionsError.value = ''
-  try {
-    await apiRequest(`/kb/llm-actions/${encodeURIComponent(actionId)}/cancel`, { method: 'POST' })
-    await loadLlmActions(true)
-  } catch (err) {
-    llmActionsError.value = err?.message || 'Failed to cancel LLM action'
-  } finally {
-    setActionBusy(actionId, false)
-  }
-}
-
 async function dismissLlmAction(actionId) {
   if (!actionId) return
   setActionBusy(actionId, true)
@@ -2987,10 +3199,62 @@ async function dismissLlmAction(actionId) {
     await apiRequest(`/kb/llm-actions/${encodeURIComponent(actionId)}`, { method: 'DELETE' })
     await loadLlmActions(true)
   } catch (err) {
-    llmActionsError.value = err?.message || 'Failed to dismiss LLM action'
+    await announceLlmActionsError(err?.message || 'Failed to dismiss LLM action')
   } finally {
     setActionBusy(actionId, false)
   }
+}
+
+function setLlmActionCancelButtonRef(actionId, el) {
+  setActionRef(llmActionCancelButtonRefs, actionId, el)
+}
+
+function setLlmActionCancelConfirmButtonRef(actionId, el) {
+  setActionRef(llmActionCancelConfirmButtonRefs, actionId, el)
+}
+
+function setActionRef(store, actionId, el) {
+  if (!actionId) return
+  const current = store.value?.[actionId] || null
+  if (el && current === el) return
+  if (!el && !current) return
+  const next = { ...store.value }
+  if (el) {
+    next[actionId] = el
+  } else {
+    delete next[actionId]
+  }
+  store.value = next
+}
+
+async function announceLlmActions(message) {
+  llmActionsLiveMessage.value = ''
+  await nextTick()
+  llmActionsLiveMessage.value = message
+}
+
+async function announceLlmActionsError(message) {
+  llmActionsError.value = ''
+  await nextTick()
+  llmActionsError.value = message
+}
+
+function handleLlmActionsTableKeydown(event) {
+  const key = event.key
+  if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(key)) return
+  const el = event.currentTarget
+  if (!el || typeof el.scrollLeft !== 'number') return
+  const step = Math.max(120, Math.round((el.clientWidth || 0) * 0.4))
+  if (key === 'ArrowRight') {
+    el.scrollLeft += step
+  } else if (key === 'ArrowLeft') {
+    el.scrollLeft = Math.max(0, el.scrollLeft - step)
+  } else if (key === 'Home') {
+    el.scrollLeft = 0
+  } else if (key === 'End') {
+    el.scrollLeft = el.scrollWidth || el.scrollLeft
+  }
+  event.preventDefault()
 }
 
 async function runRefreshBatch() {
@@ -3184,7 +3448,109 @@ function formatActionTrigger(trigger) {
 
 function formatActionStatus(status) {
   if (!status) return 'unknown'
-  return status.toLowerCase().replace(/_/g, ' ')
+  return canonicalActionStatusLabel(status)
+}
+
+function canonicalActionStatusLabel(status) {
+  switch (status) {
+    case 'QUEUED':
+      return 'Queued'
+    case 'RUNNING':
+      return 'Running'
+    case 'WAITING_RETRY':
+      return 'Waiting retry'
+    case 'REVIEW_REQUIRED':
+      return 'Review required'
+    case 'COMPLETED':
+      return 'Completed'
+    case 'FAILED':
+      return 'Failed'
+    case 'CANCELED':
+      return 'Canceled'
+    default:
+      return status ? status.toLowerCase().replace(/_/g, ' ') : 'unknown'
+  }
+}
+
+function actionStatusBadgeClass(status) {
+  if (status === 'COMPLETED') return 'ok'
+  if (status === 'WAITING_RETRY') return 'caution'
+  if (status === 'REVIEW_REQUIRED' || status === 'FAILED') return 'warn'
+  if (status === 'CANCELED') return 'neutral'
+  return 'neutral'
+}
+
+function formatActionStep(step) {
+  if (!step) return '-'
+  return String(step).toLowerCase().replace(/_/g, ' ').replace(/(^|\s)\S/g, (match) => match.toUpperCase())
+}
+
+function formatActionTiming(action) {
+  if (!action) return '-'
+  const parts = []
+  if (Number.isFinite(action.attempts) && action.attempts > 0) {
+    parts.push(`Attempt ${action.attempts}`)
+  }
+  if (action.status === 'WAITING_RETRY' && action.nextRetryAt) {
+    parts.push(`Retry ${formatDate(action.nextRetryAt)}`)
+  }
+  return parts.length ? parts.join(' · ') : '-'
+}
+
+function formatActionProgress(action) {
+  if (!action || !action.childTotal) return '-'
+  const parts = [`${action.childCompleted || 0}/${action.childTotal} done`]
+  if (action.childFailed) parts.push(`${action.childFailed} failed`)
+  if (action.childCanceled) parts.push(`${action.childCanceled} canceled`)
+  return parts.join(' · ')
+}
+
+function actionSafeNote(action) {
+  if (!action) return '-'
+  if (action.status === 'FAILED') {
+    return action.errorCode || action.errorReference || action.message || '-'
+  }
+  if (action.status === 'REVIEW_REQUIRED') {
+    return action.errorCode || action.message || action.errorReference || '-'
+  }
+  if (action.errorReference) return `Reference ${action.errorReference}`
+  return action.message || '-'
+}
+
+function actionNotes(action) {
+  if (!action) return []
+  const notes = []
+  const detail = getActionDetail(action.actionId) || action
+  if (detail.status === 'REVIEW_REQUIRED' && detail.errorCode) {
+    notes.push(`Review code: ${detail.errorCode}`)
+  }
+  if (detail.errorReference) {
+    notes.push(`Reference: ${detail.errorReference}`)
+  }
+  const extractionResult = detail.extractionResult || null
+  const evidenceGate = extractionResult?.evidenceGate || null
+  if (evidenceGate && evidenceGate.passed === false) {
+    for (const item of evidenceGate.missing_evidence || []) {
+      if (item) notes.push(`Evidence missing: ${item}`)
+    }
+  }
+  for (const warning of extractionResult?.warningsJson || []) {
+    const message = warning?.message || warning
+    if (message) notes.push(String(message))
+  }
+  return Array.from(new Set(notes))
+}
+
+function actionSummaryText(action) {
+  if (!action) return '-'
+  return [
+    canonicalActionStatusLabel(action.status),
+    formatActionStep(action.currentStep),
+    formatActionTiming(action),
+    formatActionProgress(action)
+  ]
+    .filter((part) => part && part !== '-')
+    .join(' · ')
 }
 
 function canUseStorage() {
@@ -3476,6 +3842,24 @@ function formatManualApprovals(items) {
   font-weight: 600;
 }
 
+.kb-inline-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.kb-action-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kb-action-notes ul {
+  margin: 0;
+  padding-left: 1rem;
+}
+
 .kb-main-tabs .tab-active {
   background: #14131a;
   color: #f6f4f0;
@@ -3570,6 +3954,23 @@ function formatManualApprovals(items) {
   background: linear-gradient(to left, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0));
 }
 
+.kb-table-hint {
+  margin-bottom: 0.5rem;
+}
+
+.kb-llm-actions-table-wrap {
+  overflow-x: auto;
+}
+
+.kb-llm-actions-table-wrap:focus-visible {
+  outline: 2px solid #14131a;
+  outline-offset: 3px;
+}
+
+.kb-llm-actions-table {
+  min-width: 1100px;
+}
+
 .kb-dossier-table {
   min-width: 1000px;
 }
@@ -3594,11 +3995,12 @@ function formatManualApprovals(items) {
 }
 
 .kb-open-inline {
-  border: 1px solid #f0b15c;
-  background: transparent;
-  color: #c06a00;
+  border: 1px solid #c97a12;
+  background: #fff6e6;
+  color: #7a4200;
   border-radius: 999px;
   font-size: 0.75rem;
+  font-weight: 600;
   padding: 0.2rem 0.55rem;
   cursor: pointer;
   flex-shrink: 0;

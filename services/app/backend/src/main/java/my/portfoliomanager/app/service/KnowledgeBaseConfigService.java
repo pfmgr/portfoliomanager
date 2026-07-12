@@ -6,7 +6,6 @@ import my.portfoliomanager.app.domain.KnowledgeBaseConfig;
 import my.portfoliomanager.app.dto.KnowledgeBaseConfigDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseQualityGateConfigDto;
 import my.portfoliomanager.app.dto.KnowledgeBaseQualityGateProfileDto;
-import my.portfoliomanager.app.llm.OpenAiLlmClient;
 import my.portfoliomanager.app.repository.KnowledgeBaseConfigRepository;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
@@ -91,7 +90,7 @@ public class KnowledgeBaseConfigService {
 		try {
 			return objectMapper.treeToValue(json, KnowledgeBaseConfigDto.class);
 		} catch (Exception ex) {
-			return null;
+			throw new IllegalArgumentException("Malformed KB config", ex);
 		}
 	}
 
@@ -137,10 +136,9 @@ public class KnowledgeBaseConfigService {
 				raw == null ? null : raw.qualityGateProfiles()
 		);
 
-		List<String> allowedDomains = normalizeDomains(raw == null ? null : raw.websearchAllowedDomains());
-		if (allowedDomains.isEmpty()) {
-			allowedDomains = new ArrayList<>(OpenAiLlmClient.allowedWebSearchDomains);
-		}
+		List<String> allowedDomains = raw == null || raw.websearchAllowedDomains() == null
+				? new ArrayList<>(my.portfoliomanager.app.llm.OpenAiLlmClient.allowedWebSearchDomains)
+				: normalizeDomains(raw.websearchAllowedDomains());
 
 		return new KnowledgeBaseConfigSnapshot(
 				enabled,
@@ -187,17 +185,14 @@ public class KnowledgeBaseConfigService {
 
 	private List<String> normalizeDomains(List<String> domains) {
 		if (domains == null) {
-			return new ArrayList<>();
+			return null;
 		}
 		List<String> cleaned = new ArrayList<>();
 		Set<String> seen = new LinkedHashSet<>();
 		for (String domain : domains) {
-			if (domain == null) {
-				continue;
-			}
 			String normalized = normalizeDomain(domain);
 			if (normalized == null || normalized.isBlank()) {
-				continue;
+				throw new IllegalArgumentException("Malformed websearch allowed domain");
 			}
 			if (seen.add(normalized)) {
 				cleaned.add(normalized);
@@ -207,54 +202,7 @@ public class KnowledgeBaseConfigService {
 	}
 
 	private String normalizeDomain(String rawDomain) {
-		if (rawDomain == null || rawDomain.isBlank()) {
-			return null;
-		}
-		String trimmed = rawDomain.trim().toLowerCase(Locale.ROOT);
-		String host = trimmed;
-		try {
-			if (trimmed.contains("://")) {
-				host = java.net.URI.create(trimmed).getHost();
-			}
-		} catch (Exception ignored) {
-			host = trimmed;
-		}
-		if (host == null || host.isBlank()) {
-			return null;
-		}
-		if (host.startsWith("www.")) {
-			host = host.substring(4);
-		}
-		if (host.endsWith(".")) {
-			host = host.substring(0, host.length() - 1);
-		}
-		if (host.isBlank()
-				|| host.contains("@")
-				|| host.contains("/")
-				|| host.contains("?")
-				|| host.contains("#")
-				|| host.contains(" ")
-				|| host.startsWith(".")
-				|| host.endsWith(".")
-				|| host.contains("..")
-				|| host.contains("*")
-				|| host.contains(":")
-				|| host.equals("localhost")
-				|| host.endsWith(".localhost")
-				|| host.endsWith(".local")
-				|| host.endsWith(".internal")
-				|| host.endsWith(".nip.io")
-				|| host.endsWith(".sslip.io")
-				|| host.endsWith(".xip.io")
-				|| host.endsWith(".test")
-				|| host.endsWith(".invalid")
-				|| host.matches("^[0-9.]+$")) {
-			return null;
-		}
-		if (!host.matches("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")) {
-			return null;
-		}
-		return host;
+		return KnowledgeBaseSourceUrlPolicy.normalizeConfiguredDomain(rawDomain);
 	}
 
 	private String normalizeReasoningEffort(String raw) {

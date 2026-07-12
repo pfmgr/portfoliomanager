@@ -62,4 +62,23 @@ class KnowledgeBaseAllowedDomainsSeederTest {
 		verify(repository, never()).save(any());
 		verifyNoInteractions(resourceLoader);
 	}
+
+	@Test
+	void preservesExplicitEmptyAllowedDomains() {
+		KnowledgeBaseConfigRepository repository = mock(KnowledgeBaseConfigRepository.class);
+		ResourceLoader resourceLoader = mock(ResourceLoader.class);
+		ObjectMapper objectMapper = new ObjectMapper();
+		ObjectNode configJson = objectMapper.createObjectNode();
+		configJson.putArray("websearch_allowed_domains");
+		KnowledgeBaseConfig config = new KnowledgeBaseConfig();
+		config.setId(1);
+		config.setConfigJson(configJson);
+		when(repository.findById(1)).thenReturn(Optional.of(config));
+
+		KnowledgeBaseAllowedDomainsSeeder seeder = new KnowledgeBaseAllowedDomainsSeeder(repository, objectMapper, resourceLoader);
+		seeder.run(null);
+
+		verify(repository, never()).save(any());
+		verifyNoInteractions(resourceLoader);
+	}
 }

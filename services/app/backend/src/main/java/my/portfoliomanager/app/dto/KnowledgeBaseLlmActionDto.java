@@ -26,6 +26,15 @@ public record KnowledgeBaseLlmActionDto(
 		KnowledgeBaseRefreshBatchResponseDto refreshBatchResult,
 		KnowledgeBaseRefreshItemDto refreshItemResult,
 		InstrumentDossierExtractionResponseDto extractionResult,
-		KnowledgeBaseMissingMetricsResponseDto missingMetricsResult
+		KnowledgeBaseMissingMetricsResponseDto missingMetricsResult,
+		String currentStep,
+		Integer attempts,
+		LocalDateTime nextRetryAt,
+		String errorCode,
+		String errorReference,
+		Integer childTotal,
+		Integer childCompleted,
+		Integer childFailed,
+		Integer childCanceled
 ) {
 }

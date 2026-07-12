@@ -5,15 +5,21 @@ import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 class LlmClientTest {
 	@Test
@@ -35,6 +41,149 @@ class LlmClientTest {
 			LlmSuggestion suggestion = client.suggestReclassification("context");
 			assertThat(suggestion.suggestion()).contains("Use layer 2");
 			assertThat(suggestion.rationale()).isEqualTo("openai");
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void openAiClientCapturesResponseMetadata() throws IOException {
+		ObjectMapper mapper = new ObjectMapper();
+		AtomicReference<Map<String, Object>> captured = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+		server.createContext("/responses", exchange -> {
+			byte[] bytes = exchange.getRequestBody().readAllBytes();
+			Map<String, Object> body = mapper.readValue(bytes, Map.class);
+			captured.set(body);
+			String response = "{\"output_text\":\"{}\"}";
+			byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.getResponseHeaders().add("x-request-id", "req-success");
+			exchange.sendResponseHeaders(200, responseBytes.length);
+			try (OutputStream os = exchange.getResponseBody()) {
+				os.write(responseBytes);
+			}
+		});
+		server.start();
+		int port = server.getAddress().getPort();
+
+		try {
+			OpenAiLlmClient client = new OpenAiLlmClient("http://localhost:" + port, "test-key", "gpt-test");
+			KnowledgeBaseLlmResponse response = client.runJsonPrompt("prompt", "kb_extraction", Map.of("type", "object"));
+			assertThat(response.output()).isEqualTo("{}");
+			assertThat(response.statusCode()).isEqualTo(200);
+			assertThat(response.retryable()).isFalse();
+			assertThat(response.retryAfter()).isNull();
+			assertThat(response.requestId()).isEqualTo("req-success");
+		} finally {
+			server.stop(0);
+		}
+
+		assertThat(captured.get()).isNotNull();
+	}
+
+	@Test
+	void openAiClientCapturesRetryAfterAndRequestIdFrom429() throws IOException {
+		HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+		server.createContext("/responses", exchange -> {
+			String response = "{\"error\":\"secret-value\"}";
+			byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.getResponseHeaders().add("Retry-After", "120");
+			exchange.getResponseHeaders().add("x-request-id", "req-429");
+			exchange.sendResponseHeaders(429, bytes.length);
+			try (OutputStream os = exchange.getResponseBody()) {
+				os.write(bytes);
+			}
+		});
+		server.start();
+		int port = server.getAddress().getPort();
+
+		try {
+			OpenAiLlmClient client = new OpenAiLlmClient("http://localhost:" + port, "test-key", "gpt-test");
+			Throwable thrown = catchThrowable(() -> client.runJsonPrompt("prompt"));
+			assertThat(thrown).isInstanceOf(LlmRequestException.class);
+			LlmRequestException ex = (LlmRequestException) thrown;
+			assertThat(ex.getStatusCode()).isEqualTo(429);
+			assertThat(ex.isRetryable()).isTrue();
+			assertThat(ex.getRetryAfter()).isEqualTo(Duration.ofSeconds(60));
+			assertThat(ex.getRequestId()).isEqualTo("req-429");
+			assertThat(ex.getMessage()).doesNotContain("secret-value");
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void openAiClientMarks5xxRetryableAndRedactsErrorBody() throws IOException {
+		HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+		server.createContext("/responses", exchange -> {
+			String response = "{\"error\":\"token=secret-value\"}";
+			byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.getResponseHeaders().add("x-request-id", "req-503");
+			exchange.sendResponseHeaders(503, bytes.length);
+			try (OutputStream os = exchange.getResponseBody()) {
+				os.write(bytes);
+			}
+		});
+		server.start();
+		int port = server.getAddress().getPort();
+
+		try {
+			OpenAiLlmClient client = new OpenAiLlmClient("http://localhost:" + port, "test-key", "gpt-test");
+			Throwable thrown = catchThrowable(() -> client.runJsonPrompt("prompt"));
+			assertThat(thrown).isInstanceOf(LlmRequestException.class);
+			LlmRequestException ex = (LlmRequestException) thrown;
+			assertThat(ex.getStatusCode()).isEqualTo(503);
+			assertThat(ex.isRetryable()).isTrue();
+			assertThat(ex.getRetryAfter()).isNull();
+			assertThat(ex.getRequestId()).isEqualTo("req-503");
+			assertThat(ex.getMessage()).doesNotContain("secret-value");
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void openAiClientMarksTimeoutsRetryable() throws IOException {
+		HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+		server.createContext("/responses", exchange -> {
+			try {
+				Thread.sleep(500);
+			} catch (InterruptedException interruptedException) {
+				Thread.currentThread().interrupt();
+			}
+			try {
+				String response = "{\"output_text\":\"{}\"}";
+				byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
+				exchange.getResponseHeaders().add("Content-Type", "application/json");
+				exchange.sendResponseHeaders(200, responseBytes.length);
+				try (OutputStream os = exchange.getResponseBody()) {
+					os.write(responseBytes);
+				}
+			} catch (IOException ignored) {
+			}
+		});
+		server.start();
+		int port = server.getAddress().getPort();
+
+		try {
+			SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+			requestFactory.setConnectTimeout(100);
+			requestFactory.setReadTimeout(100);
+			RestClient restClient = RestClient.builder()
+					.baseUrl("http://localhost:" + port)
+					.requestFactory(requestFactory)
+					.defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+					.build();
+			OpenAiLlmClient client = new OpenAiLlmClient(restClient, "gpt-test");
+			Throwable thrown = catchThrowable(() -> client.runJsonPrompt("prompt"));
+			assertThat(thrown).isInstanceOf(LlmRequestException.class);
+			LlmRequestException ex = (LlmRequestException) thrown;
+			assertThat(ex.getStatusCode()).isNull();
+			assertThat(ex.isRetryable()).isTrue();
+			assertThat(ex.getRetryAfter()).isNull();
 		} finally {
 			server.stop(0);
 		}
@@ -100,6 +249,7 @@ class LlmClientTest {
 			String response = "{\"output_text\":\"{\\\"items\\\": []}\"}";
 			byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
 			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.getResponseHeaders().add("x-request-id", "req-schema");
 			exchange.sendResponseHeaders(200, responseBytes.length);
 			try (OutputStream os = exchange.getResponseBody()) {
 				os.write(responseBytes);

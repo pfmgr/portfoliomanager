@@ -138,7 +138,7 @@ public class KnowledgeBaseController {
 		return knowledgeBaseService.deleteDossiers(request.isins());
 	}
 
-	@PostMapping("/dossiers/{isin:[A-Z0-9]{12}}/refresh")
+	@PostMapping("/dossiers/{isin:[A-Z]{2}[A-Z0-9]{9}[0-9]}/refresh")
 	@Operation(summary = "Refresh dossier for ISIN")
 	public KnowledgeBaseLlmActionDto refreshDossier(@PathVariable("isin") String isin,
 										@RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
@@ -146,7 +146,7 @@ public class KnowledgeBaseController {
 		return startRefreshSingle(isin, request, principal);
 	}
 
-	@PostMapping("/alternatives/{isin:[A-Z0-9]{12}}")
+	@PostMapping("/alternatives/{isin:[A-Z]{2}[A-Z0-9]{9}[0-9]}")
 	@Operation(summary = "Find alternatives for ISIN")
 	public KnowledgeBaseLlmActionDto findAlternatives(@PathVariable("isin") String isin,
 													  @RequestBody(required = false) KnowledgeBaseAlternativesRequestDto request,
@@ -166,7 +166,7 @@ public class KnowledgeBaseController {
 		return actionService.startRefreshBatch(request, actor, KnowledgeBaseLlmActionTrigger.USER);
 	}
 
-	@PostMapping("/refresh/{isin:[A-Z0-9]{12}}")
+	@PostMapping("/refresh/{isin:[A-Z]{2}[A-Z0-9]{9}[0-9]}")
 	@Operation(summary = "Refresh single ISIN (admin)")
 	public KnowledgeBaseLlmActionDto refreshSingle(@PathVariable("isin") String isin,
 									   @RequestBody(required = false) KnowledgeBaseRefreshRequestDto request,
@@ -176,9 +176,9 @@ public class KnowledgeBaseController {
 
 	@PostMapping("/dossiers/websearch")
 	@Operation(summary = "Start LLM websearch draft")
-	public InstrumentDossierWebsearchJobResponseDto startWebsearchDraft(@Valid @RequestBody InstrumentDossierWebsearchRequest request) {
+	public InstrumentDossierWebsearchJobResponseDto startWebsearchDraft(@Valid @RequestBody InstrumentDossierWebsearchRequest request, Principal principal) {
 		availabilityService.assertWebsearchAvailable();
-		return websearchJobService.start(request.isin());
+		return websearchJobService.start(request.isin(), actorName(principal));
 	}
 
 	@PostMapping("/dossiers/websearch/bulk")
@@ -204,7 +204,7 @@ public class KnowledgeBaseController {
 		return bulkWebsearchJobService.get(jobId);
 	}
 
-	@GetMapping("/dossiers/{isin:[A-Z0-9]{12}}")
+	@GetMapping("/dossiers/{isin:[A-Z]{2}[A-Z0-9]{9}[0-9]}")
 	@Operation(summary = "Get dossier detail by ISIN")
 	public KnowledgeBaseDossierDetailDto getDossierByIsin(@PathVariable("isin") String isin) {
 		availabilityService.assertEnabled();

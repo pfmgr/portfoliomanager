@@ -28,15 +28,26 @@
 - Instrument-level rebalancer proposals are enabled only when latest extraction status is `COMPLETE`.
 - Missing-data patch can be triggered for a dossier and fills only absent fields while preserving existing structure.
 - Approved dossier blacklist policy is configured in KB dossier detail and becomes effective only after dossier approval or auto-approval.
+- Extraction and missing-data completion are canonical persistent LLM actions under `/api/kb/llm-actions`, not transient request jobs. Their states are `QUEUED`, `RUNNING`, `WAITING_RETRY`, `REVIEW_REQUIRED`, `COMPLETED`, `FAILED`, and `CANCELED`.
+- Request idempotency is scoped to caller and action intent: a replay returns the existing action, while reuse with different intent is rejected. A worker lease is renewable; expired work resumes only from persisted state, and cancellation prevents later provider calls or application.
+- Typed retryable failures persist retry timing in `WAITING_RETRY`; validation, policy, or exhausted-retry failures are terminal `FAILED`. `REVIEW_REQUIRED` is terminal pending human decision and is not applied automatically.
 - Verification skill: `backend-junit-tests` - validate extraction lifecycle, blacklist activation timing, and downstream state synchronization.
 
 ## Canonical runtime flow
 
 1. Authenticate through `/auth/token` and verify protected KB endpoint access.
 2. Read dossier list and detail endpoints for the seeded fixtures.
-3. Start one extraction or missing-data completion request and capture the runtime response.
-4. Approve or inspect the resulting dossier state through protected KB endpoints.
-5. Verify that downstream KB-dependent state becomes visible to assessor or rebalancer only after the effective approval state is reached.
+3. Start one extraction or missing-data completion through `/api/kb/llm-actions`, retain its idempotency key, and reload/poll persisted action detail through a terminal or review state.
+4. Inspect evidence and source-policy results, then approve or reject the resulting dossier state through protected KB endpoints.
+5. Apply only approved, validated output and verify that downstream KB-dependent state becomes visible to assessor or rebalancer only after the effective approval state is reached.
+
+## Canonical action, evidence, and apply policy
+
+- Domain KB endpoints may remain compatibility adapters, but they create/read the same `/api/kb/llm-actions` record and cannot maintain a parallel lifecycle. Legacy websearch adapters follow this rule as well.
+- Bulk extraction creates a parent action plus independently persisted child actions. Parent progress is computed from child states; it is terminal only after all children are terminal. Parent cancellation cascades to unfinished children without changing completed children.
+- Persist source URL/domain, retrieval context, citations, generated output, attempts, and typed failure details. Evidence must satisfy the configured source policy; unsupported claims must be removed or sent to `REVIEW_REQUIRED`, never silently applied.
+- Approval is a human/business decision after validation and evidence review. Apply is a separate, idempotent operation allowed only for approved, validated `COMPLETED` output; it must not apply `QUEUED`, `RUNNING`, `WAITING_RETRY`, `REVIEW_REQUIRED`, `FAILED`, or `CANCELED` actions.
+- UI action progress and dossier state are server-authoritative: reloads restore status, attempts/retry timing, parent/child progress, evidence, review requirement, and error reference rather than relying on local pending state.
 
 ## Canonical assertions
 
@@ -48,6 +59,7 @@
 
 ## APIs
 
+- `POST /api/kb/llm-actions`, `GET /api/kb/llm-actions/{actionId}`, and `POST /api/kb/llm-actions/{actionId}/cancel`
 - `POST /api/kb/dossiers/{id}/extract`
 - `POST /api/kb/dossiers/{id}/complete-missing-metrics`
 - Additional KB extraction endpoints under `/api/kb/**`.

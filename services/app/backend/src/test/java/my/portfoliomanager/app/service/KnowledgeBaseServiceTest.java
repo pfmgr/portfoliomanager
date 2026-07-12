@@ -44,6 +44,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -82,6 +87,9 @@ class KnowledgeBaseServiceTest {
 
 	@Autowired
 	private KnowledgeBaseQualityGateService qualityGateService;
+
+	@Autowired
+	private KnowledgeBaseRunService runService;
 
 	private KnowledgeBaseConfigDto baselineConfig;
 
@@ -190,7 +198,54 @@ class KnowledgeBaseServiceTest {
 		assertThat(TestConfig.generateAllowedDomainsByIsin.get(isin))
 				.containsExactly(
 						List.of("generic.example", "markets.example"),
-						List.of("retry.example")
+						List.of("vanguard.com")
+				);
+	}
+
+	@Test
+	void generateDossierDraftWithQualityRetries_usesDekaPrimaryHintForDekaProfile() {
+		String isin = "DE0005152623";
+		configService.updateConfig(new KnowledgeBaseConfigDto(
+				baselineConfig.enabled(),
+				baselineConfig.refreshIntervalDays(),
+				baselineConfig.autoApprove(),
+				baselineConfig.applyExtractionsToOverrides(),
+				baselineConfig.overwriteExistingOverrides(),
+				baselineConfig.batchSizeInstruments(),
+				baselineConfig.batchMaxInputChars(),
+				baselineConfig.maxParallelBulkBatches(),
+				baselineConfig.maxBatchesPerRun(),
+				baselineConfig.pollIntervalSeconds(),
+				baselineConfig.maxInstrumentsPerRun(),
+				baselineConfig.maxRetriesPerInstrument(),
+				baselineConfig.baseBackoffSeconds(),
+				baselineConfig.maxBackoffSeconds(),
+				baselineConfig.dossierMaxChars(),
+				baselineConfig.kbRefreshMinDaysBetweenRunsPerInstrument(),
+				baselineConfig.runTimeoutMinutes(),
+				baselineConfig.websearchReasoningEffort(),
+				List.of("generic.example", "deka.de"),
+				2,
+				true,
+				baselineConfig.alternativesMinSimilarityScore(),
+				baselineConfig.extractionEvidenceRequired(),
+				1,
+				baselineConfig.qualityGateProfiles()
+		));
+
+		KnowledgeBaseService.DossierDraftResult result = knowledgeBaseService.generateDossierDraftWithQualityRetries(
+				isin,
+				null,
+				configService.getSnapshot(),
+				true
+		);
+
+		assertThat(result.quality()).isNotNull();
+		assertThat(result.quality().passed()).isTrue();
+		assertThat(TestConfig.generateAllowedDomainsByIsin.get(isin))
+				.containsExactly(
+						List.of("generic.example", "deka.de"),
+						List.of("deka.de")
 				);
 	}
 
@@ -222,6 +277,10 @@ class KnowledgeBaseServiceTest {
 
 		var extraction = knowledgeBaseService.runExtraction(dossier.dossierId());
 		assertThat(extraction.status()).isEqualTo(DossierExtractionStatus.PENDING_REVIEW);
+		var durableRun = runService.findLatest("DE0000000001", my.portfoliomanager.app.domain.KnowledgeBaseRunAction.EXTRACT).orElseThrow();
+		assertThat(durableRun.getStatus()).isEqualTo(my.portfoliomanager.app.domain.KnowledgeBaseRunStatus.COMPLETED);
+		assertThat(runService.stepHistory(durableRun.getRunId())).extracting(step -> step.getStep())
+				.contains("STRUCTURED_EXTRACTION", "SCHEMA_VALIDATION", "EVIDENCE_VALIDATION", "QUALITY_GATE");
 
 		var approved = knowledgeBaseService.approveExtraction(extraction.extractionId(), "tester");
 		assertThat(approved.status()).isEqualTo(DossierExtractionStatus.APPROVED);
@@ -247,6 +306,45 @@ class KnowledgeBaseServiceTest {
 		assertThat(approved.status()).isEqualTo(DossierExtractionStatus.APPLIED);
 		assertThat(overrideRepository.findById("DE0000000001")).isPresent();
 		assertThat(overrideRepository.findById("DE0000000001").orElseThrow().getName()).isEqualTo("Reactivated by KB");
+	}
+
+	@Test
+	void approveExtractionAutoApproveBlockedByEvidenceGateDoesNotApply() throws Exception {
+		InstrumentDossier dossier = createDossier("Name: Evidence Blocked\nLayer: 2");
+		InstrumentDossierExtractionPayload extractionPayload = new InstrumentDossierExtractionPayload(
+				"DE0000000001",
+				"Evidence Blocked",
+				"ETF",
+				"Equity",
+				null,
+				null,
+				null,
+				null,
+				null,
+				2,
+				null,
+				new InstrumentDossierExtractionPayload.EtfPayload(new BigDecimal("0.12"), "MSCI World"),
+				new InstrumentDossierExtractionPayload.RiskPayload(
+						new InstrumentDossierExtractionPayload.SummaryRiskIndicatorPayload(4),
+						true
+				),
+				List.of(),
+				List.of(),
+				List.of(),
+				List.of(),
+				List.of(),
+				List.of()
+		);
+		InstrumentDossierExtraction extraction = createPendingExtraction(
+				dossier.getDossierId(),
+				objectMapper.valueToTree(extractionPayload)
+		);
+
+		var approved = knowledgeBaseService.approveExtraction(extraction.getExtractionId(), "tester", true, true);
+
+		assertThat(approved.status()).isEqualTo(DossierExtractionStatus.PENDING_REVIEW);
+		assertThat(approved.warningsJson().toString()).contains("Review required: missing evidence for");
+		assertThat(overrideRepository.findById("DE0000000001")).isNotPresent();
 	}
 
 	@Test
@@ -306,7 +404,7 @@ class KnowledgeBaseServiceTest {
 		));
 		var citations = objectMapper.createArrayNode();
 		citations.addObject()
-				.put("url", "https://issuer.com/factsheet")
+				.put("url", "https://www.vanguard.com/factsheet")
 				.put("title", "Issuer factsheet");
 		InstrumentDossierCreateRequest request = new InstrumentDossierCreateRequest(
 				"DE0000000001",
@@ -318,7 +416,7 @@ class KnowledgeBaseServiceTest {
 						+ "## Costs & structure\n- TER: 0.20\n\n"
 						+ "## Exposures\n- Benchmark: MSCI World\n\n"
 						+ "## Valuation & profitability\n- pe_current: 15\n\n"
-						+ "## Sources\n1) https://issuer.com/factsheet\n",
+						+ "## Sources\n1) https://www.vanguard.com/factsheet\n",
 				DossierOrigin.USER,
 				DossierStatus.PENDING_REVIEW,
 				citations,
@@ -332,6 +430,86 @@ class KnowledgeBaseServiceTest {
 		assertThat(approved.latestDossier().autoApproved()).isTrue();
 		assertThat(approved.blacklist().effectiveScope()).isEqualTo(InstrumentBlacklistScope.SAVING_PLAN_ONLY);
 		assertThat(approved.blacklist().pendingChange()).isFalse();
+	}
+
+	@Test
+	void concurrentCreateDossierAssignsUniqueVersionsAndPreservesSingleApprovedHistory() throws Exception {
+		String isin = "DE0000000001";
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<?> first = executor.submit(() -> {
+				ready.countDown();
+				await(start);
+				knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
+						isin,
+						"First concurrent version",
+						"Name: First Concurrent Version",
+						DossierOrigin.USER,
+						DossierStatus.APPROVED,
+						objectMapper.createArrayNode()
+				), "tester-1");
+			});
+			Future<?> second = executor.submit(() -> {
+				ready.countDown();
+				await(start);
+				knowledgeBaseService.createDossier(new InstrumentDossierCreateRequest(
+						isin,
+						"Second concurrent version",
+						"Name: Second Concurrent Version",
+						DossierOrigin.USER,
+						DossierStatus.APPROVED,
+						objectMapper.createArrayNode()
+				), "tester-2");
+			});
+
+			assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+			start.countDown();
+			first.get(10, TimeUnit.SECONDS);
+			second.get(10, TimeUnit.SECONDS);
+
+			List<InstrumentDossier> dossiers = dossierRepository.findByIsinOrderByVersionDesc(isin);
+			assertThat(dossiers).extracting(InstrumentDossier::getVersion).containsExactly(2, 1);
+			assertThat(dossiers).filteredOn(dossier -> dossier.getStatus() == DossierStatus.APPROVED).hasSize(1);
+			assertThat(dossiers).filteredOn(dossier -> dossier.getStatus() == DossierStatus.SUPERSEDED).hasSize(1);
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	void concurrentApprovalsLeaveOnlyOneApprovedDossierPerIsin() throws Exception {
+		String isin = "DE0000000001";
+		InstrumentDossier first = createDossier(isin, "Name: Approval Version 1", DossierStatus.DRAFT);
+		InstrumentDossier second = createDossier(isin, "Name: Approval Version 2", DossierStatus.DRAFT);
+
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		try {
+			Future<?> approveFirst = executor.submit(() -> {
+				ready.countDown();
+				await(start);
+				knowledgeBaseService.approveDossier(first.getDossierId(), "approver-1");
+			});
+			Future<?> approveSecond = executor.submit(() -> {
+				ready.countDown();
+				await(start);
+				knowledgeBaseService.approveDossier(second.getDossierId(), "approver-2");
+			});
+
+			assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+			start.countDown();
+			approveFirst.get(10, TimeUnit.SECONDS);
+			approveSecond.get(10, TimeUnit.SECONDS);
+
+			List<InstrumentDossier> dossiers = dossierRepository.findByIsinOrderByVersionDesc(isin);
+			assertThat(dossiers).filteredOn(dossier -> dossier.getStatus() == DossierStatus.APPROVED).hasSize(1);
+			assertThat(dossiers).filteredOn(dossier -> dossier.getStatus() == DossierStatus.SUPERSEDED).hasSize(1);
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	@Test
@@ -619,13 +797,20 @@ class KnowledgeBaseServiceTest {
 	}
 
 	private InstrumentDossier createDossier(String content) {
+		return createDossier("DE0000000001", content, DossierStatus.DRAFT);
+	}
+
+	private InstrumentDossier createDossier(String isin, String content, DossierStatus status) {
 		InstrumentDossier dossier = new InstrumentDossier();
-		dossier.setIsin("DE0000000001");
+		dossier.setIsin(isin);
 		dossier.setCreatedBy("tester");
 		dossier.setOrigin(DossierOrigin.USER);
-		dossier.setStatus(DossierStatus.DRAFT);
+		dossier.setStatus(status);
 		dossier.setAuthoredBy(DossierAuthoredBy.USER);
-		dossier.setVersion(1);
+		List<InstrumentDossier> versions = dossierRepository.findByIsinOrderByVersionDesc(isin);
+		InstrumentDossier latest = versions.isEmpty() ? null : versions.get(0);
+		dossier.setVersion(latest == null || latest.getVersion() == null ? 1 : latest.getVersion() + 1);
+		dossier.setSupersedesId(latest == null ? null : latest.getDossierId());
 		dossier.setContentMd(content);
 		dossier.setCitationsJson(objectMapper.createArrayNode());
 		dossier.setContentHash("hash");
@@ -633,6 +818,15 @@ class KnowledgeBaseServiceTest {
 		dossier.setUpdatedAt(LocalDateTime.now());
 		dossier.setAutoApproved(false);
 		return dossierRepository.save(dossier);
+	}
+
+	private void await(CountDownLatch latch) {
+		try {
+			assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+		} catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException(ex);
+		}
 	}
 
 	private InstrumentDossierExtraction createApprovedExtraction(Long dossierId, InstrumentDossierExtractionPayload payload) throws Exception {
@@ -774,23 +968,57 @@ class KnowledgeBaseServiceTest {
 										 List<String> allowedDomains,
 										 int maxChars) {
 					generateAllowedDomainsByIsin
-							.computeIfAbsent(isin, key -> new ArrayList<>())
-							.add(List.copyOf(allowedDomains));
-					if ("IE00B4L5Y983".equalsIgnoreCase(isin)) {
+								.computeIfAbsent(isin, key -> new ArrayList<>())
+								.add(List.copyOf(allowedDomains));
+						if ("DE0005152623".equalsIgnoreCase(isin)) {
+							int attempt = generateAllowedDomainsByIsin.get(isin).size();
+							ArrayNode citations = objectMapper.createArrayNode();
+							if (attempt == 1) {
+								citations.add(objectMapper.createObjectNode()
+										.put("id", "1")
+										.put("title", "justETF profile")
+										.put("url", "https://www.justetf.com/en/etf-profile.html?isin=DE0005152623")
+										.put("publisher", "justETF")
+										.put("accessed_at", "2026-04-10"));
+							} else {
+								citations.add(objectMapper.createObjectNode()
+										.put("id", "1")
+										.put("title", "Deka fund profile")
+										.put("url", "https://www.deka.de/privatkunden/fondsprofil?id=DE0005152623")
+										.put("publisher", "Deka")
+										.put("accessed_at", "2026-04-10"));
+								citations.add(objectMapper.createObjectNode()
+										.put("id", "2")
+										.put("title", "Deka factsheet")
+										.put("url", "https://www.deka.de/privatkunden/fondsprofil?id=DE0005152623&download=factsheet")
+										.put("publisher", "Deka")
+										.put("accessed_at", "2026-04-10"));
+							}
+							String content = "# " + isin + " — Deka Fund\n\n"
+									+ "## Quick profile\n- ISIN: " + isin + "\n\n"
+									+ "## Classification\n- Instrument type: ETF\n- Asset class: Equity\n- Layer: 2\n\n"
+									+ "## Risk\n- SRI: 4\n\n"
+									+ "## Costs & structure\n- TER: 0.20\n\n"
+									+ "## Exposures\n- Benchmark: MSCI World\n\n"
+									+ "## Valuation & profitability\n- price: 100\n\n"
+									+ "## Sources\n1. https://www.deka.de/privatkunden/fondsprofil?id=DE0005152623\n";
+							return new KnowledgeBaseLlmDossierDraft(content, "Deka MSCI World UCITS ETF", citations, "test-model");
+						}
+						if ("IE00B4L5Y983".equalsIgnoreCase(isin)) {
 						int attempt = generateAllowedDomainsByIsin.get(isin).size();
 						ArrayNode citations = objectMapper.createArrayNode();
 						citations.add(objectMapper.createObjectNode()
 								.put("id", "1")
 								.put("title", "Issuer factsheet")
-								.put("url", "https://retry.example/factsheet")
-								.put("publisher", "Issuer")
+								.put("url", "https://www.vanguard.com/fund-factsheet/IE00B4L5Y983")
+								.put("publisher", "Vanguard")
 								.put("accessed_at", "2026-04-10"));
 						if (attempt > 1) {
 							citations.add(objectMapper.createObjectNode()
 									.put("id", "2")
 									.put("title", "Issuer KID")
-									.put("url", "https://retry.example/kid")
-									.put("publisher", "Issuer")
+									.put("url", "https://www.vanguard.com/kid/IE00B4L5Y983")
+									.put("publisher", "Vanguard")
 									.put("accessed_at", "2026-04-10"));
 						}
 						String content = "# " + isin + " — Retry ETF\n\n"
@@ -800,8 +1028,8 @@ class KnowledgeBaseServiceTest {
 								+ "## Costs & structure\n- TER: 0.20\n\n"
 								+ "## Exposures\n- Benchmark: MSCI World\n\n"
 								+ "## Valuation & profitability\n- price: 100\n\n"
-								+ "## Sources\n1. https://retry.example/factsheet\n";
-						return new KnowledgeBaseLlmDossierDraft(content, "Retry ETF", citations, "test-model");
+								+ "## Sources\n1. https://www.vanguard.com/fund-factsheet/IE00B4L5Y983\n";
+						return new KnowledgeBaseLlmDossierDraft(content, "Vanguard FTSE All-World UCITS ETF", citations, "test-model");
 					}
 					ArrayNode citations = objectMapper.createArrayNode();
 					citations.add(objectMapper.createObjectNode()

@@ -1242,6 +1242,34 @@ databaseChangeLog:
               - column:
                   name: started_at
   - changeSet:
+      id: 040-kb-run-step-history-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: kb_run_steps
+      changes:
+        - createTable:
+            tableName: kb_run_steps
+            columns:
+              - column: {name: step_id, type: BIGINT, autoIncrement: true, constraints: {primaryKey: true, nullable: false}}
+              - column: {name: run_id, type: BIGINT, constraints: {nullable: false}}
+              - column: {name: sequence_no, type: INTEGER, constraints: {nullable: false}}
+              - column: {name: step, type: VARCHAR(64), constraints: {nullable: false}}
+              - column: {name: outcome, type: VARCHAR(32), constraints: {nullable: false}}
+              - column: {name: details, type: "${text_type}"}
+              - column: {name: created_at, type: TIMESTAMP, constraints: {nullable: false}}
+        - addForeignKeyConstraint: {baseTableName: kb_run_steps, baseColumnNames: run_id, referencedTableName: kb_runs, referencedColumnNames: run_id, constraintName: fk_kb_run_steps_run, onDelete: CASCADE}
+        - addUniqueConstraint: {tableName: kb_run_steps, columnNames: "run_id, sequence_no", constraintName: ux_kb_run_steps_sequence}
+        - createIndex:
+            tableName: kb_run_steps
+            indexName: ix_kb_run_steps_run_sequence
+            columns:
+              - column: {name: run_id}
+              - column: {name: sequence_no}
+  - changeSet:
       id: 017c-kb-alternatives-postgres
       author: codex
       dbms: postgresql
@@ -1359,6 +1387,20 @@ databaseChangeLog:
             referencedColumnNames: dossier_id
             constraintName: fk_dossiers_supersedes
             onDelete: SET NULL
+  - changeSet:
+      id: 017d1-instrument-dossiers-unique-version-postgres
+      author: codex
+      dbms: postgresql
+      preConditions:
+        onFail: MARK_RAN
+        tableExists:
+          tableName: instrument_dossiers
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE UNIQUE INDEX IF NOT EXISTS ux_instrument_dossiers_isin_version
+              ON instrument_dossiers (isin, version);
   - changeSet:
       id: 017e-instrument-dossier-extractions-extend-postgres
       author: codex
@@ -1642,3 +1684,195 @@ databaseChangeLog:
               JOIN snapshots s ON s.snapshot_id = d.active_snapshot_id
               JOIN snapshot_positions sp ON sp.snapshot_id = s.snapshot_id
               JOIN instruments_effective ie ON ie.isin = sp.isin;
+  - changeSet:
+       id: 022a-kb-runs-parent-column-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+         not:
+           columnExists:
+             tableName: kb_runs
+             columnName: parent_run_id
+       changes:
+          - addColumn:
+              tableName: kb_runs
+              columns:
+                - column:
+                    name: parent_run_id
+                    type: BIGINT
+  - changeSet:
+       id: 022b-kb-runs-durable-columns-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+       changes:
+         - sql:
+             splitStatements: true
+             sql: |
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS current_step VARCHAR(128);
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP;
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS lease_token VARCHAR(128);
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMP;
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMP;
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMP;
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS error_code VARCHAR(128);
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;
+               ALTER TABLE kb_runs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+  - changeSet:
+       id: 022c-kb-runs-durable-normalize-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+       changes:
+         - sql:
+             splitStatements: true
+             sql: |
+               ALTER TABLE kb_runs ALTER COLUMN isin DROP NOT NULL;
+               UPDATE kb_runs
+               SET created_at = COALESCE(created_at, started_at),
+                   updated_at = COALESCE(updated_at, finished_at, started_at);
+               ALTER TABLE kb_runs ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+               ALTER TABLE kb_runs ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+               ALTER TABLE kb_runs ALTER COLUMN created_at SET NOT NULL;
+               ALTER TABLE kb_runs ALTER COLUMN updated_at SET NOT NULL;
+  - changeSet:
+       id: 022d-kb-runs-parent-fk-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+         not:
+           foreignKeyConstraintExists:
+             foreignKeyName: fk_kb_runs_parent
+             foreignKeyTableName: kb_runs
+       changes:
+         - addForeignKeyConstraint:
+             baseTableName: kb_runs
+             baseColumnNames: parent_run_id
+             referencedTableName: kb_runs
+             referencedColumnNames: run_id
+             constraintName: fk_kb_runs_parent
+             onDelete: SET NULL
+  - changeSet:
+       id: 022e-kb-runs-idempotency-constraint-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+         not:
+           uniqueConstraintExists:
+             tableName: kb_runs
+             constraintName: ux_kb_runs_idempotency_key
+       changes:
+         - addUniqueConstraint:
+             tableName: kb_runs
+             columnNames: idempotency_key
+             constraintName: ux_kb_runs_idempotency_key
+  - changeSet:
+       id: 022f-kb-runs-claim-index-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+         not:
+           indexExists:
+             tableName: kb_runs
+             indexName: ix_kb_runs_claim
+       changes:
+         - createIndex:
+             tableName: kb_runs
+             indexName: ix_kb_runs_claim
+             columns:
+               - column:
+                   name: status
+               - column:
+                   name: next_retry_at
+               - column:
+                   name: lease_until
+  - changeSet:
+       id: 022g-kb-runs-parent-index-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+         not:
+           indexExists:
+             tableName: kb_runs
+             indexName: ix_kb_runs_parent
+       changes:
+          - createIndex:
+             tableName: kb_runs
+             indexName: ix_kb_runs_parent
+             columns:
+               - column:
+                    name: parent_run_id
+  - changeSet:
+       id: 023-kb-run-action-payload
+       author: codex
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+         not:
+           columnExists:
+             tableName: kb_runs
+             columnName: action_payload
+       changes:
+         - addColumn:
+             tableName: kb_runs
+             columns:
+               - column:
+                    name: action_payload
+                    type: ${text_type}
+  - changeSet:
+       id: 024-kb-runs-nonresumable-legacy-in-progress-postgres
+       author: codex
+       dbms: postgresql
+       preConditions:
+         onFail: MARK_RAN
+         tableExists:
+           tableName: kb_runs
+       changes:
+         - sql:
+             splitStatements: true
+             sql: |
+               UPDATE kb_runs
+               SET status = 'FAILED', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP),
+                   error = COALESCE(error, 'Legacy IN_PROGRESS run has no durable resumable input'),
+                   error_code = COALESCE(error_code, 'LEGACY_NOT_RESUMABLE'),
+                   lease_token = NULL, lease_until = NULL, next_retry_at = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+                WHERE status = 'IN_PROGRESS';
+  - changeSet:
+        id: 025-kb-runs-bulk-child-identity-postgres
+        author: codex
+        dbms: postgresql
+        preConditions:
+          onFail: MARK_RAN
+          tableExists:
+            tableName: kb_runs
+        changes:
+          - sql:
+              splitStatements: true
+              sql: |
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_kb_runs_parent_isin_action
+                ON kb_runs (parent_run_id, isin, action)
+                WHERE parent_run_id IS NOT NULL;

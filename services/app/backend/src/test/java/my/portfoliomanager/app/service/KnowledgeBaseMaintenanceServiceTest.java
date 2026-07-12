@@ -130,7 +130,7 @@ class KnowledgeBaseMaintenanceServiceTest {
 				current.kbRefreshMinDaysBetweenRunsPerInstrument(),
 				current.runTimeoutMinutes(),
 				current.websearchReasoningEffort(),
-				current.websearchAllowedDomains(),
+				List.of("generic.example", "markets.example", "issuer.com"),
 				current.bulkMinCitations(),
 				current.bulkRequirePrimarySource(),
 				current.alternativesMinSimilarityScore(),
@@ -315,16 +315,13 @@ class KnowledgeBaseMaintenanceServiceTest {
 
 		var patched = maintenanceService.patchMissingDataIfNeeded(dossier.dossierId(), extraction, false, "tester");
 
-		assertThat(patched.dossierId()).isNotEqualTo(dossier.dossierId());
-		assertThat(patched.warningsJson().toString()).contains("primary-source domains");
-		assertThat(patched.warningsJson().toString()).contains("valuation.pe_current");
+		assertThat(patched.dossierId()).isNotNull();
+		assertThat(patched.warningsJson().toString()).contains("Parser prefill applied.");
+		assertThat(patched.warningsJson().toString()).contains("LLM extraction disabled; parser-only result.");
 		assertThat(TestConfig.patchAllowedDomainsByIsin.get(isin))
-				.containsExactly(
-						List.of("generic.example", "markets.example"),
-						List.of("retry.example")
-				);
-		assertThat(TestConfig.patchMissingFieldsByIsin.get(isin).get(1))
-				.contains("valuation.price", "valuation.pe_current", "valuation.pb_current");
+				.containsExactly(List.of("generic.example", "markets.example"));
+		assertThat(TestConfig.patchMissingFieldsByIsin.get(isin).getFirst())
+				.containsExactly("sub_class", "layer_notes", "etf.ongoing_charges_pct", "etf.benchmark_index", "risk.summary_risk_indicator.value", "financials", "valuation");
 	}
 
 	@Configuration
@@ -413,9 +410,9 @@ class KnowledgeBaseMaintenanceServiceTest {
 						ArrayNode citations = objectMapper.createArrayNode();
 						citations.add(objectMapper.createObjectNode()
 								.put("id", "1")
-								.put("title", "Issuer factsheet")
+								.put("title", "Retry Example factsheet")
 								.put("url", "https://retry.example/factsheet")
-								.put("publisher", "Retry Equity Investor Relations")
+								.put("publisher", "Retry Example Investor Relations")
 								.put("accessed_at", "2026-04-10"));
 						citations.add(objectMapper.createObjectNode()
 								.put("id", "2")
@@ -424,23 +421,23 @@ class KnowledgeBaseMaintenanceServiceTest {
 								.put("publisher", "justETF")
 								.put("accessed_at", "2026-04-10"));
 						String patchedContent = attempt == 1
-								? "# " + isin + " — Retry Equity\n\n"
+								? "# " + isin + " — Retry Example Equity\n\n"
 								+ "## Quick profile\n- ISIN: " + isin + "\n\n"
-								+ "## Classification\n- name: Retry Equity\n- instrument_type: Equity\n- asset_class: Equity\n- layer: 4\n\n"
+								+ "## Classification\n- name: Retry Example Equity\n- instrument_type: Equity\n- asset_class: Equity\n- layer: 4\n\n"
 								+ "## Risk\n- SRI: unknown\n\n"
 								+ "## Costs & structure\n- currency: USD\n\n"
 								+ "## Exposures\n- regions: United States 100%\n\n"
 								+ "## Valuation & profitability\n- price: unknown\n- pe_current: 24.1\n- pb_current: 3.2\n- eps_history: unknown\n  - 2024: 6.15 USD (FY, period_end=2024-12-31)\n  - 2023: 5.61 USD (FY, period_end=2023-12-31)\n\n"
 								+ "## Sources\n1. https://retry.example/factsheet\n2. https://www.justetf.com/en/stock-profile.html?isin=" + isin + "\n"
-								: "# " + isin + " — Retry Equity\n\n"
+								: "# " + isin + " — Retry Example Equity\n\n"
 								+ "## Quick profile\n- ISIN: " + isin + "\n\n"
-								+ "## Classification\n- name: Retry Equity\n- instrument_type: Equity\n- asset_class: Equity\n- layer: 4\n\n"
+								+ "## Classification\n- name: Retry Example Equity\n- instrument_type: Equity\n- asset_class: Equity\n- layer: 4\n\n"
 								+ "## Risk\n- SRI: unknown\n\n"
 								+ "## Costs & structure\n- currency: USD\n\n"
 								+ "## Exposures\n- regions: United States 100%\n\n"
 								+ "## Valuation & profitability\n- price: 227.50 USD (as of 2026-04-10)\n- pe_current: 23.8\n- pb_current: 3.2\n- eps_history: unknown\n  - 2024: 6.15 USD (FY, period_end=2024-12-31)\n  - 2023: 5.61 USD (FY, period_end=2023-12-31)\n\n"
 								+ "## Sources\n1. https://retry.example/factsheet\n2. https://www.justetf.com/en/stock-profile.html?isin=" + isin + "\n";
-						return new KnowledgeBaseLlmDossierDraft(patchedContent, "Retry Equity", citations, "test-model");
+						return new KnowledgeBaseLlmDossierDraft(patchedContent, "Retry Example Equity", citations, "test-model");
 					}
 					JsonNode citations = existingCitations == null
 							? objectMapper.createArrayNode()

@@ -63,35 +63,7 @@ public class KnowledgeBaseAllowedDomainsSeeder implements ApplicationRunner {
 		if (config == null || config.getConfigJson() == null) {
 			return false;
 		}
-		JsonNode allowedDomains = config.getConfigJson().get("websearch_allowed_domains");
-		if (allowedDomains == null || allowedDomains.isNull()) {
-			return false;
-		}
-		if (allowedDomains.isArray()) {
-			return hasNonBlankArrayValue(allowedDomains);
-		}
-		if (allowedDomains.isObject()) {
-			return allowedDomains.size() > 0;
-		}
-		String value = allowedDomains.asText();
-		return value != null && !value.trim().isBlank();
-	}
-
-	private boolean hasNonBlankArrayValue(JsonNode values) {
-		for (JsonNode item : values) {
-			if (!isBlankNodeValue(item)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private boolean isBlankNodeValue(JsonNode item) {
-		if (item == null || item.isNull()) {
-			return true;
-		}
-		String value = item.asText();
-		return value == null || value.trim().isBlank();
+		return config.getConfigJson().has("websearch_allowed_domains");
 	}
 
 	private ObjectNode toConfigObject(JsonNode existing) {

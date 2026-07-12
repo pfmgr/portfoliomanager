@@ -160,7 +160,9 @@ public class KnowledgeBaseMaintenanceService {
 		try {
 			InstrumentDossier dossier = dossierRepository.findFirstByIsinOrderByVersionDesc(normalized)
 					.orElseThrow(() -> new IllegalArgumentException("Dossier not found"));
+			runService.recordStep(run, "STRUCTURED_EXTRACTION");
 			InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossier.getDossierId());
+			runService.recordStep(run, "SCHEMA_VALIDATION");
 			if (extraction.status() == DossierExtractionStatus.FAILED) {
 				runService.markFailed(run, extraction.error());
 				return extraction;
@@ -171,6 +173,7 @@ public class KnowledgeBaseMaintenanceService {
 				runService.markSkipped(run, "no_missing_fields");
 				return extraction;
 			}
+			runService.recordStep(run, "TARGETED_COMPLETION_RESEARCH");
 			PatchResult patchResult = patchMissingTargets(
 					dossier,
 					missingTargets,
@@ -187,6 +190,10 @@ public class KnowledgeBaseMaintenanceService {
 			if (patchedExtraction.status() == DossierExtractionStatus.FAILED) {
 				runService.markFailed(run, patchedExtraction.error());
 				return patchedExtraction;
+			}
+			if (autoApproveFlag && patchedExtraction.status() != DossierExtractionStatus.APPROVED
+					&& patchedExtraction.status() != DossierExtractionStatus.APPLIED) {
+				runService.markReviewRequired(run, "Targeted completion requires manual review");
 			}
 			runService.markSucceeded(run);
 			return patchedExtraction;
@@ -353,73 +360,84 @@ public class KnowledgeBaseMaintenanceService {
         return new KnowledgeBaseAlternativesResponseDto(normalizedBase, responseItems);
     }
 
-    private ExtractionFlowResult runExtractionFlow(String isin,
-                                                   DossierStatus dossierStatus,
-                                                   Long dossierId,
-                                                   String actor,
-                                                   boolean autoApprove,
-                                                   boolean applyOverrides,
-                                                   List<String> dossierWarnings) {
-        if (Thread.currentThread().isInterrupted()) {
-            throw new CancellationException("Canceled");
-        }
-        KnowledgeBaseRun extractRun = runService.startRun(isin, KnowledgeBaseRunAction.EXTRACT, null, null);
-        runService.incrementAttempt(extractRun);
-        try {
-            InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossierId);
-            if (extraction.status() == DossierExtractionStatus.FAILED) {
-                runService.markFailed(extractRun, extraction.error());
-                KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
-                return new ExtractionFlowResult(
-                        new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
-                                extraction.extractionId(), extraction.error(), manualApproval),
-                        null,
-                        extraction
-                );
-            }
-            Long extractionId = extraction.extractionId();
-            InstrumentDossierExtractionPayload payload = parseExtractionPayload(extraction.extractedJson());
-            PatchResult patchResult = null;
-            List<String> missingTargets = resolveMissingTargets(payload);
-            if (missingTargets != null && !missingTargets.isEmpty()) {
-                try {
-                    InstrumentDossier baseDossier = dossierRepository.findById(dossierId).orElse(null);
+	private ExtractionFlowResult runExtractionFlow(String isin,
+	                                               DossierStatus dossierStatus,
+	                                               Long dossierId,
+	                                               String actor,
+	                                               boolean autoApprove,
+	                                               boolean applyOverrides,
+	                                               List<String> dossierWarnings) {
+	    if (Thread.currentThread().isInterrupted()) {
+	        throw new CancellationException("Canceled");
+	    }
+		KnowledgeBaseRun extractRun = runService.startRun(isin, KnowledgeBaseRunAction.EXTRACT, null, null);
+		runService.incrementAttempt(extractRun);
+		runService.recordStep(extractRun, "STRUCTURED_EXTRACTION");
+		try {
+			InstrumentDossierExtractionResponseDto extraction = knowledgeBaseService.runExtraction(dossierId);
+			runService.recordStep(extractRun, "SCHEMA_VALIDATION");
+			if (extraction.status() == DossierExtractionStatus.FAILED) {
+				runService.markFailed(extractRun, extraction.error());
+				KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
+				return new ExtractionFlowResult(
+						new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId,
+								extraction.extractionId(), extraction.error(), manualApproval),
+						null,
+						extraction
+				);
+			}
+			Long extractionId = extraction.extractionId();
+			InstrumentDossierExtractionPayload payload = parseExtractionPayload(extraction.extractedJson());
+			PatchResult patchResult = null;
+			List<String> missingTargets = resolveMissingTargets(payload);
+			if (missingTargets != null && !missingTargets.isEmpty()) {
+				runService.recordStep(extractRun, "TARGETED_COMPLETION_RESEARCH");
+				if (autoApprove) {
+					runService.recordStep(extractRun, "EVIDENCE_VALIDATION");
+				}
+				try {
+					InstrumentDossier baseDossier = dossierRepository.findById(dossierId).orElse(null);
 					patchResult = patchMissingTargets(baseDossier, missingTargets, payload, autoApprove, applyOverrides, actor);
-                } catch (Exception ex) {
-                    logger.warn("Missing data patch failed for ISIN {}: {}", isin, ex.getMessage());
-                }
-            }
-            if (patchResult != null && patchResult.extraction() != null
-                    && patchResult.extraction().status() != DossierExtractionStatus.FAILED) {
-                extraction = patchResult.extraction();
-                extractionId = extraction.extractionId();
-                payload = patchResult.payload() == null
-                        ? parseExtractionPayload(extraction.extractedJson())
-                        : patchResult.payload();
-                if (patchResult.dossier() != null) {
-                    dossierId = patchResult.dossier().dossierId();
-                    dossierStatus = patchResult.dossier().status();
-                }
-            } else if (autoApprove) {
-                extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
-                extractionId = extraction.extractionId();
-            }
-            knowledgeBaseService.appendExtractionWarnings(extractionId, dossierWarnings);
-            if (extractionId != null) {
-                extraction = knowledgeBaseService.getExtraction(extractionId);
-            }
-            runService.markSucceeded(extractRun);
-            KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
-            return new ExtractionFlowResult(
-                    new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
-                            extractionId, null, manualApproval),
-                    payload,
-                    extraction
-            );
-        } catch (CancellationException ex) {
-            runService.markFailed(extractRun, "Canceled");
-            throw ex;
-        } catch (Exception ex) {
+				} catch (Exception ex) {
+					logger.warn("Missing data patch failed for ISIN {}: {}", isin, ex.getMessage());
+				}
+			}
+			if (patchResult != null && patchResult.extraction() != null
+					&& patchResult.extraction().status() != DossierExtractionStatus.FAILED) {
+				extraction = patchResult.extraction();
+				extractionId = extraction.extractionId();
+				payload = patchResult.payload() == null
+						? parseExtractionPayload(extraction.extractedJson())
+						: patchResult.payload();
+				if (patchResult.dossier() != null) {
+					dossierId = patchResult.dossier().dossierId();
+					dossierStatus = patchResult.dossier().status();
+				}
+			} else if (autoApprove) {
+				runService.recordStep(extractRun, "EVIDENCE_VALIDATION");
+				extraction = knowledgeBaseService.approveExtraction(extractionId, actor, true, applyOverrides);
+				extractionId = extraction.extractionId();
+			}
+			if (autoApprove && extraction.status() != DossierExtractionStatus.APPROVED
+					&& extraction.status() != DossierExtractionStatus.APPLIED) {
+				runService.markReviewRequired(extractRun, "Evidence gate blocked auto-approval");
+			}
+			knowledgeBaseService.appendExtractionWarnings(extractionId, dossierWarnings);
+			if (extractionId != null) {
+				extraction = knowledgeBaseService.getExtraction(extractionId);
+			}
+			runService.markSucceeded(extractRun);
+			KnowledgeBaseManualApprovalDto manualApproval = knowledgeBaseService.resolveManualApproval(dossierStatus, extraction.status());
+			return new ExtractionFlowResult(
+					new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.SUCCEEDED, dossierId,
+							extractionId, null, manualApproval),
+					payload,
+					extraction
+			);
+	        } catch (CancellationException ex) {
+	            runService.markFailed(extractRun, "Canceled");
+	            throw ex;
+	        } catch (Exception ex) {
             runService.markFailed(extractRun, ex.getMessage());
             return new ExtractionFlowResult(
                     new KnowledgeBaseBulkResearchItemDto(isin, KnowledgeBaseBulkResearchItemStatus.FAILED, dossierId, null,
@@ -457,11 +475,13 @@ public class KnowledgeBaseMaintenanceService {
 			logger.info("Created dossier from draft for ISIN {}",isin);
 			boolean localAutoApprove = autoApproveFlag && (draftResult.quality() == null || draftResult.quality().passed());
 			if (localAutoApprove) {
+				runService.recordStep(dossierRun, "QUALITY_GATE");
 				dossier = knowledgeBaseService.approveDossier(dossier.dossierId(), actor, true);
 				if (dossier.status() == DossierStatus.APPROVED) {
 					logger.info("Auto-Approved dossier for ISIN {}",isin);
                     } else {
                         logger.info("Auto-approve dossier gate blocked for ISIN {}", isin);
+                        runService.markReviewRequired(dossierRun, "Quality gate blocked auto-approval");
                         localAutoApprove = false;
                     }
                 }
@@ -623,22 +643,33 @@ public class KnowledgeBaseMaintenanceService {
 		if (baseDossier == null || missingTargets == null || missingTargets.isEmpty()) {
 			return null;
 		}
-		PatchResult first = patchOnce(
-				baseDossier,
-				missingTargets,
-				payload,
-				false,
-				autoApproveFlag,
-				applyOverrides,
-				actor,
-				configService.getSnapshot().websearchAllowedDomains()
-		);
+		PatchResult first = null;
+		try {
+			first = patchOnce(
+					baseDossier,
+					missingTargets,
+					payload,
+					false,
+					autoApproveFlag,
+					applyOverrides,
+					actor,
+					configService.getSnapshot().websearchAllowedDomains()
+			);
+		} catch (Exception ex) {
+			logger.warn("Primary patch attempt failed for ISIN {}: {}", baseDossier.getIsin(), ex.getMessage());
+		}
+		InstrumentDossierExtractionPayload firstPayload;
 		if (first == null || first.extraction() == null) {
+			firstPayload = payload;
+		} else {
+			firstPayload = first.payload() == null
+					? parseExtractionPayload(first.extraction().extractedJson())
+					: first.payload();
+		}
+		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan retryPlan = buildRetryPlan(firstPayload, baseDossier, first);
+		if (retryPlan == null || !retryPlan.primarySourceOnly()) {
 			return first;
 		}
-		InstrumentDossierExtractionPayload firstPayload = first.payload() == null
-				? parseExtractionPayload(first.extraction().extractedJson())
-				: first.payload();
 		List<String> remaining = resolveMissingTargets(firstPayload);
 		if (!shouldRetryForMissing(firstPayload, remaining)) {
 			return first;
@@ -648,7 +679,6 @@ public class KnowledgeBaseMaintenanceService {
 			retryBase = dossierRepository.findById(first.dossier().dossierId()).orElse(baseDossier);
 		}
 		List<String> retryTargets = resolveSecondPassTargets(firstPayload, remaining);
-		KnowledgeBaseQualityGateService.PrimarySourceRetryPlan retryPlan = buildRetryPlan(firstPayload, retryBase, first);
 		PatchResult second = patchOnce(
 				retryBase,
 				retryTargets,
@@ -854,7 +884,7 @@ public class KnowledgeBaseMaintenanceService {
 		KnowledgeBaseConfigService.KnowledgeBaseConfigSnapshot config = configService.getSnapshot();
 		String context = buildPatchContext(payload, retryMode);
 		List<String> resolvedDomains = allowedDomains == null || allowedDomains.isEmpty()
-				? config.websearchAllowedDomains()
+				? (retryMode ? List.of() : config.websearchAllowedDomains())
 				: allowedDomains;
 		KnowledgeBaseLlmDossierDraft patchDraft = llmClient.patchDossierMissingFields(
 				baseDossier.getIsin(),
@@ -954,7 +984,7 @@ public class KnowledgeBaseMaintenanceService {
 		context.append("ETF: ").append(etf ? "true" : "false").append('\n');
 		if (retryMode) {
 			context.append("Retry mode: true\n");
-			context.append("Use alternative sources if primary sources miss valuation metrics.\n");
+			context.append("Use only the provided primary-source domains on retry.\n");
 		}
 		return context.toString().trim();
 	}
@@ -973,6 +1003,9 @@ public class KnowledgeBaseMaintenanceService {
 			displayName = baseDossier.getDisplayName();
 		}
 		return qualityGateService.planPrimarySourceRetry(
+				payload != null && payload.isin() != null && !payload.isin().isBlank()
+						? payload.isin()
+						: baseDossier == null ? null : baseDossier.getIsin(),
 				payload,
 				displayName,
 				citations,

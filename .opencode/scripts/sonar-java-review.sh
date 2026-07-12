@@ -21,6 +21,7 @@ SCANNER_MEMORY="${SONAR_SCANNER_MEMORY:-768m}"
 SCANNER_CPUS="${SONAR_SCANNER_CPUS:-1.0}"
 SCANNER_PIDS_LIMIT="${SONAR_SCANNER_PIDS_LIMIT:-256}"
 SCANNER_NOFILE="${SONAR_SCANNER_NOFILE:-1024:2048}"
+SCANNER_OPTS="${SONAR_SCANNER_OPTS:--Xmx512m}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -201,6 +202,7 @@ fi
 REPO_PREFIX="$(basename "${ROOT_DIR}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/_$//')"
 [[ -n "${REPO_PREFIX}" ]] || REPO_PREFIX="repo"
 SCANNER_SONAR_URL="http://sonarqube:9000"
+SONAR_CONTAINER_ID=""
 
 if [[ -z "${SRC_PATH}" ]]; then
   if [[ -d "${PROJECT_DIR}/src/main/java" ]]; then
@@ -222,33 +224,42 @@ fi
 
 cleanup() {
   if [[ "${KEEP_RUNNING}" != "true" ]]; then
-    "${STOP_SCRIPT}" --quiet || true
+    timeout 120s "${STOP_SCRIPT}" --quiet || true
   fi
 }
 
 trap cleanup EXIT
 
 log "Starting SonarQube for review..."
-if ! START_OUTPUT="$(${START_SCRIPT} --quiet --project-key "${PROJECT_KEY}" 2>&1)"; then
+set +e
+START_OUTPUT="$(timeout 30m "${START_SCRIPT}" --quiet --project-key "${PROJECT_KEY}" 2>&1)"
+START_STATUS=$?
+set -e
+if (( START_STATUS != 0 )); then
   if [[ -n "${START_OUTPUT}" ]]; then
     printf '%s\n' "${START_OUTPUT}" >&2
   fi
-  echo "SonarQube start failed." >&2
-  exit 12
+  exit "${START_STATUS}"
 fi
 
-SONAR_URL="$(printf '%s' "${START_OUTPUT}" | "${PYTHON_BIN}" -c 'import sys; print(next((line[10:] for line in sys.stdin.read().splitlines() if line.startswith("SONAR_URL=")), ""))')"
+START_URL="$(printf '%s' "${START_OUTPUT}" | "${PYTHON_BIN}" -c 'import sys; print(next((line[10:] for line in sys.stdin.read().splitlines() if line.startswith("SONAR_URL=")), ""))')"
 RUNTIME_PROJECT_KEY="$(load_runtime_value "${READ_ENV}" SONAR_PROJECT_KEY)"
 [[ -z "${RUNTIME_PROJECT_KEY}" || "${RUNTIME_PROJECT_KEY}" == "${PROJECT_KEY}" ]] || { echo "Sonar runtime project mismatch." >&2; exit 12; }
 RUNTIME_URL="$(load_runtime_value "${READ_ENV}" SONAR_URL)"
-[[ -z "${RUNTIME_URL}" || "${RUNTIME_URL}" == "${SONAR_URL}" ]] || { echo "Sonar runtime URL mismatch." >&2; exit 12; }
+[[ -n "${START_URL}" ]] || { echo "Unable to determine SonarQube URL." >&2; exit 12; }
+[[ -z "${RUNTIME_URL}" || "${START_URL}" == "${RUNTIME_URL}" ]] || { echo "Sonar runtime URL mismatch." >&2; exit 12; }
+SONAR_URL="${START_URL}"
 ANALYSIS_TOKEN="$(load_runtime_value "${ANALYSIS_ENV}" SONAR_ANALYSIS_TOKEN)"
 READ_TOKEN="$(load_runtime_value "${READ_ENV}" SONAR_READ_TOKEN)"
-
-if [[ -z "${SONAR_URL}" ]]; then
-  echo "Unable to determine SonarQube URL." >&2
-  exit 12
-fi
+SONAR_CONTAINER_ID="$(${PYTHON_BIN} - "${ROOT_DIR}" "${REPO_PREFIX}" <<'PY'
+import os, subprocess, sys
+root, repo_prefix = sys.argv[1:]
+compose_file = os.path.join(root, '.opencode', 'docker', 'sonar', 'docker-compose.yaml')
+project = f'{repo_prefix}_sonar'
+cp = subprocess.run(['docker', 'compose', '-f', compose_file, '-p', project, 'ps', '-q', 'sonarqube'], capture_output=True, text=True, timeout=30)
+print(cp.stdout.strip())
+PY
+)"
 
 if [[ -z "${ANALYSIS_TOKEN}" || -z "${READ_TOKEN}" ]]; then
   echo "Project-scoped Sonar analysis and read tokens are required; admin tokens are never accepted." >&2
@@ -256,13 +267,89 @@ if [[ -z "${ANALYSIS_TOKEN}" || -z "${READ_TOKEN}" ]]; then
 fi
 
 sonar_api() {
-  curl -sf -H "Authorization: Bearer ${READ_TOKEN}" "$@"
+  local -a args=("$@")
+  if [[ -n "${SONAR_CONTAINER_ID}" ]]; then
+    local i
+    for i in "${!args[@]}"; do
+      args[$i]="${args[$i]//${SONAR_URL}/http://127.0.0.1:9000}"
+    done
+    timeout 45s docker exec -i "${SONAR_CONTAINER_ID}" curl -sS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer ${READ_TOKEN}" "${args[@]}"
+  else
+    timeout 45s curl -sS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer ${READ_TOKEN}" "${args[@]}"
+  fi
+}
+
+sonar_container_api() {
+  local -a args=("$@")
+  if [[ -n "${SONAR_CONTAINER_ID}" ]]; then
+    timeout 45s docker exec -i "${SONAR_CONTAINER_ID}" curl -sS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer ${READ_TOKEN}" "${args[@]}"
+  else
+    timeout 45s curl -sS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer ${READ_TOKEN}" "${args[@]}"
+  fi
+}
+
+sonar_server_major_version() {
+  local version major
+  version="$(sonar_container_api "http://127.0.0.1:9000/api/server/version")" || return 1
+  major="${version%%.*}"
+  [[ "${major}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "${major}"
+}
+
+wait_for_sonar_api() {
+  local timeout_seconds="${1:-120}"
+  local deadline response major
+
+  deadline=$((SECONDS + timeout_seconds))
+  while (( SECONDS < deadline )); do
+    if response="$(sonar_container_api "http://127.0.0.1:9000/api/server/version" 2>/dev/null)"; then
+      major="${response%%.*}"
+      [[ -n "${response}" && "${major}" =~ ^[0-9]+$ ]] && return 0
+    fi
+    sleep 2
+  done
+
+  return 1
+}
+
+quality_gate_rating_metric() {
+  local metric="$1" sonar_major_version="$2"
+  case "$metric" in
+    new_reliability_rating)
+      if (( sonar_major_version >= 26 )); then
+        printf '%s\n' new_software_quality_reliability_rating
+      else
+        printf '%s\n' new_reliability_rating
+      fi
+      ;;
+    new_security_rating)
+      if (( sonar_major_version >= 26 )); then
+        printf '%s\n' new_software_quality_security_rating
+      else
+        printf '%s\n' new_security_rating
+      fi
+      ;;
+    *)
+      printf '%s\n' "$metric"
+      ;;
+  esac
 }
 
 ensure_project_quality_gate() {
   local required_gate="${PROJECT_KEY} Preflight"
-  local assigned
-  assigned="$(sonar_api -G "${SONAR_URL}/api/qualitygates/get_by_project" --data-urlencode "project=${PROJECT_KEY}" 2>/dev/null | "${PYTHON_BIN}" -c 'import json,sys; print(json.load(sys.stdin).get("qualityGate", {}).get("name", ""))' 2>/dev/null || true)"
+  local assigned sonar_major_version reliability_metric security_metric deadline
+  sonar_major_version="$(sonar_server_major_version)" || {
+    echo "Pre-test quality gate must contain bug/security/reliability policy and no coverage condition." >&2
+    return 1
+  }
+  reliability_metric="$(quality_gate_rating_metric new_reliability_rating "${sonar_major_version}")"
+  security_metric="$(quality_gate_rating_metric new_security_rating "${sonar_major_version}")"
+  deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
+    assigned="$(sonar_container_api -G "http://127.0.0.1:9000/api/qualitygates/get_by_project" --data-urlencode "project=${PROJECT_KEY}" 2>/dev/null | "${PYTHON_BIN}" -c 'import json,sys; print(json.load(sys.stdin).get("qualityGate", {}).get("name", ""))' 2>/dev/null || true)"
+    [[ "${assigned}" == "${required_gate}" ]] && break
+    sleep 2
+  done
   if [[ "${assigned}" != "${required_gate}" ]]; then
     echo "Required SonarQube quality gate is not bound to this project." >&2
     return 1
@@ -271,15 +358,22 @@ ensure_project_quality_gate() {
   # This is the pre-test gate. It must remain strictly about bug/security/
   # reliability findings; coverage is evaluated by the later test gate.
   local gate_json
-  gate_json="$(sonar_api -G "${SONAR_URL}/api/qualitygates/show" --data-urlencode "name=${required_gate}" 2>/dev/null || true)"
-  GATE_JSON="${gate_json}" "${PYTHON_BIN}" - <<'PY' || {
+  gate_json="$(sonar_container_api -G "http://127.0.0.1:9000/api/qualitygates/show" --data-urlencode "name=${required_gate}" 2>/dev/null || true)"
+  GATE_JSON="${gate_json}" RELIABILITY_METRIC="${reliability_metric}" SECURITY_METRIC="${security_metric}" "${PYTHON_BIN}" - <<'PY' || {
 import json, os, sys
 try:
     conditions = json.loads(os.environ["GATE_JSON"]).get("conditions", [])
 except (KeyError, json.JSONDecodeError):
     raise SystemExit(1)
-required = {("new_bugs", "GT", "0"), ("new_vulnerabilities", "GT", "0"), ("new_reliability_rating", "GT", "1"), ("new_security_rating", "GT", "1")}
-actual = {(str(condition.get("metric")), str(condition.get("op")), str(condition.get("error"))) for condition in conditions}
+from collections import Counter
+
+required = Counter([
+    ("new_bugs", "GT", "0"),
+    ("new_vulnerabilities", "GT", "0"),
+    (os.environ["RELIABILITY_METRIC"], "GT", "1"),
+    (os.environ["SECURITY_METRIC"], "GT", "1"),
+])
+actual = Counter((str(condition.get("metric")), str(condition.get("op")), str(condition.get("error"))) for condition in conditions)
 if actual != required:
     raise SystemExit(1)
 PY
@@ -329,9 +423,14 @@ if [[ "${SONAR_SCANNER_IMAGE}" != "${EXPECTED_SCANNER_IMAGE}" ]]; then
   echo "Setup blocker: scanner image is not the approved pinned digest; preflight is blocked." >&2
   exit 12
 fi
-if ! scanner_digests="$(docker image inspect --format '{{join .RepoDigests "\n"}}' "${EXPECTED_SCANNER_IMAGE}" 2>/dev/null)" || ! grep -Fxq "${EXPECTED_SCANNER_IMAGE}" <<<"${scanner_digests}"; then
+  if ! scanner_digests="$(timeout 30s docker image inspect --format '{{join .RepoDigests "\n"}}' "${EXPECTED_SCANNER_IMAGE}" 2>/dev/null)" || ! grep -Fxq "${EXPECTED_SCANNER_IMAGE}" <<<"${scanner_digests}"; then
   echo "blocked: approved scanner image is unavailable locally; automatic pulls are disabled." >&2
   exit 12
+fi
+
+if ! wait_for_sonar_api 120; then
+  echo "SonarQube API was not reachable at ${SONAR_URL}." >&2
+  exit 11
 fi
 
 if ! ensure_project_quality_gate; then
@@ -364,7 +463,7 @@ if [[ -n "${BINARIES_PATH}" ]]; then
   SCANNER_ARGS+=("-Dsonar.java.binaries=${BINARIES_PATH}")
 fi
 
-if ! docker run --rm \
+if ! timeout 30m docker run --rm \
   --network "${REPO_PREFIX}_sonar_scanner_network" \
   --user 1000:1000 \
   --read-only \
@@ -376,6 +475,7 @@ if ! docker run --rm \
   --ulimit "nofile=$SCANNER_NOFILE" \
   --tmpfs /tmp:rw,noexec,nosuid,size=256m \
   --tmpfs /opt/sonar-scanner/.sonar:rw,noexec,nosuid,size=256m \
+  -e "SONAR_SCANNER_OPTS=${SCANNER_OPTS}" \
   -e "SONAR_TOKEN=${ANALYSIS_TOKEN}" \
   -v "${PROJECT_DIR}":/workspace:ro \
   -w /workspace \
